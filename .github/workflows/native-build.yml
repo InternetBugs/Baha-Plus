@@ -1,0 +1,75 @@
+name: Native build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapters:
+    name: Resources and page adapters
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run resources:check
+      - run: npm test
+      - run: npm run typecheck
+
+  native:
+    name: iOS and Android
+    needs: adapters
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_ANALYTICS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Skip and Gradle
+        uses: skiptools/actions/setup-skip@dcb6321a0217e327c655ef699cf520bc3a27dea2 # v1
+        with:
+          run-doctor: 'false'
+          install-swift-android-sdk: 'false'
+      - name: Build both native apps and run Swift tests
+        run: bash tools/verify-native-macos.sh
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-build-logs
+          path: |
+            artifacts/native-macos/*.log
+            artifacts/native-macos/*.txt
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload installable build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: BahaPlus-native
+          path: |
+            artifacts/native-macos/BahaPlus-debug.apk
+            artifacts/native-macos/BahaPlus-ios-simulator.tar.gz
+          if-no-files-found: error
+          retention-days: 14
