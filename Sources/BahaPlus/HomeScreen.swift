@@ -57,6 +57,7 @@ struct HomeScreen: View {
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
         }
         .refreshable { store.refreshCatalog() }
+        .floatingTabContentMargins()
     }
     private func sectionHeading(_ title: String, action: @escaping () -> Void) -> some View {
         HStack {

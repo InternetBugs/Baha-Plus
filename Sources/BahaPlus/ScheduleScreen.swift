@@ -51,7 +51,7 @@ struct ScheduleScreen: View {
                 }
                 Text(store.text("scheduleNote")).font(.caption2).foregroundStyle(.secondary)
                 CatalogFooter(store: store)
-            }.listStyle(.plain)
+            }.listStyle(.plain).floatingTabContentMargins()
         }
     }
     @ViewBuilder private func timeLabel(_ value: String) -> some View {

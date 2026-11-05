@@ -31,11 +31,14 @@ struct LibraryScreen: View {
                                 AnimeTile(store: store, anime: anime,
                                           poster: store.libraryFilter == "hot" || store.libraryFilter == "favorites")
                             }
-                        }
-                        .padding(.horizontal, 20).padding(.bottom, 20)
+                        }.padding(.horizontal, 20).padding(.bottom, 20)
+                        CatalogFooter(store: store).padding(.horizontal, 20)
                     }
+                    .floatingTabContentMargins()
                 }
-                CatalogFooter(store: store).padding(.horizontal, 20)
+                if store.libraryItems.isEmpty {
+                    CatalogFooter(store: store).padding(.horizontal, 20)
+                }
         }
         .padding(.top, 12)
     }

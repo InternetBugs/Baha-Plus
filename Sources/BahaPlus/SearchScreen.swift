@@ -6,7 +6,8 @@ struct SearchScreen: View {
     @Bindable var store: AppStore
     var body: some View {
         #if SKIP
-        content.searchable(text: $store.query, prompt: store.text("searchPlaceholder"))
+        content.floatingTabContentMargins()
+            .searchable(text: $store.query, prompt: store.text("searchPlaceholder"))
             .onSubmit(of: .search) { store.search() }
         #else
         content.searchable(text: $store.query,

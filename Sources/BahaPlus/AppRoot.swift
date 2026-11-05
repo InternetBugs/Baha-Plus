@@ -80,7 +80,7 @@ struct AppRoot: View {
             classicTabs
         }
         #else
-        classicTabs
+        AndroidGlassTabs(store: store, content: AnyView(classicTabs))
         #endif
     }
     #if !SKIP

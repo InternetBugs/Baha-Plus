@@ -23,7 +23,7 @@
 | 滚动行为 | iOS 26 `.tabBarMinimizeBehavior(.onScrollDown)` |
 | 辅助功能 | 原生材质跟随系统减少透明度、减少动态效果及外观设置 |
 | iOS 17–25 | 标准 `.ultraThinMaterial` 降级 |
-| Android | SkipUI 提供原生 Compose 控件与材质；Apple 专有 API 由 `#if !SKIP` 隔离 |
+| Android | SwiftUI 悬浮胶囊标签栏通过 Haze 1.7.3 采样后方页面，使用真实背景模糊、明暗适配、边缘高光和选中状态；原生标签导航保留页面状态，Apple 专有 API 由条件编译隔离 |
 
 ## App Store 版式参考
 
@@ -34,5 +34,7 @@ iOS 26 使用 `ToolbarItemPlacement.largeTitle` 将标题与账户入口置于�
 首页、搜索和账户的预览由 GitHub Actions 启动真实 iOS 26 模拟器并截图。Debug 预览模式使用内置公开目录、占位账号状态和显式指定的界面语言；它用于验证视觉，不代表完成真实账号和播放验收。
 
 Apple 的指南说明的是材质的用途、层级、可读性和系统行为，没有为第三方界面给出一套固定的 CSS 模糊、透明度或折射参数。本项目 iOS 26 的效果由系统绘制。
+
+Android 使用 [Haze 官方背景模糊 API](https://github.com/chrisbanes/haze/blob/1.7.3/docs/usage.md)。页面作为采样源，导航控件独立叠放，避免将控件自身包含在模糊采样中。它延续玻璃的层次与可读性；Apple 的 Liquid Glass 光学绘制仍由 iOS 提供。
 
 Windows 无法渲染 SwiftUI 或执行 Xcode 构建。原生实际观感、Dynamic Type、VoiceOver、系统减少透明度与滚动行为需要在 Mac / iPhone 上验收。
