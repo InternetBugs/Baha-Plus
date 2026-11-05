@@ -18,6 +18,7 @@ xcodebuild \
   -configuration Debug \
   -sdk iphonesimulator \
   -destination 'generic/platform=iOS Simulator' \
+  -skipPackagePluginValidation \
   -derivedDataPath "$output/DerivedData" \
   CODE_SIGNING_ALLOWED=NO \
   SKIP_ACTION=none \

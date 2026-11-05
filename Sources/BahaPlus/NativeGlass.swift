@@ -168,7 +168,7 @@ struct CatalogFooter: View {
             Text(store.text(store.catalogSource == "live" ? "dataLive" : "dataSnapshot"))
             Text(String(store.catalog.fetchedAt.prefix(10)))
             Spacer()
-            if store.busy { ProgressView().controlSize(.small) }
+            if store.busy { ProgressView() }
             else {
                 Button { store.refreshCatalog() } label: { Image(systemName: "arrow.clockwise") }
                     .accessibilityLabel(store.text("refresh"))
