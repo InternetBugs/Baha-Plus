@@ -15,7 +15,10 @@ let package = Package(
     dependencies: coreOnly ? [] : [
         .package(url: "https://github.com/skiptools/skip.git", from: "1.9.7"),
         .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.54.0"),
-        .package(url: "https://github.com/skiptools/skip-web.git", exact: "0.12.0")
+        // WebView 124 can supply a null request-header map during navigation.
+        // This upstream fix is newer than the latest tagged release (0.12.0).
+        .package(url: "https://github.com/skiptools/skip-web.git",
+                 revision: "4ae9b16f5835d37ab63dc4cb4064df4fef3574a4")
     ],
     targets: [
         .target(

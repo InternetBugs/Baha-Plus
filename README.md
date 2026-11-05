@@ -108,4 +108,4 @@ Windows 上可以检查适配器和资源，并使用 `tools/check-swift-syntax.
 
 详见 [Liquid Glass 设计依据](docs/liquid-glass.md)。
 
-双平台工程配置基于 [Skip 官方 HelloSkip 模板](https://github.com/skiptools/skipapp-hello)，WebView 接口锁定 [SkipWeb 0.12.0](https://github.com/skiptools/skip-web/tree/0.12.0)。SwiftUI 的 iOS 26 专有 API 用条件编译隔离。
+双平台工程配置基于 [Skip 官方 HelloSkip 模板](https://github.com/skiptools/skipapp-hello)。WebView 锁定 [SkipWeb 官方修复提交 `4ae9b16`](https://github.com/skiptools/skip-web/commit/4ae9b16f5835d37ab63dc4cb4064df4fef3574a4)，修复 Android WebView 124 在导航时返回空请求头导致的启动崩溃；该补丁晚于 0.12.0 标签。SwiftUI 的 iOS 26 专有 API 用条件编译隔离。
