@@ -33,9 +33,12 @@ struct AppRoot: View {
         .sheet(isPresented: $store.accountPresented) {
             NavigationStack {
                 AccountScreen(store: store)
-                    .navigationTitle(store.text("officialAccount"))
+                    .navigationTitle("")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Text(store.text("officialAccount")).font(.headline)
+                        }
                         ToolbarItem(placement: .topBarTrailing) { AccountCloseButton(store: store) }
                     }
             }
@@ -60,7 +63,7 @@ struct AppRoot: View {
             Tab(store.text("explore"), systemImage: "rectangle.stack.fill", value: 0) { home }
             Tab(store.text("schedule"), systemImage: "calendar", value: 1) { schedule }
             Tab(store.text("library"), systemImage: "square.stack.fill", value: 2) { library }
-            Tab(value: 3, role: .search) { search }
+            Tab(store.text("search"), systemImage: "magnifyingglass", value: 3) { search }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
     }
@@ -78,9 +81,7 @@ struct AppRoot: View {
             HomeScreen(store: store)
                 .navigationTitle(store.text("explore"))
                 .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
-                }
+                .appStoreHeader(store.text("explore"), store: store)
         }
     }
     private var schedule: some View {
@@ -88,9 +89,7 @@ struct AppRoot: View {
             ScheduleScreen(store: store)
                 .navigationTitle(store.text("schedule"))
                 .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
-                }
+                .appStoreHeader(store.text("schedule"), store: store)
         }
     }
     private var library: some View {
@@ -98,9 +97,7 @@ struct AppRoot: View {
             LibraryScreen(store: store)
                 .navigationTitle(store.text("library"))
                 .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
-                }
+                .appStoreHeader(store.text("library"), store: store)
         }
     }
     private var search: some View {
@@ -108,9 +105,7 @@ struct AppRoot: View {
             SearchScreen(store: store)
                 .navigationTitle(store.text("search"))
                 .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
-                }
+                .appStoreHeader(store.text("search"), store: store)
         }
     }
 }

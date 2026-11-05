@@ -80,16 +80,21 @@ public struct WatchEntry: Identifiable, Hashable, Codable, Sendable {
     public var progressLabel: String?
     public var id: String { anime.id }
     public var isValid: Bool {
-        anime.isValid && OfficialSite.validID(videoId) &&
-        episodeLabel.count <= 200 && (progressLabel?.count ?? 0) <= 2000 &&
-        (progress == nil || ((progress ?? 0).isFinite && (0...1).contains(progress ?? 0)))
+        guard anime.isValid, OfficialSite.validID(videoId),
+              episodeLabel.count <= 200, (progressLabel?.count ?? 0) <= 2000 else { return false }
+        guard let value = progress else { return true }
+        return value >= 0.0 && value <= 1.0
     }
 }
 
 public enum OfficialSite {
     public static let origin = "https://ani.gamer.com.tw"
     public static func validID(_ id: String) -> Bool {
-        !id.isEmpty && id.count <= 10 && id.allSatisfy { "0123456789".contains($0) }
+        if id.isEmpty || id.count > 10 { return false }
+        for character in id {
+            if !"0123456789".contains(String(character)) { return false }
+        }
+        return true
     }
     public static func seriesURL(_ id: String) -> URL? {
         validID(id) ? URL(string: "\(origin)/animeRef.php?sn=\(id)") : nil

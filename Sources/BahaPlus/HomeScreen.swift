@@ -90,7 +90,7 @@ struct HomeScreen: View {
                         .frame(width: 48, height: 48)
                         .clipShape(RoundedRectangle(cornerRadius: 11))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(anime.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(store.text("latestEpisode")).font(.subheadline.weight(.semibold)).lineLimit(1)
                         Text([anime.episodeLabel, anime.updateTime].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.white.opacity(0.7))
                     }

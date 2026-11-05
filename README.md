@@ -98,7 +98,7 @@ npm run typecheck
 
 Windows 上可以检查适配器和资源，并使用 `tools/check-swift-syntax.py` 检查 Swift 语法。在 WSL 中也可以使用官方 Swift Linux 工具链，真实编译并运行 `BAHA_CORE_ONLY=1 swift test`。这些检查**不等于** SwiftUI 类型检查、Xcode 编译、Skip 转译或真机验收。
 
-本机检查结果：官方 Swift 6.2.4 编译并运行的 13 项 XCTest 通过，覆盖目录与双语资源、官方 URL、账号请求隔离和桥接消息校验。公开仓库保留的 9 项原生页面适配 / 详情 HTML 读取 / 资源测试通过。SwiftUI 和两端原生构建以 Actions 的实际结果为准，真实账号播放仍需目标设备验收。
+本机检查结果：官方 Swift 6.2.4 编译并运行的 16 项 XCTest 通过，覆盖目录与双语资源、Unicode 搜索、官方 URL、账号请求隔离和桥接消息校验。公开仓库保留的 9 项原生页面适配 / 详情 HTML 读取 / 资源测试通过。SwiftUI 和两端原生构建以 Actions 的实际结果为准，真实账号播放仍需目标设备验收。
 
 项目提供 `tools/setup-swift-wsl.sh` 与 `tools/run-swift-wsl.sh` 供当前 Windows 开发环境复用临时 Swift 工具链；它们不会改系统 Swift 安装或 shell 配置。WSL 只能完成这里的纯 Swift 核心验证；完整 Skip App 的原生构建仍需要 [macOS 与 Xcode](https://skip.dev/docs/faq/#can-i-use-skip-on-windows-or-linux)。
 

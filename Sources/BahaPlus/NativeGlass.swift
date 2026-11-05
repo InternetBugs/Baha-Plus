@@ -59,6 +59,30 @@ struct StoreActionPill: View {
 }
 
 extension View {
+    @ViewBuilder func appStoreHeader(_ title: String, store: AppStore) -> some View {
+        #if !SKIP
+        if #available(iOS 26.0, *) {
+            self.toolbar {
+                ToolbarItem(placement: .largeTitle) {
+                    HStack(alignment: .center) {
+                        Text(title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+                        Spacer()
+                        AccountAvatarButton(store: store)
+                    }.frame(maxWidth: .infinity)
+                }
+            }
+        } else {
+            self.toolbar {
+                ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+            }
+        }
+        #else
+        self.toolbar {
+            ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+        }
+        #endif
+    }
+
     @ViewBuilder func accountSheetAppearance() -> some View {
         #if !SKIP
         self.presentationDetents([.large])

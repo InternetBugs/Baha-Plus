@@ -21,16 +21,24 @@ public enum AppResources {
 public enum SearchFolding {
     private static let mapping = AppResources.dictionary("search-folding")
     public static func normalize(_ string: String) -> String {
+        #if SKIP
+        let normalized: String = java.text.Normalizer.normalize(string, java.text.Normalizer.Form.NFKC)
+        #else
+        let normalized: String = string.precomposedStringWithCompatibilityMapping
+        #endif
         var result = ""
-        for character in string.lowercased() {
+        for character in normalized.lowercased() {
             let part = String(character)
             let folded = mapping[part] ?? part
-            if folded.rangeOfCharacter(from: CharacterSet.letters) != nil ||
-                folded.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil {
-                result += folded
-            }
+            result += folded
         }
-        return result.replacingOccurrences(of: "计画", with: "计划")
+        #if SKIP
+        let filtered: String = result.replace(kotlin.text.Regex("[^\\p{L}\\p{N}\\p{M}]"), "")
+        #else
+        let filtered = result.replacingOccurrences(of: "[^\\p{L}\\p{N}\\p{M}]",
+                                                   with: "", options: .regularExpression)
+        #endif
+        return filtered.replacingOccurrences(of: "计画", with: "计划")
     }
     public static func matches(_ title: String, query: String) -> Bool {
         normalize(title).contains(normalize(query))

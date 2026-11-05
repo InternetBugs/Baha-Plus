@@ -14,6 +14,9 @@ xcrun simctl boot "$device" 2>/dev/null || true
 xcrun simctl bootstatus "$device" -b
 xcrun simctl status_bar "$device" override --time '9:41' --batteryState charged --batteryLevel 100
 xcrun simctl install "$device" "$app"
+# Fresh iOS runtimes can deliver first-boot system notifications after SpringBoard
+# is ready. Let those transient banners finish before recording app layouts.
+sleep 25
 
 capture() {
   local screen="$1" language="$2" appearance="$3"
