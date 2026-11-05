@@ -16,8 +16,8 @@ final class AppStore: WebViewScriptMessageDelegate {
     var tab = 0
     var accountPresented = false
     var isPreviewMode = false
-    var catalog = AppResources.snapshot
-    var catalogSource = "snapshot"
+    var catalog = Catalog(items: [], fetchedAt: "")
+    var catalogSource = "empty"
     var favorites: [Anime] = []
     var history: [WatchEntry] = []
     var accountSynced = false
@@ -51,6 +51,10 @@ final class AppStore: WebViewScriptMessageDelegate {
     private let simplified = AppResources.dictionary("zh-Hans")
 
     init() {
+        if let cached = CatalogCache.load() {
+            catalog = cached
+            catalogSource = "cache"
+        }
         language = UserDefaults.standard.string(forKey: "baha.device.language") ??
             DevicePreferences.languageForSystem(Locale.preferredLanguages.first ?? "zh-Hant")
         appearance = UserDefaults.standard.string(forKey: "baha.device.appearance") ?? "system"
@@ -65,6 +69,8 @@ final class AppStore: WebViewScriptMessageDelegate {
         let preview = ProcessInfo.processInfo.environment
         if preview["BAHA_UI_PREVIEW"] == "1" {
             isPreviewMode = true
+            catalog = AppResources.snapshot
+            catalogSource = "snapshot"
             language = preview["BAHA_PREVIEW_LANGUAGE"] ?? "zh-Hans"
             appearance = preview["BAHA_PREVIEW_APPEARANCE"] ?? "light"
             tab = preview["BAHA_PREVIEW_SCREEN"] == "search" ? 3 : 0
@@ -312,7 +318,9 @@ final class AppStore: WebViewScriptMessageDelegate {
             guard let items = payload.items, let fetchedAt = payload.fetchedAt else { return }
             deadline?.cancel(); busy = false
             if payload.type == "catalog" {
-                catalog = Catalog(items: items, fetchedAt: fetchedAt); catalogSource = "live"
+                let updated = Catalog(items: items, fetchedAt: fetchedAt)
+                CatalogCache.save(updated)
+                catalog = updated; catalogSource = "live"
                 syncAccount()
             } else {
                 searchResults = items

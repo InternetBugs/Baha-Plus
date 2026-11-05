@@ -239,18 +239,21 @@ struct RemoteArtwork: View {
 struct CatalogFooter: View {
     @Bindable var store: AppStore
     var body: some View {
-        HStack {
-            Text(store.text(store.catalogSource == "live" ? "dataLive" : "dataSnapshot"))
-            Text(String(store.catalog.fetchedAt.prefix(10)))
-            Spacer()
-            if store.busy { ProgressView() }
-            else {
-                Button { store.refreshCatalog() } label: { Image(systemName: platformSymbol("arrow.clockwise")) }
-                    .accessibilityLabel(store.text("refresh"))
+        if !store.catalog.items.isEmpty {
+            HStack {
+                Text(store.text(store.catalogSource == "live" ? "dataLive" :
+                                store.catalogSource == "snapshot" ? "dataSnapshot" : "dataCached"))
+                Text(String(store.catalog.fetchedAt.prefix(10)))
+                Spacer()
+                if store.busy { ProgressView() }
+                else {
+                    Button { store.refreshCatalog() } label: { Image(systemName: platformSymbol("arrow.clockwise")) }
+                        .accessibilityLabel(store.text("refresh"))
+                }
             }
+            .font(.caption2).foregroundStyle(.secondary)
+            .padding(.vertical, 20)
         }
-        .font(.caption2).foregroundStyle(.secondary)
-        .padding(.vertical, 20)
     }
 }
 #endif

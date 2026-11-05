@@ -7,52 +7,58 @@ struct HomeScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                if let anime = store.seasonal.first {
-                    hero(anime)
-                }
-                if !store.history.isEmpty {
-                    sectionHeading(store.text("history")) { store.accountPresented = true }
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(Array(store.history.prefix(8))) { entry in
-                                ContinueCard(store: store, entry: entry)
+                if !store.catalog.items.isEmpty {
+                    if let anime = store.seasonal.first {
+                        hero(anime)
+                    }
+                    if !store.history.isEmpty {
+                        sectionHeading(store.text("history")) { store.accountPresented = true }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(Array(store.history.prefix(8))) { entry in
+                                    ContinueCard(store: store, entry: entry)
+                                }
                             }
                         }
                     }
-                }
-                if let anime = store.popular.first {
-                    compactFeature(anime)
-                }
-                sectionHeading(store.text("seasonal")) {
-                    store.libraryFilter = "season"; store.tab = 2
-                }
-                // A small fixed two-column section avoids nesting an Android
-                // Compose lazy grid inside the home page's vertical scroll.
-                VStack(spacing: 24) {
-                    ForEach(0..<((min(store.seasonal.count, 8) + 1) / 2), id: \.self) { row in
-                        HStack(alignment: .top, spacing: 16) {
-                            AnimeTile(store: store, anime: store.seasonal[row * 2], poster: false)
-                                .frame(maxWidth: .infinity)
-                            if row * 2 + 1 < min(store.seasonal.count, 8) {
-                                AnimeTile(store: store, anime: store.seasonal[row * 2 + 1], poster: false)
-                                    .frame(maxWidth: .infinity)
-                            } else {
-                                Color.clear.frame(maxWidth: .infinity)
+                    if let anime = store.popular.first {
+                        compactFeature(anime)
+                    }
+                    if !store.seasonal.isEmpty {
+                        sectionHeading(store.text("seasonal")) {
+                            store.libraryFilter = "season"; store.tab = 2
+                        }
+                        // A small fixed two-column section avoids nesting an Android
+                        // Compose lazy grid inside the home page's vertical scroll.
+                        VStack(spacing: 24) {
+                            ForEach(0..<((min(store.seasonal.count, 8) + 1) / 2), id: \.self) { row in
+                                HStack(alignment: .top, spacing: 16) {
+                                    AnimeTile(store: store, anime: store.seasonal[row * 2], poster: false)
+                                        .frame(maxWidth: .infinity)
+                                    if row * 2 + 1 < min(store.seasonal.count, 8) {
+                                        AnimeTile(store: store, anime: store.seasonal[row * 2 + 1], poster: false)
+                                            .frame(maxWidth: .infinity)
+                                    } else {
+                                        Color.clear.frame(maxWidth: .infinity)
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                sectionHeading(store.text("popular")) {
-                    store.libraryFilter = "hot"; store.tab = 2
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(Array(store.popular.prefix(12))) { anime in
-                            AnimeTile(store: store, anime: anime, poster: true).frame(width: 138)
+                    if !store.popular.isEmpty {
+                        sectionHeading(store.text("popular")) {
+                            store.libraryFilter = "hot"; store.tab = 2
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(alignment: .top, spacing: 16) {
+                                ForEach(Array(store.popular.prefix(12))) { anime in
+                                    AnimeTile(store: store, anime: anime, poster: true).frame(width: 138)
+                                }
+                            }
                         }
                     }
+                    CatalogFooter(store: store)
                 }
-                CatalogFooter(store: store)
             }
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
         }

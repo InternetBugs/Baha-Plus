@@ -117,8 +117,8 @@ public enum OfficialSite {
     }
 }
 
-/// Only device preferences are persisted. Account collections and progress are
-/// transient projections of the official authenticated session.
+/// Device preferences are independent of the public catalog cache.
+/// Account collections and progress remain transient official session projections.
 public struct DevicePreferences: Codable, Sendable {
     public var language: String
     public var appearance: String
