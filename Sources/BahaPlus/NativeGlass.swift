@@ -107,7 +107,14 @@ extension View {
             }
         }
         #else
-        self.toolbar {
+        self.navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Text(title).font(.largeTitle.bold())
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 AccountAvatarButton(label: accountLabel, action: onAccount)
             }

@@ -6,9 +6,29 @@ struct SearchScreen: View {
     @Bindable var store: AppStore
     var body: some View {
         #if SKIP
-        content.floatingTabContentMargins()
-            .searchable(text: $store.query, prompt: store.text("searchPlaceholder"))
-            .onSubmit(of: .search) { store.search() }
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: platformSymbol("magnifyingglass"))
+                    .foregroundStyle(Color.secondary)
+                TextField(store.text("searchPlaceholder"), text: $store.query)
+                    .textFieldStyle(.plain)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .onSubmit { store.search() }
+                if !store.query.isEmpty {
+                    Button { store.query = "" } label: {
+                        Image(systemName: platformSymbol("xmark"))
+                            .foregroundStyle(Color.secondary).frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(store.text("clearSearch"))
+                }
+            }
+            .padding(.horizontal, 14).frame(height: 48)
+            .background(Color.secondary.opacity(0.10), in: Capsule())
+            .padding(.horizontal, 20).padding(.vertical, 8)
+            content.floatingTabContentMargins()
+        }
         #else
         content.searchable(text: $store.query,
                            placement: .navigationBarDrawer(displayMode: .always),

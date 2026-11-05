@@ -14,7 +14,7 @@ import androidx.compose.ui.unit.dp
 struct AndroidGlassTabs: View {
     @Bindable var store: AppStore
     let content: AnyView
-    @State private var backdrop = HazeState()
+    @State private var backdrop: HazeState = HazeState()
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {

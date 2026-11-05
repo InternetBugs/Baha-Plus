@@ -35,13 +35,14 @@ tests/native-adapters.test.ts  官方 DOM 适配器的离线测试
 
 1. 在 Linux runner 检查双语资源、官方页面适配器和 TypeScript。
 2. 在 macOS 26 runner 安装 Skip / Gradle，运行 Swift XCTest，构建 iOS 和 Android。
-3. 成功后从 `BahaPlus-native` 下载 Android debug APK 和 iOS 模拟器 App 压缩包。
+3. 使用 iPhoneOS SDK 另外构建 arm64 真机应用，并打包未签名的 IPA。
+4. 成功后从 `BahaPlus-native` 下载 Android debug APK、iOS 模拟器 App 压缩包和 `BahaPlus-unsigned.ipa`。
 
 iOS 原生预览作为独立任务构建，并在 iOS 26 模拟器上导出首页、搜索、账户面板和繁体深色模式截图，可从 `ios-ui-previews` 下载。预览使用公开目录和占位账号，不代表真实账号登录或播放验收。
 
 **Android runtime smoke** 会在 `main` 的原生构建成功后下载实际 APK，在 Android 模拟器中安装并检查启动、搜索、账户面板和简繁切换。也可手动指定已有的成功构建编号 `build_run_id`。截图、界面树和运行日志保存在 `android-runtime-evidence`，这项检查使用访客界面。
 
-iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone；真机 IPA 仍需配置 Apple 开发者签名。工作流不自动发布 Release 或上传应用商店。
+iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone。`BahaPlus-unsigned.ipa` 使用真机 SDK 与 arm64 架构，安装前仍需使用自己的 Apple 账号完成签名；它不是已经签名、可直接安装的 iPhone 应用。CI 不需要保存 Apple 账号凭据，工作流不自动发布 Release 或上传应用商店。
 
 ## 在 Mac 上运行
 

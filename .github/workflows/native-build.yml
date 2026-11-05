@@ -54,6 +54,8 @@ jobs:
           install-swift-android-sdk: 'false'
       - name: Build both native apps and run Swift tests
         run: bash tools/verify-native-macos.sh
+      - name: Build unsigned iPhone device package
+        run: bash tools/build-ios-device.sh
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -64,13 +66,14 @@ jobs:
             artifacts/native-macos/*.txt
           if-no-files-found: ignore
           retention-days: 14
-      - name: Upload installable build artifacts
+      - name: Upload native build artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: BahaPlus-native
           path: |
             artifacts/native-macos/BahaPlus-debug.apk
             artifacts/native-macos/BahaPlus-ios-simulator.tar.gz
+            artifacts/native-macos/BahaPlus-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
 
