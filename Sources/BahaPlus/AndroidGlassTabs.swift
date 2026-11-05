@@ -66,7 +66,8 @@ struct AndroidGlassTabs: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(store.text(key))
-        .accessibilityAddTraits(store.tab == index ? .isSelected : [])
+        .accessibilityAddTraits(store.tab == index ?
+                               AccessibilityTraits.isSelected : AccessibilityTraits(rawValue: 0))
         .accessibilityIdentifier("native-tab-\(index)")
     }
 }

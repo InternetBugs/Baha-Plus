@@ -6,4 +6,4 @@ build:
     - block: 'dependencies'
       export: false
       contents:
-        - 'implementation("dev.chrisbanes.haze:haze:1.7.3")'
+        - 'implementation("dev.chrisbanes.haze:haze:1.6.10")'
