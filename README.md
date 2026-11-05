@@ -29,30 +29,33 @@ tests/native-adapters.test.ts  官方 DOM 适配器的离线测试
 
 公开仓库仅包含 SwiftUI 主工程及必要的资源、构建与验证工具。早期 Expo 预览、本机开发缓存和工具链不包含在仓库中。
 
-## 本地构建（默认）
+## 日常本地检查
 
-在 Mac 或运行于 Apple 硬件上的 macOS 虚拟机中准备 Xcode 26+、Node.js 24+、Java 21、Skip 和 Android SDK，执行：
+日常修改先在本机运行轻量检查，Windows 也可以执行：
 
 ```sh
-bash tools/build-local-macos.sh
+npm ci
+npm run resources:check
+npm test
+npm run typecheck
 ```
 
-这个入口先检查资源、页面适配器和 TypeScript，再运行 Swift 测试，并构建 Android APK、iOS 模拟器 App 与未签名的 iPhone arm64 IPA。产物在 `artifacts/native-macos`，整个过程不依赖 GitHub Actions。
+原生编译与安装包使用下方的手动 Actions。Windows/WSL 也可以运行纯 Swift 核心测试，不能运行 Xcode。
 
-要生成 iOS 实际界面截图，可另外运行 `bash tools/build-ios-previews.sh`；Android 实际运行检查可以在本地 Android 模拟器启动后运行 `python3 tools/android-smoke.py --apk artifacts/native-macos/BahaPlus-debug.apk --output artifacts/android-smoke`。虚拟机中的模拟器支持取决于主机的虚拟化与图形能力，构建本身不强制启动模拟器。
+## GitHub Actions（按需构建）
 
-Windows/WSL 可以完成资源、适配器和纯 Swift 核心检查，不能运行 Xcode。macOS 虚拟机的部署需符合 [Apple macOS 许可](https://www.apple.com/legal/sla/docs/macOSTahoe.pdf)及宿主硬件条件。
+提交代码、推送到 `main`、创建 Pull Request 都不会自动运行云端构建。日常修改先在本机完成资源、适配器和纯 Swift 核心检查，一批修改完成后再按需手动运行 **Native build**。
 
-## GitHub Actions（手动备用）
+工作流不设置固定的每日次数或冷却时间。两个工作流共用一个并发组，一次运行一轮云端验证，保留正在进行的构建。需要新安装包时正常构建，验证已有 APK 时直接指定已有的构建编号，不重新编译。
 
-提交代码、推送到 `main`、创建 Pull Request 都不会自动运行云端构建。需要时在 Actions 页面手动运行 **Native build**：
+构建步骤：
 
 1. 在 Linux runner 检查双语资源、官方页面适配器和 TypeScript。
 2. 在 macOS 26 runner 安装 Skip / Gradle，运行 Swift XCTest，构建 iOS 和 Android。
 3. 使用 iPhoneOS SDK 另外构建 arm64 真机应用，并打包未签名的 IPA。
 4. 成功后从 `BahaPlus-native` 下载 Android debug APK、iOS 模拟器 App 压缩包和 `BahaPlus-unsigned.ipa`。
 
-iOS 原生预览作为独立任务构建，并在 iOS 26 模拟器上导出首页、搜索、账户面板和繁体深色模式截图，可从 `ios-ui-previews` 下载。预览使用公开目录和占位账号，不代表真实账号登录或播放验收。
+iOS 原生预览仅在手动勾选 `include_previews` 时生成，完成打包后串行运行，在 iOS 26 模拟器上导出首页、搜索、账户面板和繁体深色模式截图，可从 `ios-ui-previews` 下载。预览使用公开目录和占位账号，不代表真实账号登录或播放验收。安装包和截图保留 7 天，构建日志保留 3 天。
 
 **Android runtime smoke** 也仅手动运行。指定已有的成功构建编号 `build_run_id` 后，它会下载实际 APK，在 Android 模拟器中安装并检查启动、搜索输入与清空、账户面板和简繁切换。截图、界面树和运行日志保存在 `android-runtime-evidence`，这项检查使用访客界面。
 
@@ -66,6 +69,8 @@ iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone。`BahaP
 2. 在项目目录执行 `skip checkup` 检查工具链。
 3. 打开 `Project.xcworkspace`。
 4. 选择 **BahaPlus App** Scheme 和 iPhone 模拟器，运行。
+
+如果以后需要 Mac 本机构建，准备 Node.js 24+、Java 21、Skip、Android SDK 后可执行 `bash tools/build-local-macos.sh`。它会检查资源并生成与云端相同类别的三个原生产物，输出到 `artifacts/native-macos`。本地 iOS 截图可单独运行 `bash tools/build-ios-previews.sh`，Android 安装检查则在模拟器启动后运行 `python3 tools/android-smoke.py --apk artifacts/native-macos/BahaPlus-debug.apk --output artifacts/android-smoke`。
 
 `Darwin/BahaPlus.xcconfig` 默认设置 `SKIP_ACTION = none`，先让 iOS 独立运行。要同时构建、启动 Android，在 Android Studio 启动模拟器后，把它改为 `launch`。也可打开 `Android` 项目进行构建。
 

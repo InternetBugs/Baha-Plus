@@ -1,4 +1,5 @@
 name: Android runtime smoke
+run-name: Android smoke · build ${{ inputs.build_run_id }}
 
 on:
   workflow_dispatch:
@@ -11,6 +12,10 @@ on:
 permissions:
   contents: read
   actions: read
+
+concurrency:
+  group: baha-plus-cloud-validation
+  cancel-in-progress: false
 
 jobs:
   smoke:
@@ -51,4 +56,4 @@ jobs:
           name: android-runtime-evidence
           path: artifacts/android-smoke/
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
