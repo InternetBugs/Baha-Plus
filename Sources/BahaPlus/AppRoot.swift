@@ -99,7 +99,9 @@ struct AppRoot: View {
             HomeScreen(store: store)
                 .navigationTitle(store.text("explore"))
                 .navigationBarTitleDisplayMode(.large)
-                .appStoreHeader(store.text("explore"), store: store)
+                .appStoreHeader(store.text("explore"), accountLabel: store.text("me")) {
+                    store.accountPresented = true
+                }
         }
     }
     private var schedule: some View {
@@ -107,7 +109,9 @@ struct AppRoot: View {
             ScheduleScreen(store: store)
                 .navigationTitle(store.text("schedule"))
                 .navigationBarTitleDisplayMode(.large)
-                .appStoreHeader(store.text("schedule"), store: store)
+                .appStoreHeader(store.text("schedule"), accountLabel: store.text("me")) {
+                    store.accountPresented = true
+                }
         }
     }
     private var library: some View {
@@ -115,7 +119,9 @@ struct AppRoot: View {
             LibraryScreen(store: store)
                 .navigationTitle(store.text("library"))
                 .navigationBarTitleDisplayMode(.large)
-                .appStoreHeader(store.text("library"), store: store)
+                .appStoreHeader(store.text("library"), accountLabel: store.text("me")) {
+                    store.accountPresented = true
+                }
         }
     }
     private var search: some View {
@@ -123,7 +129,9 @@ struct AppRoot: View {
             SearchScreen(store: store)
                 .navigationTitle(store.text("search"))
                 .navigationBarTitleDisplayMode(.large)
-                .appStoreHeader(store.text("search"), store: store)
+                .appStoreHeader(store.text("search"), accountLabel: store.text("me")) {
+                    store.accountPresented = true
+                }
         }
     }
 }

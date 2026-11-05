@@ -8,9 +8,10 @@ enum Brand {
 }
 
 struct AccountAvatarButton: View {
-    @Bindable var store: AppStore
+    let label: String
+    let action: () -> Void
     var body: some View {
-        Button { store.accountPresented = true } label: {
+        Button(action: action) {
             Image(systemName: "person.crop.circle.fill")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(Color.secondary)
@@ -19,7 +20,7 @@ struct AccountAvatarButton: View {
                 .overlay(Circle().strokeBorder(Color.secondary.opacity(0.18), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(store.text("me"))
+        .accessibilityLabel(label)
         .accessibilityIdentifier("account-button")
     }
 }
@@ -63,7 +64,8 @@ struct StoreActionPill: View {
 }
 
 extension View {
-    @ViewBuilder internal func appStoreHeader(_ title: String, store: AppStore) -> some View {
+    @ViewBuilder internal func appStoreHeader(_ title: String, accountLabel: String,
+                                             onAccount: @escaping () -> Void) -> some View {
         #if !SKIP
         if #available(iOS 26.0, *) {
             self.toolbar {
@@ -71,18 +73,22 @@ extension View {
                     HStack(alignment: .center) {
                         Text(title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
                         Spacer()
-                        AccountAvatarButton(store: store)
+                        AccountAvatarButton(label: accountLabel, action: onAccount)
                     }.frame(maxWidth: .infinity)
                 }
             }
         } else {
             self.toolbar {
-                ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    AccountAvatarButton(label: accountLabel, action: onAccount)
+                }
             }
         }
         #else
         self.toolbar {
-            ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+            ToolbarItem(placement: .topBarTrailing) {
+                AccountAvatarButton(label: accountLabel, action: onAccount)
+            }
         }
         #endif
     }
