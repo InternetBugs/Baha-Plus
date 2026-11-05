@@ -78,7 +78,7 @@ public struct BrowserMessage: Decodable, Sendable {
         case "detail-error":
             return request.intent == .detail && id == request.animeID && request.animeID != nil
         case "account-synced":
-            guard [.account, .accountRefresh].contains(request.intent),
+            guard [BrowserIntent.account, BrowserIntent.accountRefresh].contains(request.intent),
                   let favorites, let history, favorites.count <= 10000, history.count <= 1000,
                   favorites.allSatisfy(\.isValid), history.allSatisfy(\.isValid) else { return false }
             return Set(favorites.map(\.id)).count == favorites.count &&
@@ -90,7 +90,7 @@ public struct BrowserMessage: Decodable, Sendable {
         case "favorite-error":
             return request.intent == .favorite && id == request.animeID && request.animeID != nil
         case "account-guest", "account-error":
-            return [.account, .accountRefresh, .favorite].contains(request.intent)
+            return [BrowserIntent.account, BrowserIntent.accountRefresh, BrowserIntent.favorite].contains(request.intent)
         default: return false
         }
     }

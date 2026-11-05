@@ -218,7 +218,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         deadline?.cancel()
         operation = BrowserRequest(
             intent: purpose,
-            animeID: [.detail, .favorite].contains(purpose) ? pendingAnime?.id : nil,
+            animeID: [BrowserIntent.detail, BrowserIntent.favorite].contains(purpose) ? pendingAnime?.id : nil,
             favoriteTarget: purpose == .favorite ? desiredFavorite : nil,
             query: purpose == .search ? query : nil
         )
@@ -261,7 +261,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         deadline = Task {
             do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
             guard nonce == expected else { return }
-            let account = [.account, .accountRefresh].contains(intent)
+            let account = [BrowserIntent.account, BrowserIntent.accountRefresh].contains(intent)
             navigationFailed()
             if account { notice = text("accountSyncError") }
         }
