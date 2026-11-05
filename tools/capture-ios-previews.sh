@@ -26,7 +26,9 @@ capture() {
   SIMCTL_CHILD_BAHA_PREVIEW_LANGUAGE="$language" \
   SIMCTL_CHILD_BAHA_PREVIEW_APPEARANCE="$appearance" \
     xcrun simctl launch --terminate-running-process "$device" "$bundle_id"
-  sleep 5
+  # Initial system banners can be delayed until an app becomes active.
+  # Capture the settled screen instead of recording a notification over it.
+  sleep 20
   xcrun simctl io "$device" screenshot "$previews/$screen-$language-$appearance.png"
 }
 capture home zh-Hans light

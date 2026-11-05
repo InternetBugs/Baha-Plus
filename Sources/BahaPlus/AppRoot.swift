@@ -12,10 +12,10 @@ struct AppRoot: View {
                 .accessibilityHidden(store.browserVisible)
             if !store.isPreviewMode {
                 OfficialBrowser(store: store)
-                    .opacity(store.browserVisible ? 1 : 0)
+                    .opacity(store.browserVisible ? 1.0 : 0.0)
                     .allowsHitTesting(store.browserVisible)
                     .accessibilityHidden(!store.browserVisible)
-                    .zIndex(store.browserVisible ? 1 : -1)
+                    .zIndex(store.browserVisible ? 1.0 : -1.0)
             }
         }
         .sheet(item: $store.selectedAnime) { anime in
@@ -36,10 +36,28 @@ struct AppRoot: View {
                     .navigationTitle("")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
+                        #if !SKIP
+                        if #available(iOS 26.0, *) {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Text(store.text("officialAccount")).font(.headline)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }.sharedBackgroundVisibility(.hidden)
+                            ToolbarItem(placement: .topBarTrailing) {
+                                AccountCloseButton(store: store)
+                            }.sharedBackgroundVisibility(.hidden)
+                        } else {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Text(store.text("officialAccount")).font(.headline)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                            ToolbarItem(placement: .topBarTrailing) { AccountCloseButton(store: store) }
+                        }
+                        #else
                         ToolbarItem(placement: .topBarLeading) {
                             Text(store.text("officialAccount")).font(.headline)
                         }
                         ToolbarItem(placement: .topBarTrailing) { AccountCloseButton(store: store) }
+                        #endif
                     }
             }
             .accountSheetAppearance()
@@ -116,7 +134,7 @@ struct OfficialBrowser: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if store.browserState.isLoading {
-                    ProgressView(value: store.browserState.estimatedProgress ?? 0)
+                    ProgressView(value: store.browserState.estimatedProgress ?? 0.0)
                         .progressViewStyle(.linear)
                 }
                 if let notice = store.notice, store.browserVisible {

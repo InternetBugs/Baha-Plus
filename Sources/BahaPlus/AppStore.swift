@@ -268,9 +268,10 @@ final class AppStore: WebViewScriptMessageDelegate {
     }
     private func runScript(_ name: String, replacements: [String: String] = [:]) {
         guard let url = Bundle.module.url(forResource: name, withExtension: "js"),
-              var script = try? String(contentsOf: url, encoding: .utf8),
+              let source = try? String(contentsOf: url, encoding: .utf8),
               let tokenData = try? JSONEncoder().encode(nonce),
               let token = String(data: tokenData, encoding: .utf8) else { navigationFailed(); return }
+        var script: String = source
         for (key, value) in replacements { script = script.replacingOccurrences(of: key, with: value) }
         let prefix = """
         (function() {

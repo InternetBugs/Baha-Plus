@@ -34,7 +34,11 @@ struct AccountCloseButton: View {
             button.background(.thinMaterial, in: Circle())
         }
         #else
-        button.background(.thinMaterial, in: Circle())
+        button.background(
+            LinearGradient(colors: [Color.white.opacity(0.5), Color.secondary.opacity(0.12)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: Circle()
+        )
         #endif
     }
     private var button: some View {
@@ -59,7 +63,7 @@ struct StoreActionPill: View {
 }
 
 extension View {
-    @ViewBuilder func appStoreHeader(_ title: String, store: AppStore) -> some View {
+    @ViewBuilder internal func appStoreHeader(_ title: String, store: AppStore) -> some View {
         #if !SKIP
         if #available(iOS 26.0, *) {
             self.toolbar {
@@ -83,7 +87,7 @@ extension View {
         #endif
     }
 
-    @ViewBuilder func accountSheetAppearance() -> some View {
+    @ViewBuilder internal func accountSheetAppearance() -> some View {
         #if !SKIP
         self.presentationDetents([.large])
             .presentationDragIndicator(.hidden)
@@ -144,15 +148,23 @@ struct PlaybackActions: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(controlBackground, in: Capsule())
             Button { store.toggleFavorite(anime) } label: {
                 Image(systemName: store.isFavorite(anime) ? "bookmark.fill" : "bookmark")
                     .frame(width: 50, height: 50)
             }
             .buttonStyle(.plain).foregroundStyle(.white)
-            .background(.ultraThinMaterial, in: Circle())
+            .background(controlBackground, in: Circle())
             .accessibilityLabel(store.text(store.isFavorite(anime) ? "unsave" : "save"))
         }
+    }
+    private var controlBackground: some ShapeStyle {
+        #if SKIP
+        LinearGradient(colors: [Color.white.opacity(0.35), Color.white.opacity(0.15)],
+                       startPoint: .topLeading, endPoint: .bottomTrailing)
+        #else
+        Material.ultraThin
+        #endif
     }
 }
 
@@ -178,7 +190,7 @@ struct RemoteArtwork: View {
         } placeholder: {
             ZStack {
                 Rectangle().fill(Color.secondary.opacity(0.10))
-                Image(systemName: "film").font(.largeTitle).foregroundStyle(.tertiary)
+                Image(systemName: "film").font(.largeTitle).foregroundStyle(Color.secondary.opacity(0.6))
             }
         }
         .clipped()
