@@ -5,7 +5,8 @@ import vm from 'node:vm';
 import { parseHTML, DOMParser } from 'linkedom';
 
 const folder = 'Sources/BahaPlus/Resources/';
-function setup(html: string, pathname = '/mygather.php', responses: Record<string, string> = {}) {
+function setup(html: string, pathname = '/mygather.php',
+               responses: Record<string, string | { html: string; url: string }> = {}) {
   const { window } = parseHTML(html);
   const messages: any[] = [];
   const requests: string[] = [];
@@ -17,9 +18,11 @@ function setup(html: string, pathname = '/mygather.php', responses: Record<strin
     fetch: async (url: string) => {
       const resolved = new URL(url, 'https://ani.gamer.com.tw').href;
       requests.push(resolved);
-      const body = responses[resolved];
-      assert.notEqual(body, undefined, `Unexpected URL: ${resolved}`);
-      return { ok: true, url: resolved, text: async () => body };
+      const response = responses[resolved];
+      assert.notEqual(response, undefined, `Unexpected URL: ${resolved}`);
+      const body = typeof response === 'string' ? response : response.html;
+      const responseURL = typeof response === 'string' ? resolved : response.url;
+      return { ok: true, url: responseURL, text: async () => body };
     },
   });
   return { context, document: window.document, messages, requests };
@@ -81,6 +84,31 @@ test('detail mismatch returns an explicit failure instead of another series meta
   vm.runInContext(fs.readFileSync(folder + 'detail.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(fixture.messages, [{ type: 'detail-error', id: '10' }]);
+});
+
+test('detail resolves redirected season links and special episodes without loading a player', async () => {
+  const fixture = setup('<main>bridge</main>', '/', {
+    'https://ani.gamer.com.tw/animeRef.php?sn=10': {
+      url: 'https://ani.gamer.com.tw/animeVideo.php?sn=20',
+      html: `<div class="anime_name"><h1>測試動畫 [13]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
+        <section class="season"><ul>
+          <li><a href="?sn=20" data-ani-video-sn="20">13</a></li>
+          <li><a href="?sn=21" data-ani-video-sn="21">14</a></li>
+          <li><a href="?sn=22" data-ani-video-sn="22">SP</a></li>
+          <li><a href="?sn=20" data-ani-video-sn="20">duplicate</a></li>
+          <li><a href="?sn=23" data-ani-video-sn="24">Wrong ID</a></li>
+          <li><a href="https://attacker.test/animeVideo.php?sn=25">15</a></li>
+          <li><a href="animeRef.php?sn=26">第一季</a></li>
+        </ul></section><a href="?sn=27">Related series</a><video autoplay></video>`
+    }
+  });
+  vm.runInContext(fs.readFileSync(folder + 'detail.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.messages[0].type, 'detail');
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.messages[0].detail.episodes)),
+                   [{ id: '20', label: '13' }, { id: '21', label: '14' }, { id: '22', label: 'SP' }]);
+  assert.equal(fixture.document.querySelector('video'), null);
+  assert.deepEqual(fixture.requests, ['https://ani.gamer.com.tw/animeRef.php?sn=10']);
 });
 
 test('native account adapter reads paginated cloud favorites and exact cloud viewing progress', async () => {

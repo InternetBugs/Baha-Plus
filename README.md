@@ -82,7 +82,7 @@ iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone。`BahaP
 
 追番按钮使用官方搜索卡片自己的订阅控件，复用其登录检查、CSRF 和成功响应。查看详情只读取并解析 HTML，不把详情页的视频播放器加载到后台；收藏操作也不需要打开视频页。不会仅凭本地点击把 UI 标为收藏成功。接口或 DOM 变化、登录失效、网络失败会保留错误提示，不制造本地记录。
 
-公开目录与详情也从官方页面的 DOM 提取为数据；实际列表与卡片由 SwiftUI 绘制。播放、登录、年龄验证、地区限制和会员权限继续使用官方服务。
+公开目录与详情也从官方页面的 DOM 提取为数据；实际列表与卡片由 SwiftUI 绘制。详情读取重定向后的静态 HTML，并按最终页面地址解析选集。官方播放页使用桌面版展示，账号与登录页面保留移动版；播放器、广告、年龄验证、地区限制和会员权限继续使用官方服务。
 
 ## 验证
 
@@ -121,7 +121,7 @@ npm run typecheck
 
 Windows 上可以检查适配器和资源，并使用 `tools/check-swift-syntax.py` 检查 Swift 语法。在 WSL 中也可以使用官方 Swift Linux 工具链，真实编译并运行 `BAHA_CORE_ONLY=1 swift test`。这些检查**不等于** SwiftUI 类型检查、Xcode 编译、Skip 转译或真机验收。
 
-本机检查结果：官方 Swift 6.2.4 编译并运行的 20 项 XCTest 通过，覆盖目录缓存、双语资源、Unicode 搜索、官方 URL、账号请求隔离和桥接消息校验。公开仓库保留的 9 项原生页面适配 / 详情 HTML 读取 / 资源测试通过。SwiftUI 和两端原生构建以 Actions 的实际结果为准，真实账号播放仍需目标设备验收。
+本机检查结果：官方 Swift 6.2.4 编译并运行的 21 项 XCTest 通过，覆盖目录缓存、双语资源、Unicode 搜索、官方 URL、播放页展示策略、账号请求隔离和桥接消息校验。公开仓库保留的 10 项原生页面适配 / 详情 HTML 读取 / 资源测试通过。SwiftUI 和两端原生构建以 Actions 的实际结果为准，真实账号播放仍需目标设备验收。
 
 项目提供 `tools/setup-swift-wsl.sh` 与 `tools/run-swift-wsl.sh` 供当前 Windows 开发环境复用临时 Swift 工具链；它们不会改系统 Swift 安装或 shell 配置。WSL 只能完成这里的纯 Swift 核心验证；完整 Skip App 的原生构建仍需要 [macOS 与 Xcode](https://skip.dev/docs/faq/#can-i-use-skip-on-windows-or-linux)。
 

@@ -64,6 +64,9 @@ final class AppStore: WebViewScriptMessageDelegate {
             scriptMessageHandlerNames: ["baha"],
             capturesConsoleOutput: false
         )
+        // The official mobile site offers an App download instead of its player.
+        // Keep account/login pages mobile and use the desktop player on video URLs.
+        configuration.desktopWebsiteForURL = { OfficialSite.usesDesktopPlayer($0) }
         configuration.scriptMessageDelegate = self
         #if DEBUG && !SKIP
         let preview = ProcessInfo.processInfo.environment
@@ -116,6 +119,9 @@ final class AppStore: WebViewScriptMessageDelegate {
         return result
     }
     var canRetryFavorite: Bool { intent == .favorite }
+    var browserIsPlayer: Bool {
+        intent == .play || browserState.url.map { OfficialSite.usesDesktopPlayer($0) } == true
+    }
     func isFavorite(_ anime: Anime) -> Bool { favorites.contains { $0.id == anime.id } }
 
     func refreshCatalog() {
@@ -203,6 +209,11 @@ final class AppStore: WebViewScriptMessageDelegate {
                 syncAccount()
             }
         }
+    }
+    func reloadBrowser() {
+        begin(intent)
+        browserError = false; notice = nil; busy = true
+        navigator.reload()
     }
     func syncAccount() {
         guard browserState.url?.host == "ani.gamer.com.tw" else {

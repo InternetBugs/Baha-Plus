@@ -111,6 +111,10 @@ public enum OfficialSite {
         guard url.scheme == "https", let host = url.host else { return false }
         return host == "gamer.com.tw" || host.hasSuffix(".gamer.com.tw")
     }
+    public static func usesDesktopPlayer(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host == "ani.gamer.com.tw" &&
+            ["/animeRef.php", "/animeVideo.php"].contains(url.path)
+    }
     public static func validImage(_ string: String) -> Bool {
         guard let url = URL(string: string), url.scheme == "https", let host = url.host else { return false }
         return host.hasSuffix(".bahamut.com.tw")

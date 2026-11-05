@@ -160,7 +160,15 @@ struct OfficialBrowser: View {
                         navigator: store.navigator,
                         state: .constant(store.browserState),
                         onNavigationFinished: { store.navigationFinished() },
-                        onNavigationFailed: { store.navigationFailed() },
+                        onNavigationFailed: {
+                            #if !SKIP
+                            store.navigationFailed()
+                            #endif
+                            // SkipWeb's Android callback also reports subresource
+                            // failures. Keep the official document visible; main
+                            // document failures retain WebView's own error page.
+                            // Data adapters have their own failure/deadline path.
+                        },
                         shouldOverrideUrlLoading: { url, isMainFrame in
                             isMainFrame && url.absoluteString != "about:blank" && !OfficialSite.allowedNavigation(url)
                         },
@@ -170,9 +178,8 @@ struct OfficialBrowser: View {
                         VStack(spacing: 20) {
                             Image(systemName: platformSymbol("wifi.exclamationmark")).font(.largeTitle)
                             Text(store.text("playerError"))
-                            Button(store.text("retry")) {
-                                store.browserError = false; store.navigator.reload()
-                            }.buttonStyle(.borderedProminent)
+                            Button(store.text("retry")) { store.reloadBrowser() }
+                                .buttonStyle(.borderedProminent)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(.background)
@@ -193,8 +200,14 @@ struct OfficialBrowser: View {
                         Button { store.retryFavorite() } label: { Image(systemName: platformSymbol("bookmark")) }
                             .accessibilityLabel(store.text("retryFavorite"))
                     }
-                    Button { store.syncAccount() } label: { Image(systemName: platformSymbol("arrow.triangle.2.circlepath")) }
-                        .disabled(store.busy).accessibilityLabel(store.text("syncAccount"))
+                    Button { store.reloadBrowser() } label: {
+                        Image(systemName: platformSymbol("arrow.clockwise"))
+                    }.accessibilityLabel(store.text("refresh"))
+                    if !store.browserIsPlayer {
+                        Button { store.syncAccount() } label: {
+                            Image(systemName: platformSymbol("arrow.triangle.2.circlepath"))
+                        }.disabled(store.busy).accessibilityLabel(store.text("syncAccount"))
+                    }
                 }
             }
         }

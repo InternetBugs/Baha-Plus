@@ -13,6 +13,16 @@ final class BahaCoreTests: XCTestCase {
         let url = OfficialSite.searchURL("魔法 少女")!
         XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.name, "keyword")
     }
+    func testDesktopPlayerPresentationOnlyAppliesToOfficialVideoPages() {
+        for path in ["/animeVideo.php?sn=20", "/animeRef.php?sn=10"] {
+            XCTAssertTrue(OfficialSite.usesDesktopPlayer(URL(string: OfficialSite.origin + path)!))
+        }
+        for address in ["https://ani.gamer.com.tw/", "https://ani.gamer.com.tw/search.php",
+                        "https://ani.gamer.com.tw/mygather.php", "https://user.gamer.com.tw/login.php",
+                        "https://attacker.test/animeVideo.php", "http://ani.gamer.com.tw/animeVideo.php"] {
+            XCTAssertFalse(OfficialSite.usesDesktopPlayer(URL(string: address)!))
+        }
+    }
     func testSnapshotAndLanguagesAreComplete() {
         XCTAssertTrue(AppResources.snapshot.items.allSatisfy(\.isValid))
         XCTAssertFalse(AppResources.snapshot.items.isEmpty)

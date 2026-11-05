@@ -10,18 +10,26 @@
   const response = await fetch(`/animeRef.php?sn=${expectedID}`, {
     credentials: 'same-origin', signal: controller.signal
   });
-  if (!response.ok || new URL(response.url).origin !== location.origin) throw Error('Detail unavailable');
+  const pageURL = new URL(response.url);
+  if (!response.ok || pageURL.origin !== location.origin ||
+      !['/animeRef.php', '/animeVideo.php'].includes(pageURL.pathname)) throw Error('Detail unavailable');
   const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
   const text = (node) => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const button = doc.querySelector('.anime_name button[onclick*="toggleGather"]');
   const id = button?.getAttribute('onclick')?.match(/toggleGather\(\d+,\s*(\d+)/)?.[1];
   if (id !== expectedID) throw Error('Unexpected series');
   const episodes = new Map();
-  doc.querySelectorAll('a[href*="animeVideo.php?sn="]').forEach(a => {
-    const url = new URL(a.getAttribute('href'), location.origin);
+  // animeRef redirects to a video document whose season links are "?sn=…".
+  // Resolve against the response URL without ever loading its player/scripts.
+  doc.querySelectorAll('.season a[href], a[href*="animeVideo.php?sn="]').forEach(a => {
+    const url = new URL(a.getAttribute('href'), pageURL);
     const id = url.searchParams.get('sn'), label = text(a);
-    if (url.origin === location.origin && /^\d{1,10}$/.test(id || '') &&
-        /^(?:第\s*)?\d+(?:\.\d+)?(?:\s*集)?$/.test(label)) episodes.set(id, { id, label });
+    const declaredID = a.getAttribute('data-ani-video-sn');
+    const episodeLabel = a.closest('.season') ? label.length > 0 && label.length <= 100 :
+      /^(?:第\s*)?\d+(?:\.\d+)?(?:\s*集)?$/.test(label);
+    if (url.origin === location.origin && url.pathname === '/animeVideo.php' &&
+        /^\d{1,10}$/.test(id || '') && (!declaredID || declaredID === id) &&
+        episodeLabel && !episodes.has(id)) episodes.set(id, { id, label });
   });
   const img = doc.querySelector('.data-img');
   const detail = {
