@@ -110,8 +110,6 @@ struct AppRoot: View {
     private var home: some View {
         NavigationStack {
             HomeScreen(store: store)
-                .navigationTitle(store.text("explore"))
-                .navigationBarTitleDisplayMode(.large)
                 .appStoreHeader(store.text("explore"), accountLabel: store.text("me")) {
                     store.accountPresented = true
                 }
@@ -120,8 +118,6 @@ struct AppRoot: View {
     private var schedule: some View {
         NavigationStack {
             ScheduleScreen(store: store)
-                .navigationTitle(store.text("schedule"))
-                .navigationBarTitleDisplayMode(.large)
                 .appStoreHeader(store.text("schedule"), accountLabel: store.text("me")) {
                     store.accountPresented = true
                 }
@@ -130,8 +126,6 @@ struct AppRoot: View {
     private var library: some View {
         NavigationStack {
             LibraryScreen(store: store)
-                .navigationTitle(store.text("library"))
-                .navigationBarTitleDisplayMode(.large)
                 .appStoreHeader(store.text("library"), accountLabel: store.text("me")) {
                     store.accountPresented = true
                 }
@@ -140,8 +134,6 @@ struct AppRoot: View {
     private var search: some View {
         NavigationStack {
             SearchScreen(store: store)
-                .navigationTitle(store.text("search"))
-                .navigationBarTitleDisplayMode(.large)
                 .appStoreHeader(store.text("search"), accountLabel: store.text("me")) {
                     store.accountPresented = true
                 }

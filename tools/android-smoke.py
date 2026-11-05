@@ -118,12 +118,17 @@ def main():
     smoke = Smoke(options.output)
     try:
         adb("wait-for-device", timeout=120)
+        # A fresh Google APIs image starts Play services and the launcher after
+        # sys.boot_completed. Let those first-boot tasks settle before timing
+        # the app launch, rather than testing against a saturated emulator.
+        time.sleep(25)
         installation = adb("install", "-r", str(options.apk), timeout=120, check=False)
         (options.output / "install.txt").write_bytes(installation.stdout + installation.stderr)
         if installation.returncode:
             raise AssertionError(f"APK installation failed: {text(installation)} "
                                  f"{installation.stderr.decode('utf-8', errors='replace')}")
         smoke.measure_display()
+        smoke.screenshot("emulator-before-launch")
         adb("logcat", "-c")
         activity = text(adb("shell", "cmd", "package", "resolve-activity", "--brief",
                             "-a", "android.intent.action.MAIN",
@@ -169,6 +174,11 @@ def main():
                 adb("logcat", "-d", "-v", "threadtime", check=False).stdout)
         except (OSError, subprocess.SubprocessError) as error:
             print(f"Could not capture Android logs: {error}", file=sys.stderr)
+        try:
+            (options.output / "last-anr.txt").write_bytes(
+                adb("shell", "dumpsys", "activity", "lastanr", check=False).stdout)
+        except (OSError, subprocess.SubprocessError) as error:
+            print(f"Could not capture ANR diagnostics: {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":

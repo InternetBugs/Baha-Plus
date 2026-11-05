@@ -90,7 +90,9 @@ extension View {
                                              onAccount: @escaping () -> Void) -> some View {
         #if !SKIP
         if #available(iOS 26.0, *) {
-            self.toolbar {
+            self.navigationTitle(title)
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
                 ToolbarItem(placement: .largeTitle) {
                     HStack(alignment: .center) {
                         Text(title).font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
@@ -100,7 +102,9 @@ extension View {
                 }
             }
         } else {
-            self.toolbar {
+            self.navigationTitle(title)
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     AccountAvatarButton(label: accountLabel, action: onAccount)
                 }
