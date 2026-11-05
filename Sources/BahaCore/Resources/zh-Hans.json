@@ -107,5 +107,9 @@
   "accountFavorites": "巴哈姆特账号",
   "accountSyncError": "同步失败，请确认已登录官方账号后重试。",
   "manageAccount": "管理账号收藏",
-  "accountSession": "登录状态由官方网页安全保存，App 不读取密码。"
+  "accountSession": "登录状态由官方网页安全保存，App 不读取密码。",
+  "recommended": "为你推荐",
+  "browse": "浏览",
+  "allAnime": "所有动画",
+  "watch": "观看"
 }

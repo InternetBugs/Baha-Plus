@@ -10,11 +10,13 @@ struct AppRoot: View {
             tabs
                 .allowsHitTesting(!store.browserVisible)
                 .accessibilityHidden(store.browserVisible)
-            OfficialBrowser(store: store)
-                .opacity(store.browserVisible ? 1 : 0)
-                .allowsHitTesting(store.browserVisible)
-                .accessibilityHidden(!store.browserVisible)
-                .zIndex(store.browserVisible ? 1 : -1)
+            if !store.isPreviewMode {
+                OfficialBrowser(store: store)
+                    .opacity(store.browserVisible ? 1 : 0)
+                    .allowsHitTesting(store.browserVisible)
+                    .accessibilityHidden(!store.browserVisible)
+                    .zIndex(store.browserVisible ? 1 : -1)
+            }
         }
         .sheet(item: $store.selectedAnime) { anime in
             NavigationStack {
@@ -28,45 +30,88 @@ struct AppRoot: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
-    }
-    private var tabs: some View {
-        TabView(selection: $store.tab) {
-            NavigationStack {
-                HomeScreen(store: store)
-                    .navigationTitle(store.text("explore"))
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                store.libraryFilter = "all"; store.tab = 2
-                            } label: {
-                                Image(systemName: "magnifyingglass")
-                            }.accessibilityLabel(store.text("search"))
-                        }
-                    }
-            }
-            .tabItem { Label(store.text("explore"), systemImage: "play.rectangle.on.rectangle") }.tag(0)
-
-            NavigationStack {
-                ScheduleScreen(store: store)
-                    .navigationTitle(store.text("schedule"))
-            }
-            .tabItem { Label(store.text("schedule"), systemImage: "calendar") }.tag(1)
-
-            NavigationStack {
-                LibraryScreen(store: store)
-                    .navigationTitle(store.text("library"))
-            }
-            .tabItem { Label(store.text("library"), systemImage: "rectangle.stack") }.tag(2)
-
+        .sheet(isPresented: $store.accountPresented) {
             NavigationStack {
                 AccountScreen(store: store)
-                    .navigationTitle(store.text("me"))
+                    .navigationTitle(store.text("officialAccount"))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { AccountCloseButton(store: store) }
+                    }
             }
-            .tabItem { Label(store.text("me"), systemImage: "person.crop.circle") }.tag(3)
+            .accountSheetAppearance()
         }
-        .nativeTabBehavior()
-        // Deliberately no toolbar/tab-bar background overrides. UIKit and
-        // SwiftUI provide iOS 26 glass, adaptive contrast and scroll-edge effects.
+    }
+    @ViewBuilder private var tabs: some View {
+        #if !SKIP
+        if #available(iOS 26.0, *) {
+            modernTabs
+        } else {
+            classicTabs
+        }
+        #else
+        classicTabs
+        #endif
+    }
+    #if !SKIP
+    @available(iOS 26.0, *)
+    private var modernTabs: some View {
+        TabView(selection: $store.tab) {
+            Tab(store.text("explore"), systemImage: "rectangle.stack.fill", value: 0) { home }
+            Tab(store.text("schedule"), systemImage: "calendar", value: 1) { schedule }
+            Tab(store.text("library"), systemImage: "square.stack.fill", value: 2) { library }
+            Tab(value: 3, role: .search) { search }
+        }
+        .tabBarMinimizeBehavior(.onScrollDown)
+    }
+    #endif
+    private var classicTabs: some View {
+        TabView(selection: $store.tab) {
+            home.tabItem { Label(store.text("explore"), systemImage: "rectangle.stack.fill") }.tag(0)
+            schedule.tabItem { Label(store.text("schedule"), systemImage: "calendar") }.tag(1)
+            library.tabItem { Label(store.text("library"), systemImage: "square.stack.fill") }.tag(2)
+            search.tabItem { Label(store.text("search"), systemImage: "magnifyingglass") }.tag(3)
+        }
+    }
+    private var home: some View {
+        NavigationStack {
+            HomeScreen(store: store)
+                .navigationTitle(store.text("explore"))
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+                }
+        }
+    }
+    private var schedule: some View {
+        NavigationStack {
+            ScheduleScreen(store: store)
+                .navigationTitle(store.text("schedule"))
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+                }
+        }
+    }
+    private var library: some View {
+        NavigationStack {
+            LibraryScreen(store: store)
+                .navigationTitle(store.text("library"))
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+                }
+        }
+    }
+    private var search: some View {
+        NavigationStack {
+            SearchScreen(store: store)
+                .navigationTitle(store.text("search"))
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { AccountAvatarButton(store: store) }
+                }
+        }
     }
 }
 

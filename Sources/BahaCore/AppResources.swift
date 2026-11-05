@@ -25,8 +25,8 @@ public enum SearchFolding {
         for character in string.lowercased() {
             let part = String(character)
             let folded = mapping[part] ?? part
-            if folded.rangeOfCharacter(from: .letters) != nil ||
-                folded.rangeOfCharacter(from: .decimalDigits) != nil {
+            if folded.rangeOfCharacter(from: CharacterSet.letters) != nil ||
+                folded.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil {
                 result += folded
             }
         }

@@ -3,8 +3,71 @@ import SwiftUI
 import BahaCore
 
 enum Brand {
-    static let accent = Color(red: 0.84, green: 0.34, blue: 0.22)
+    static let accent = Color.blue
     static let green = Color(red: 0.29, green: 0.47, blue: 0.38)
+}
+
+struct AccountAvatarButton: View {
+    @Bindable var store: AppStore
+    var body: some View {
+        Button { store.accountPresented = true } label: {
+            Image(systemName: "person.crop.circle.fill")
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(Color.secondary)
+                .frame(width: 42, height: 42)
+                .background(Color.secondary.opacity(0.06), in: Circle())
+                .overlay(Circle().strokeBorder(Color.secondary.opacity(0.18), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(store.text("me"))
+        .accessibilityIdentifier("account-button")
+    }
+}
+
+struct AccountCloseButton: View {
+    @Bindable var store: AppStore
+    var body: some View {
+        #if !SKIP
+        if #available(iOS 26.0, *) {
+            button.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            button.background(.thinMaterial, in: Circle())
+        }
+        #else
+        button.background(.thinMaterial, in: Circle())
+        #endif
+    }
+    private var button: some View {
+        Button { store.accountPresented = false } label: {
+            Image(systemName: "xmark").font(.system(size: 20, weight: .regular))
+                .foregroundStyle(Color.primary).frame(width: 44, height: 44)
+        }.buttonStyle(.plain).accessibilityLabel(store.text("close"))
+    }
+}
+
+struct StoreActionPill: View {
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(.subheadline.weight(.semibold))
+                .foregroundStyle(Brand.accent)
+                .padding(.horizontal, 20).frame(minHeight: 36)
+                .background(Color.secondary.opacity(0.10), in: Capsule())
+        }.buttonStyle(.plain)
+    }
+}
+
+extension View {
+    @ViewBuilder func accountSheetAppearance() -> some View {
+        #if !SKIP
+        self.presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(36)
+        #else
+        self
+        #endif
+    }
 }
 
 /// Apple materials are applied only to the navigation/control layer.

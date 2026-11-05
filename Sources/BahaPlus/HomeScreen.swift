@@ -4,16 +4,14 @@ import BahaCore
 
 struct HomeScreen: View {
     @Bindable var store: AppStore
-    @State private var featured = 0
-    private var heroes: [Anime] { Array(store.seasonal.prefix(3)) }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                if !heroes.isEmpty {
-                    hero(heroes[min(featured, heroes.count - 1)])
+                if let anime = store.seasonal.first {
+                    hero(anime)
                 }
                 if !store.history.isEmpty {
-                    sectionHeading(store.text("history")) { store.tab = 3 }
+                    sectionHeading(store.text("history")) { store.accountPresented = true }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 14) {
                             ForEach(Array(store.history.prefix(8))) { entry in
@@ -21,17 +19,9 @@ struct HomeScreen: View {
                             }
                         }
                     }
-                } else if !store.accountSynced {
-                    Button { store.connectAccount() } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "person.crop.circle.badge.checkmark").font(.title2)
-                            Text(store.text("connectAccount")).font(.subheadline.weight(.medium))
-                            Spacer()
-                            Image(systemName: "chevron.forward").font(.caption.weight(.semibold))
-                        }
-                        .padding(18).frame(maxWidth: .infinity)
-                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 22))
-                    }.buttonStyle(.plain)
+                }
+                if let anime = store.popular.first {
+                    compactFeature(anime)
                 }
                 sectionHeading(store.text("seasonal")) {
                     store.libraryFilter = "season"; store.tab = 2
@@ -72,7 +62,7 @@ struct HomeScreen: View {
         HStack {
             Text(title).font(.title2.bold())
             Spacer()
-            Button(action: action) { Image(systemName: "arrow.right").font(.subheadline) }
+            Button(action: action) { Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)) }
                 .accessibilityLabel(store.text("viewAll"))
         }
     }
@@ -80,37 +70,66 @@ struct HomeScreen: View {
         ZStack(alignment: .bottomLeading) {
             GeometryReader { geometry in
                 RemoteArtwork(url: anime.coverURL)
-                    .frame(width: geometry.size.width, height: 420)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
             }
             // Clear glass sits on rich media. This dimming layer preserves
             // contrast, including with bright artwork, per Apple's Materials HIG.
-            Color.black.opacity(0.35)
+            Color.black.opacity(0.20)
             LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 16) {
-                Spacer()
+            VStack(alignment: .leading, spacing: 12) {
+                Spacer(minLength: 240)
                 Text(store.text("featured"))
-                    .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
+                    .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.75))
                 Button { store.openDetail(anime) } label: {
-                    Text(anime.title.replacingOccurrences(of: "，", with: "，\n"))
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text(anime.title)
+                        .font(.system(size: 28, weight: .bold))
                         .multilineTextAlignment(.leading).foregroundStyle(.white)
                 }.buttonStyle(.plain)
-                Text([anime.episodeLabel, anime.updateTime].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.white.opacity(0.8))
-                PlaybackActions(store: store, anime: anime)
-                HStack(spacing: 8) {
-                    ForEach(Array(heroes.enumerated()), id: \.offset) { index, value in
-                        Button { featured = index } label: {
-                            Capsule().fill(Color.white.opacity(index == featured ? 1 : 0.35))
-                                .frame(width: index == featured ? 22 : 5, height: 5)
-                                .padding(.vertical, 12)
-                        }.buttonStyle(.plain).accessibilityLabel(value.title)
+                HStack(spacing: 12) {
+                    RemoteArtwork(url: anime.posterURL)
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(anime.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text([anime.episodeLabel, anime.updateTime].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(.white.opacity(0.7))
                     }
+                    Spacer(minLength: 0)
+                    Button { store.play(anime) } label: {
+                        Text(store.text("watch")).font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 20).frame(minHeight: 36)
+                            .background(Color.white.opacity(0.20), in: Capsule())
+                    }.buttonStyle(.plain)
                 }
+                .foregroundStyle(.white)
+                .padding(.top, 8)
             }.padding(24)
         }
-        .frame(height: 420)
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .frame(minHeight: 440)
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .shadow(color: Color.black.opacity(0.10), radius: 14, x: 0, y: 5)
+    }
+    private func compactFeature(_ anime: Anime) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            GeometryReader { geometry in
+                RemoteArtwork(url: anime.coverURL)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+            LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
+            HStack(spacing: 14) {
+                Button { store.openDetail(anime) } label: {
+                    Text(anime.title).font(.headline).foregroundStyle(.white)
+                        .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain)
+                Button { store.play(anime) } label: {
+                    Text(store.text("watch")).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 20).frame(minHeight: 36)
+                        .background(Color.white.opacity(0.25), in: Capsule())
+                }.buttonStyle(.plain)
+            }.padding(20)
+        }
+        .frame(height: 165)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
 

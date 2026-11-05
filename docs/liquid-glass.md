@@ -25,6 +25,12 @@
 | iOS 17–25 | 标准 `.ultraThinMaterial` 降级 |
 | Android | SkipUI 提供原生 Compose 控件与材质；Apple 专有 API 由 `#if !SKIP` 隔离 |
 
+## App Store 版式参考
+
+界面采用 App Store 的层级关系：系统大标题与白底、封面主卡、圆角图标与胶囊操作、独立的搜索标签，以及通过右上角账户入口打开的分组 Sheet。账户头像在未获得真实账号资料时显示系统占位图标。
+
+首页、搜索和账户的预览由 GitHub Actions 启动真实 iOS 26 模拟器并截图。Debug 预览模式使用内置公开目录、占位账号状态和显式指定的界面语言；它用于验证视觉，不代表完成真实账号和播放验收。
+
 Apple 的指南说明的是材质的用途、层级、可读性和系统行为，没有为第三方界面给出一套固定的 CSS 模糊、透明度或折射参数。本项目 iOS 26 的效果由系统绘制。
 
 Windows 无法渲染 SwiftUI 或执行 Xcode 构建。原生实际观感、Dynamic Type、VoiceOver、系统减少透明度与滚动行为需要在 Mac / iPhone 上验收。

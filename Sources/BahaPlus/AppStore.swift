@@ -14,6 +14,8 @@ final class AppStore: WebViewScriptMessageDelegate {
         didSet { UserDefaults.standard.set(appearance, forKey: "baha.device.appearance") }
     }
     var tab = 0
+    var accountPresented = false
+    var isPreviewMode = false
     var catalog = AppResources.snapshot
     var catalogSource = "snapshot"
     var favorites: [Anime] = []
@@ -59,6 +61,16 @@ final class AppStore: WebViewScriptMessageDelegate {
             capturesConsoleOutput: false
         )
         configuration.scriptMessageDelegate = self
+        #if DEBUG && !SKIP
+        let preview = ProcessInfo.processInfo.environment
+        if preview["BAHA_UI_PREVIEW"] == "1" {
+            isPreviewMode = true
+            language = preview["BAHA_PREVIEW_LANGUAGE"] ?? "zh-Hans"
+            appearance = preview["BAHA_PREVIEW_APPEARANCE"] ?? "light"
+            tab = preview["BAHA_PREVIEW_SCREEN"] == "search" ? 3 : 0
+            accountPresented = preview["BAHA_PREVIEW_SCREEN"] == "account"
+        }
+        #endif
     }
 
     func text(_ key: String) -> String {
@@ -69,6 +81,20 @@ final class AppStore: WebViewScriptMessageDelegate {
     }
     var seasonal: [Anime] { catalog.items.filter { $0.sections.contains("season") } }
     var popular: [Anime] { catalog.items.filter { $0.sections.contains("hot") } }
+    var libraryItems: [Anime] {
+        if libraryFilter == "favorites" { return favorites }
+        if libraryFilter == "all" { return catalog.items }
+        return catalog.items.filter { $0.sections.contains(libraryFilter) }
+    }
+    var searchMatches: [Anime] {
+        var result = catalog.items.filter { SearchFolding.matches($0.title, query: query) }
+        if !query.isEmpty && searchedQuery == query {
+            for anime in searchResults where !result.contains(where: { $0.id == anime.id }) {
+                result.append(anime)
+            }
+        }
+        return result
+    }
     var filteredLibrary: [Anime] {
         let source = libraryFilter == "favorites" ? favorites : catalog.items
         var result = source.filter {
@@ -103,7 +129,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         }
     }
     func search() {
-        guard libraryFilter != "favorites", !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let url = OfficialSite.searchURL(query) else { return }
         searchedQuery = query
         load(url, purpose: .search, visible: false)
@@ -114,6 +140,7 @@ final class AppStore: WebViewScriptMessageDelegate {
     }
     func connectAccount() {
         selectedAnime = nil
+        accountPresented = false
         // A login or account switch makes the old projection unverified.
         // Never display a previous account's collection after leaving the portal.
         favorites = []; history = []; accountSynced = false
@@ -121,6 +148,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         load(URL(string: "\(OfficialSite.origin)/mygather.php")!, purpose: .account, visible: true)
     }
     func toggleFavorite(_ anime: Anime) {
+        accountPresented = false
         pendingAnime = anime; desiredFavorite = !isFavorite(anime); selectedAnime = nil
         browserTitle = text("favorites")
         guard OfficialSite.validID(anime.id), let url = OfficialSite.searchURL(anime.title) else { return }
@@ -129,6 +157,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         load(url, purpose: .favorite, visible: true)
     }
     func play(_ anime: Anime, episode: Episode? = nil) {
+        accountPresented = false
         selectedAnime = nil; pendingAnime = anime
         let url = episode.flatMap { OfficialSite.videoURL($0.id) } ??
             anime.latestVideoId.flatMap { OfficialSite.videoURL($0) } ?? OfficialSite.seriesURL(anime.id)
@@ -138,6 +167,7 @@ final class AppStore: WebViewScriptMessageDelegate {
         load(url, purpose: .play, visible: true)
     }
     func continueWatching(_ entry: WatchEntry) {
+        accountPresented = false
         selectedAnime = nil; pendingAnime = entry.anime
         guard let url = OfficialSite.videoURL(entry.videoId) else { return }
         browserTitle = entry.anime.title; accountNeedsRefresh = true
