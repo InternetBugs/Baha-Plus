@@ -162,7 +162,17 @@ def main():
         smoke.tap("关闭")
         smoke.wait("simplified Chinese search", lambda root: contains(root, "为你推荐"))
         smoke.screenshot("search-zh-Hans")
-        print("Android guest UI smoke passed: install, launch, search, account, language switch.", flush=True)
+        smoke.tap("search-query")
+        adb("shell", "input", "text", "BahaNoMatch419870")
+        smoke.wait("typed search and filtered results", lambda root:
+                   contains(root, "BahaNoMatch419870") and contains(root, "还没找到这部作品"))
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        smoke.observe()
+        smoke.screenshot("search-query")
+        smoke.tap("清除搜索")
+        smoke.wait("cleared search and restored recommendations", lambda root: contains(root, "为你推荐"))
+        smoke.screenshot("search-cleared")
+        print("Android guest UI smoke passed: install, launch, typed search, clear, account, language switch.", flush=True)
     finally:
         # Preserve the original failure if the emulator itself disappeared.
         try:

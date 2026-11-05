@@ -12,9 +12,11 @@ struct SearchScreen: View {
                     .foregroundStyle(Color.secondary)
                 TextField(store.text("searchPlaceholder"), text: $store.query)
                     .textFieldStyle(.plain)
+                    .textFieldContentPadding(EdgeInsets(top: 0.0, leading: 0.0, bottom: 0.0, trailing: 0.0))
                     .textInputAutocapitalization(.never)
                     .submitLabel(.search)
                     .onSubmit { store.search() }
+                    .accessibilityIdentifier("search-query")
                 if !store.query.isEmpty {
                     Button { store.query = "" } label: {
                         Image(systemName: platformSymbol("xmark"))
