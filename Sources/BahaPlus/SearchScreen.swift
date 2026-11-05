@@ -56,7 +56,7 @@ struct SearchScreen: View {
                             Divider().padding(.leading, 76)
                         }
                     }
-                    Button(store.text("officialSearch"), systemImage: "arrow.up.right") {
+                    Button(store.text("officialSearch"), systemImage: platformSymbol("arrow.up.right")) {
                         store.openOfficialSearch()
                     }.buttonStyle(.bordered).padding(.vertical, 24)
                     CatalogFooter(store: store)
@@ -67,7 +67,7 @@ struct SearchScreen: View {
     private func sectionTitle(_ title: String) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.title3.weight(.semibold))
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+            Image(systemName: platformSymbol("chevron.right")).font(.caption.weight(.semibold))
                 .foregroundStyle(Color.secondary)
         }
     }
@@ -99,7 +99,7 @@ struct SearchScreen: View {
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 } else {
-                    Image(systemName: "bookmark.fill").font(.system(size: 42))
+                    Image(systemName: platformSymbol("bookmark.fill")).font(.system(size: 42))
                         .foregroundStyle(Color.white.opacity(0.4))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(18)

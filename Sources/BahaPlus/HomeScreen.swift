@@ -62,7 +62,7 @@ struct HomeScreen: View {
         HStack {
             Text(title).font(.title2.bold())
             Spacer()
-            Button(action: action) { Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)) }
+            Button(action: action) { Image(systemName: platformSymbol("chevron.right")).font(.subheadline.weight(.semibold)) }
                 .accessibilityLabel(store.text("viewAll"))
         }
     }
@@ -155,16 +155,16 @@ struct AnimeTile: View {
                 Text(anime.episodeLabel ?? anime.year ?? "").lineLimit(1)
                 Spacer(minLength: 0)
                 if store.isFavorite(anime) {
-                    Image(systemName: "bookmark.fill").foregroundStyle(Brand.accent)
+                    Image(systemName: platformSymbol("bookmark.fill")).foregroundStyle(Brand.accent)
                 }
             }.font(.caption2).foregroundStyle(.secondary)
         }
         .contextMenu {
             Button { store.toggleFavorite(anime) } label: {
                 Label(store.text(store.isFavorite(anime) ? "unsave" : "save"),
-                      systemImage: store.isFavorite(anime) ? "bookmark.slash" : "bookmark")
+                      systemImage: platformSymbol(store.isFavorite(anime) ? "bookmark.slash" : "bookmark"))
             }
-            Button { store.play(anime) } label: { Label(store.text("play"), systemImage: "play") }
+            Button { store.play(anime) } label: { Label(store.text("play"), systemImage: platformSymbol("play")) }
         }
     }
 }
@@ -184,7 +184,7 @@ struct ContinueCard: View {
                     if let label = entry.progressLabel { Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(Brand.accent)
+                Image(systemName: platformSymbol("play.circle.fill")).font(.title2).foregroundStyle(Brand.accent)
             }
             .padding(14).frame(width: 315)
             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 22))

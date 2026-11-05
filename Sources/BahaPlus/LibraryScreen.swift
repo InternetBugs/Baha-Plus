@@ -15,7 +15,7 @@ struct LibraryScreen: View {
                 }.pickerStyle(.segmented).padding(.horizontal, 20)
                 if store.libraryItems.isEmpty {
                     VStack(spacing: 20) {
-                        Image(systemName: store.libraryFilter == "favorites" ? "bookmark" : "square.stack")
+                        Image(systemName: platformSymbol(store.libraryFilter == "favorites" ? "bookmark" : "square.stack"))
                             .font(.system(size: 42, weight: .light)).foregroundStyle(.secondary)
                         Text(store.text(store.libraryFilter == "favorites" ? "noFavorites" : "noResults"))
                             .font(.headline)

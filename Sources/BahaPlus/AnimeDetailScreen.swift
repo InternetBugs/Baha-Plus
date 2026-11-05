@@ -68,7 +68,7 @@ struct AnimeDetailScreen: View {
                         }
                     }
                 }
-                Button(store.text("officialDetails"), systemImage: "arrow.up.right") { store.play(anime) }
+                Button(store.text("officialDetails"), systemImage: platformSymbol("arrow.up.right")) { store.play(anime) }
                     .buttonStyle(.bordered)
             }.padding(20)
         }

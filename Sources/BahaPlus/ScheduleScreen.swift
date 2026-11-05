@@ -29,7 +29,7 @@ struct ScheduleScreen: View {
             List {
                 if items.isEmpty {
                     VStack(spacing: 16) {
-                        Image(systemName: "cup.and.saucer").font(.largeTitle).foregroundStyle(.secondary)
+                        Image(systemName: platformSymbol("cup.and.saucer")).font(.largeTitle).foregroundStyle(.secondary)
                         Text(store.text("noUpdates")).font(.headline)
                     }.frame(maxWidth: .infinity).padding(.vertical, 50).listRowSeparator(.hidden)
                 } else {

@@ -9,7 +9,7 @@ struct AccountScreen: View {
             Section {
                 Button { store.connectAccount() } label: {
                     HStack(spacing: 16) {
-                        Image(systemName: "person.crop.circle.fill")
+                        Image(systemName: platformSymbol("person.crop.circle.fill"))
                             .font(.system(size: 48, weight: .light)).foregroundStyle(Color.secondary)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(store.text("localProfile")).font(.headline).foregroundStyle(Color.primary)
@@ -17,7 +17,7 @@ struct AccountScreen: View {
                                 .font(.subheadline).foregroundStyle(Color.secondary)
                         }
                         Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                        Image(systemName: platformSymbol("chevron.right")).font(.caption.weight(.semibold))
                             .foregroundStyle(Color.secondary.opacity(0.6))
                     }.padding(.vertical, 14)
                 }.buttonStyle(.plain)
@@ -36,7 +36,7 @@ struct AccountScreen: View {
                 NavigationLink {
                     AccountHistoryScreen(store: store)
                 } label: {
-                    Label(store.text("history"), systemImage: "clock")
+                    Label(store.text("history"), systemImage: platformSymbol("clock"))
                         .foregroundStyle(Color.primary).padding(.vertical, 7)
                 }
                 Button { store.connectAccount() } label: {
@@ -78,18 +78,18 @@ struct AccountScreen: View {
     }
     private func menuRow(_ title: String, symbol: String, value: String? = nil) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).foregroundStyle(Brand.accent).frame(width: 24)
+            Image(systemName: platformSymbol(symbol)).foregroundStyle(Brand.accent).frame(width: 24)
             Text(title).foregroundStyle(Color.primary)
             Spacer()
             if let value { Text(value).foregroundStyle(Color.secondary) }
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+            Image(systemName: platformSymbol("chevron.right")).font(.caption.weight(.semibold))
                 .foregroundStyle(Color.secondary.opacity(0.6))
         }.padding(.vertical, 7)
     }
     private func quickAction(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 9) {
-                Image(systemName: symbol).font(.title3)
+                Image(systemName: platformSymbol(symbol)).font(.title3)
                 Text(title).font(.caption).lineLimit(1)
             }
             .foregroundStyle(Brand.accent)
@@ -104,7 +104,7 @@ struct AccountHistoryScreen: View {
         List {
             if store.history.isEmpty {
                 Section {
-                    Button(store.text("syncAccount"), systemImage: "icloud.and.arrow.down") {
+                    Button(store.text("syncAccount"), systemImage: platformSymbol("icloud.and.arrow.down")) {
                         store.connectAccount()
                     }
                 } footer: { Text(store.text("historyHint")) }
@@ -123,7 +123,7 @@ struct AccountHistoryScreen: View {
                                 }
                             }
                             Spacer(minLength: 0)
-                            Image(systemName: "play.circle").font(.title2).foregroundStyle(Brand.accent)
+                            Image(systemName: platformSymbol("play.circle")).font(.title2).foregroundStyle(Brand.accent)
                         }.padding(.vertical, 5)
                     }.buttonStyle(.plain)
                 }

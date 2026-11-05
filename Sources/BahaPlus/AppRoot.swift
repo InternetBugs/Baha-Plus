@@ -12,6 +12,15 @@ struct AppRoot: View {
                 .accessibilityHidden(store.browserVisible)
             if !store.isPreviewMode {
                 OfficialBrowser(store: store)
+                    // A transparent, full-screen AndroidView still occludes
+                    // Compose accessibility nodes underneath it. Keep this
+                    // same persistent session mounted in a tiny clipped host
+                    // while native pages are visible.
+                    #if SKIP
+                    .frame(width: store.browserVisible ? nil : 1.0,
+                           height: store.browserVisible ? nil : 1.0)
+                    .clipped()
+                    #endif
                     .opacity(store.browserVisible ? 1.0 : 0.0)
                     .allowsHitTesting(store.browserVisible)
                     .accessibilityHidden(!store.browserVisible)
@@ -78,20 +87,20 @@ struct AppRoot: View {
     @available(iOS 26.0, *)
     private var modernTabs: some View {
         TabView(selection: $store.tab) {
-            Tab(store.text("explore"), systemImage: "rectangle.stack.fill", value: 0) { home }
-            Tab(store.text("schedule"), systemImage: "calendar", value: 1) { schedule }
-            Tab(store.text("library"), systemImage: "square.stack.fill", value: 2) { library }
-            Tab(store.text("search"), systemImage: "magnifyingglass", value: 3) { search }
+            Tab(store.text("explore"), systemImage: platformSymbol("rectangle.stack.fill"), value: 0) { home }
+            Tab(store.text("schedule"), systemImage: platformSymbol("calendar"), value: 1) { schedule }
+            Tab(store.text("library"), systemImage: platformSymbol("square.stack.fill"), value: 2) { library }
+            Tab(store.text("search"), systemImage: platformSymbol("magnifyingglass"), value: 3) { search }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
     }
     #endif
     private var classicTabs: some View {
         TabView(selection: $store.tab) {
-            home.tabItem { Label(store.text("explore"), systemImage: "rectangle.stack.fill") }.tag(0)
-            schedule.tabItem { Label(store.text("schedule"), systemImage: "calendar") }.tag(1)
-            library.tabItem { Label(store.text("library"), systemImage: "square.stack.fill") }.tag(2)
-            search.tabItem { Label(store.text("search"), systemImage: "magnifyingglass") }.tag(3)
+            home.tabItem { Label(store.text("explore"), systemImage: platformSymbol("rectangle.stack.fill")) }.tag(0)
+            schedule.tabItem { Label(store.text("schedule"), systemImage: platformSymbol("calendar")) }.tag(1)
+            library.tabItem { Label(store.text("library"), systemImage: platformSymbol("square.stack.fill")) }.tag(2)
+            search.tabItem { Label(store.text("search"), systemImage: platformSymbol("magnifyingglass")) }.tag(3)
         }
     }
     private var home: some View {
@@ -163,7 +172,7 @@ struct OfficialBrowser: View {
                     )
                     if store.browserError {
                         VStack(spacing: 20) {
-                            Image(systemName: "wifi.exclamationmark").font(.largeTitle)
+                            Image(systemName: platformSymbol("wifi.exclamationmark")).font(.largeTitle)
                             Text(store.text("playerError"))
                             Button(store.text("retry")) {
                                 store.browserError = false; store.navigator.reload()
@@ -178,17 +187,17 @@ struct OfficialBrowser: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button { store.closeBrowser() } label: { Image(systemName: "xmark") }
+                    Button { store.closeBrowser() } label: { Image(systemName: platformSymbol("xmark")) }
                         .accessibilityLabel(store.text("close"))
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { store.navigator.goBack() } label: { Image(systemName: "chevron.backward") }
+                    Button { store.navigator.goBack() } label: { Image(systemName: platformSymbol("chevron.backward")) }
                         .disabled(!store.browserState.canGoBack).accessibilityLabel(store.text("back"))
                     if store.canRetryFavorite {
-                        Button { store.retryFavorite() } label: { Image(systemName: "bookmark") }
+                        Button { store.retryFavorite() } label: { Image(systemName: platformSymbol("bookmark")) }
                             .accessibilityLabel(store.text("retryFavorite"))
                     }
-                    Button { store.syncAccount() } label: { Image(systemName: "arrow.triangle.2.circlepath") }
+                    Button { store.syncAccount() } label: { Image(systemName: platformSymbol("arrow.triangle.2.circlepath")) }
                         .disabled(store.busy).accessibilityLabel(store.text("syncAccount"))
                 }
             }

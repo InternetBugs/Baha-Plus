@@ -7,12 +7,34 @@ enum Brand {
     static let green = Color(red: 0.29, green: 0.47, blue: 0.38)
 }
 
+/// Keep native SF Symbols on Apple platforms and use supported equivalents in
+/// SkipUI's Android icon set instead of rendering missing-symbol warnings.
+func platformSymbol(_ name: String) -> String {
+    #if SKIP
+    switch name {
+    case "rectangle.stack.fill": return "safari"
+    case "square.stack", "square.stack.fill": return "list.bullet"
+    case "film", "play.circle", "play.circle.fill": return "play"
+    case "arrow.clockwise", "arrow.triangle.2.circlepath", "clock": return "arrow.clockwise.circle"
+    case "chevron.backward": return "chevron.left"
+    case "arrow.up.right": return "arrow.forward"
+    case "icloud.and.arrow.down": return "square.and.arrow.down"
+    case "wifi.exclamationmark": return "exclamationmark.triangle"
+    case "cup.and.saucer": return "info.circle"
+    case "bookmark.slash": return "bookmark"
+    default: return name
+    }
+    #else
+    return name
+    #endif
+}
+
 struct AccountAvatarButton: View {
     let label: String
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: "person.crop.circle.fill")
+            Image(systemName: platformSymbol("person.crop.circle.fill"))
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(Color.secondary)
                 .frame(width: 42, height: 42)
@@ -44,7 +66,7 @@ struct AccountCloseButton: View {
     }
     private var button: some View {
         Button { store.accountPresented = false } label: {
-            Image(systemName: "xmark").font(.system(size: 20, weight: .regular))
+            Image(systemName: platformSymbol("xmark")).font(.system(size: 20, weight: .regular))
                 .foregroundStyle(Color.primary).frame(width: 44, height: 44)
         }.buttonStyle(.plain).accessibilityLabel(store.text("close"))
     }
@@ -119,7 +141,7 @@ struct PlaybackActions: View {
             GlassEffectContainer(spacing: 14) {
                 HStack(spacing: 14) {
                     Button { store.play(anime) } label: {
-                        Label(store.text(anime.latestVideoId == nil ? "play" : "playLatest"), systemImage: "play.fill")
+                        Label(store.text(anime.latestVideoId == nil ? "play" : "playLatest"), systemImage: platformSymbol("play.fill"))
                             .font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 22).frame(height: 50)
                     }
@@ -149,7 +171,7 @@ struct PlaybackActions: View {
     private var fallback: some View {
         HStack(spacing: 14) {
             Button { store.play(anime) } label: {
-                Label(store.text(anime.latestVideoId == nil ? "play" : "playLatest"), systemImage: "play.fill")
+                Label(store.text(anime.latestVideoId == nil ? "play" : "playLatest"), systemImage: platformSymbol("play.fill"))
                     .font(.subheadline.weight(.semibold)).padding(.horizontal, 20).frame(height: 50)
             }
             .buttonStyle(.plain)
@@ -196,7 +218,7 @@ struct RemoteArtwork: View {
         } placeholder: {
             ZStack {
                 Rectangle().fill(Color.secondary.opacity(0.10))
-                Image(systemName: "film").font(.largeTitle).foregroundStyle(Color.secondary.opacity(0.6))
+                Image(systemName: platformSymbol("film")).font(.largeTitle).foregroundStyle(Color.secondary.opacity(0.6))
             }
         }
         .clipped()
@@ -212,7 +234,7 @@ struct CatalogFooter: View {
             Spacer()
             if store.busy { ProgressView() }
             else {
-                Button { store.refreshCatalog() } label: { Image(systemName: "arrow.clockwise") }
+                Button { store.refreshCatalog() } label: { Image(systemName: platformSymbol("arrow.clockwise")) }
                     .accessibilityLabel(store.text("refresh"))
             }
         }
