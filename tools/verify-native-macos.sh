@@ -31,6 +31,8 @@ BAHA_CORE_ONLY=1 swift test --scratch-path "$output/CoreBuild" 2>&1 | tee "$outp
 # The template skips Android whenever SKIP_ZERO is nonempty, including "0".
 # Unset both variables so the full native product, rather than only BahaCore,
 # is compiled and the Xcode Android build phase actually executes.
+# The Xcode phase appends "Debug", so "assemble" runs assembleDebug and produces
+# an APK. Skip's buildDebug compiles/prepares bundles without packaging an APK.
 unset BAHA_CORE_ONLY SKIP_ZERO
 xcodebuild \
   -workspace "$project_root/Project.xcworkspace" \
@@ -40,7 +42,7 @@ xcodebuild \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$derived" \
   CODE_SIGNING_ALLOWED=NO \
-  SKIP_ACTION=build \
+  SKIP_ACTION=assemble \
   build 2>&1 | tee "$output/native-build.log"
 
 ios_app="$derived/Build/Products/Debug-iphonesimulator/BahaPlus.app"
