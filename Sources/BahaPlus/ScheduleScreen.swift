@@ -36,7 +36,7 @@ struct ScheduleScreen: View {
                     ForEach(items) { anime in
                         Button { store.openDetail(anime) } label: {
                             HStack(spacing: 14) {
-                                Text(anime.updateTime ?? "").font(.caption.monospacedDigit())
+                                timeLabel(anime.updateTime ?? "")
                                     .foregroundStyle(.secondary).frame(width: 42)
                                 RemoteArtwork(url: anime.coverURL).frame(width: 88, height: 58)
                                     .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -53,6 +53,13 @@ struct ScheduleScreen: View {
                 CatalogFooter(store: store)
             }.listStyle(.plain)
         }
+    }
+    @ViewBuilder private func timeLabel(_ value: String) -> some View {
+        #if SKIP
+        Text(value).font(.caption)
+        #else
+        Text(value).font(.caption.monospacedDigit())
+        #endif
     }
 }
 #endif

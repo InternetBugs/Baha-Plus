@@ -73,14 +73,31 @@ jobs:
             artifacts/native-macos/BahaPlus-ios-simulator.tar.gz
           if-no-files-found: error
           retention-days: 14
-      - name: Capture native iOS design previews
-        timeout-minutes: 10
-        run: bash tools/capture-ios-previews.sh 2>&1 | tee artifacts/native-macos/previews.log
+
+  ios-previews:
+    name: iOS App Store-style previews
+    needs: adapters
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and capture SwiftUI screens
+        run: bash tools/build-ios-previews.sh
       - name: Upload iOS screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-ui-previews
-          path: artifacts/native-macos/previews/*.png
+          path: artifacts/ios-preview/previews/*.png
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload iOS preview build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-preview-logs
+          path: artifacts/ios-preview/*.log
           if-no-files-found: ignore
           retention-days: 14

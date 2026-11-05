@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
-output="$project_root/artifacts/native-macos"
+output="${1:-$project_root/artifacts/native-macos}"
 previews="$output/previews"
 app="$output/DerivedData/Build/Products/Debug-iphonesimulator/BahaPlus.app"
 mkdir -p "$previews"
