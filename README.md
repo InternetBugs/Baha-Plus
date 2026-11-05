@@ -29,9 +29,23 @@ tests/native-adapters.test.ts  官方 DOM 适配器的离线测试
 
 公开仓库仅包含 SwiftUI 主工程及必要的资源、构建与验证工具。早期 Expo 预览、本机开发缓存和工具链不包含在仓库中。
 
-## GitHub Actions
+## 本地构建（默认）
 
-推送到 `main`、提交 Pull Request，或在 Actions 页面手动运行 **Native build**：
+在 Mac 或运行于 Apple 硬件上的 macOS 虚拟机中准备 Xcode 26+、Node.js 24+、Java 21、Skip 和 Android SDK，执行：
+
+```sh
+bash tools/build-local-macos.sh
+```
+
+这个入口先检查资源、页面适配器和 TypeScript，再运行 Swift 测试，并构建 Android APK、iOS 模拟器 App 与未签名的 iPhone arm64 IPA。产物在 `artifacts/native-macos`，整个过程不依赖 GitHub Actions。
+
+要生成 iOS 实际界面截图，可另外运行 `bash tools/build-ios-previews.sh`；Android 实际运行检查可以在本地 Android 模拟器启动后运行 `python3 tools/android-smoke.py --apk artifacts/native-macos/BahaPlus-debug.apk --output artifacts/android-smoke`。虚拟机中的模拟器支持取决于主机的虚拟化与图形能力，构建本身不强制启动模拟器。
+
+Windows/WSL 可以完成资源、适配器和纯 Swift 核心检查，不能运行 Xcode。macOS 虚拟机的部署需符合 [Apple macOS 许可](https://www.apple.com/legal/sla/docs/macOSTahoe.pdf)及宿主硬件条件。
+
+## GitHub Actions（手动备用）
+
+提交代码、推送到 `main`、创建 Pull Request 都不会自动运行云端构建。需要时在 Actions 页面手动运行 **Native build**：
 
 1. 在 Linux runner 检查双语资源、官方页面适配器和 TypeScript。
 2. 在 macOS 26 runner 安装 Skip / Gradle，运行 Swift XCTest，构建 iOS 和 Android。
@@ -40,7 +54,7 @@ tests/native-adapters.test.ts  官方 DOM 适配器的离线测试
 
 iOS 原生预览作为独立任务构建，并在 iOS 26 模拟器上导出首页、搜索、账户面板和繁体深色模式截图，可从 `ios-ui-previews` 下载。预览使用公开目录和占位账号，不代表真实账号登录或播放验收。
 
-**Android runtime smoke** 会在 `main` 的原生构建成功后下载实际 APK，在 Android 模拟器中安装并检查启动、搜索、账户面板和简繁切换。也可手动指定已有的成功构建编号 `build_run_id`。截图、界面树和运行日志保存在 `android-runtime-evidence`，这项检查使用访客界面。
+**Android runtime smoke** 也仅手动运行。指定已有的成功构建编号 `build_run_id` 后，它会下载实际 APK，在 Android 模拟器中安装并检查启动、搜索输入与清空、账户面板和简繁切换。截图、界面树和运行日志保存在 `android-runtime-evidence`，这项检查使用访客界面。
 
 iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone。`BahaPlus-unsigned.ipa` 使用真机 SDK 与 arm64 架构，安装前仍需使用自己的 Apple 账号完成签名；它不是已经签名、可直接安装的 iPhone 应用。CI 不需要保存 Apple 账号凭据，工作流不自动发布 Release 或上传应用商店。
 
