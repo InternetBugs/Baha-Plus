@@ -20,7 +20,6 @@ struct AndroidGlassTabs: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-                .toolbar(.hidden, for: .tabBar)
                 .composeModifier { modifier in modifier.hazeSource(state: backdrop) }
             HStack(spacing: 0) {
                 tab("explore", symbol: "safari", index: 0)
@@ -77,6 +76,15 @@ struct AndroidGlassTabs: View {
 import SwiftUI
 
 extension View {
+    @ViewBuilder func hideAndroidSystemTabBar() -> some View {
+        #if SKIP
+        // SkipUI collects tab-bar preferences from each tab's content.
+        self.toolbar(.hidden, for: .tabBar)
+        #else
+        self
+        #endif
+    }
+
     @ViewBuilder func floatingTabContentMargins() -> some View {
         #if SKIP
         self.contentMargins(.bottom, 94.0, for: .scrollContent)

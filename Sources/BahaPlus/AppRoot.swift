@@ -97,10 +97,14 @@ struct AppRoot: View {
     #endif
     private var classicTabs: some View {
         TabView(selection: $store.tab) {
-            home.tabItem { Label(store.text("explore"), systemImage: platformSymbol("rectangle.stack.fill")) }.tag(0)
-            schedule.tabItem { Label(store.text("schedule"), systemImage: platformSymbol("calendar")) }.tag(1)
-            library.tabItem { Label(store.text("library"), systemImage: platformSymbol("square.stack.fill")) }.tag(2)
-            search.tabItem { Label(store.text("search"), systemImage: platformSymbol("magnifyingglass")) }.tag(3)
+            home.hideAndroidSystemTabBar()
+                .tabItem { Label(store.text("explore"), systemImage: platformSymbol("rectangle.stack.fill")) }.tag(0)
+            schedule.hideAndroidSystemTabBar()
+                .tabItem { Label(store.text("schedule"), systemImage: platformSymbol("calendar")) }.tag(1)
+            library.hideAndroidSystemTabBar()
+                .tabItem { Label(store.text("library"), systemImage: platformSymbol("square.stack.fill")) }.tag(2)
+            search.hideAndroidSystemTabBar()
+                .tabItem { Label(store.text("search"), systemImage: platformSymbol("magnifyingglass")) }.tag(3)
         }
     }
     private var home: some View {
