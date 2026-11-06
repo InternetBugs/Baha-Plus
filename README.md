@@ -78,7 +78,7 @@ Baha Plus 使用动画疯官方播放环境。影片的地区限制、会员资�
 
 ## 反馈与贡献
 
-欢迎通过 [Issues](https://github.com/InternetBugs/Baha-Plus/issues) 提出建议或报告问题，也欢迎提交 Pull Request。开发、构建与验证说明见 [开发与构建](docs/development.md) 和 [本地验收记录](docs/verification.md)。
+欢迎通过 [Issues](https://github.com/InternetBugs/Baha-Plus/issues) 提出建议或报告问题，也欢迎提交 Pull Request。开发、构建与验证说明见 [开发与构建](docs/development.md) 和 [本地验收记录](docs/verification.md)，界面样式见 [液态玻璃设计语言](docs/liquid-glass.md)。
 
 ## 声明与致谢
 
