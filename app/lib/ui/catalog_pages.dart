@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
@@ -21,70 +22,86 @@ class HomeContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (store.catalog.items.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (store.seasonal.isNotEmpty) _hero(context, store.seasonal.first),
-        if (store.history.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          SectionHeading(store.t('history'), onTap: openHistory),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 112,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: math.min(store.history.length, 8),
-              separatorBuilder: (_, index) => const SizedBox(width: 12),
-              itemBuilder: (_, index) => SizedBox(
-                width: 310,
-                child: ContinueCard(store: store, entry: store.history[index]),
-              ),
-            ),
-          ),
-        ],
-        if (store.popular.isNotEmpty) ...[
-          const SizedBox(height: 28),
-          _compactFeature(store.popular.first),
-        ],
-        if (store.seasonal.isNotEmpty) ...[
-          const SizedBox(height: 28),
-          SectionHeading(
-            store.t('seasonal'),
-            onTap: () => store.selectTab(2, filter: 'season'),
-          ),
-          const SizedBox(height: 16),
-          _tiles(store.seasonal.take(8).toList()),
-        ],
-        if (store.popular.isNotEmpty) ...[
-          const SizedBox(height: 28),
-          SectionHeading(
-            store.t('popular'),
-            onTap: () => store.selectTab(2, filter: 'hot'),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 274,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: math.min(store.popular.length, 12),
-              separatorBuilder: (_, index) => const SizedBox(width: 16),
-              itemBuilder: (_, index) {
-                final anime = store.popular[index];
-                return SizedBox(
-                  width: 138,
-                  child: AnimeTile(
-                    store: store,
-                    anime: anime,
-                    poster: true,
-                    onTap: () => openDetail(anime),
+    if (store.catalog.items.isEmpty) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
+    final popular = store.popular;
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (store.seasonal.isNotEmpty)
+                _hero(context, store.seasonal.first),
+              if (store.history.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                SectionHeading(store.t('history'), onTap: openHistory),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 112,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: math.min(store.history.length, 8),
+                    separatorBuilder: (_, index) => const SizedBox(width: 12),
+                    itemBuilder: (_, index) => SizedBox(
+                      width: 310,
+                      child: ContinueCard(
+                        store: store,
+                        entry: store.history[index],
+                      ),
+                    ),
                   ),
+                ),
+              ],
+              if (popular.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                _compactFeature(popular.first),
+              ],
+              if (store.seasonal.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                SectionHeading(
+                  store.t('seasonal'),
+                  onTap: () => store.selectTab(2, filter: 'season'),
+                ),
+                const SizedBox(height: 16),
+                _tiles(store.seasonal.take(8).toList()),
+              ],
+              if (popular.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                SectionHeading(
+                  store.t('popular'),
+                  onTap: () => store.selectTab(2, filter: 'hot'),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ],
+          ),
+        ),
+        if (popular.isNotEmpty)
+          SliverLayoutBuilder(
+            builder: (context, constraints) => SliverMasonryGrid.count(
+              key: const ValueKey('popular-waterfall'),
+              crossAxisCount: (constraints.crossAxisExtent / 190).floor().clamp(
+                2,
+                4,
+              ),
+              mainAxisSpacing: 24,
+              crossAxisSpacing: 16,
+              childCount: popular.length,
+              itemBuilder: (context, index) {
+                final anime = popular[index];
+                return AnimeTile(
+                  key: ValueKey('popular-${anime.id}'),
+                  store: store,
+                  anime: anime,
+                  poster: true,
+                  titleLines: 3,
+                  onTap: () => openDetail(anime),
                 );
               },
             ),
           ),
-        ],
-        CatalogFooter(store),
       ],
     );
   }
@@ -381,7 +398,6 @@ class SearchContent extends StatelessWidget {
             width: 200,
             child: Text(store.t('officialSearch')),
           ),
-          CatalogFooter(store),
         ],
       );
     }
@@ -443,7 +459,6 @@ class SearchContent extends StatelessWidget {
             ),
           ],
         ),
-        CatalogFooter(store),
       ],
     );
   }
@@ -538,7 +553,6 @@ class LibraryContent extends StatelessWidget {
       else
         for (final anime in store.libraryItems)
           AnimeRow(store: store, anime: anime, onTap: () => openDetail(anime)),
-      CatalogFooter(store),
     ],
   );
 }
@@ -638,7 +652,6 @@ class _ScheduleContentState extends State<ScheduleContent> {
           store.t('scheduleNote'),
           style: TextStyle(fontSize: 11, color: secondary(context)),
         ),
-        CatalogFooter(store),
       ],
     );
   }

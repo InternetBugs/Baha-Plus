@@ -6,7 +6,7 @@
   const nonce = window.__bahaDocumentNonce;
   if (window.__bahaPlayerBridge?.ticket === nonce) return;
   window.__bahaPlayerBridge?.dispose();
-  let timer, style, metadataSent = false, last = '';
+  let timer, style, metadataSent = false, last = '', requestedQuality = 0;
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -111,13 +111,16 @@
     const levels = qualityLevels(c.player).filter(l => Number.isInteger(l.height) && l.height >= 144 && l.height <= 4320);
     const qualities = [...new Set(levels.map(l => l.height))].sort((a, b) => b - a);
     const enabled = [...new Set(levels.filter(l => l.enabled === true).map(l => l.height))];
+    const quality = requestedQuality > 0 && qualities.includes(requestedQuality) &&
+      enabled.length === 1 && enabled[0] === requestedQuality ? requestedQuality :
+      enabled.length === 1 && qualities.length > 1 ? enabled[0] : 0;
     const danmaku = c.root?.querySelector('.vjs-danmu');
     const body = {
       type: 'player-state', phase: c.phase, surfaceReady: !!c.root && c.matches,
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
       position, duration, buffered, rate: c.media?.playbackRate || 1,
-      qualities, quality: enabled.length === 1 && qualities.length > 1 ? enabled[0] : 0,
+      qualities, quality,
       hasDanmaku: !!danmaku, danmaku: !!danmaku && getComputedStyle(danmaku).display !== 'none'
     };
     const serialized = JSON.stringify(body);
@@ -141,6 +144,7 @@
         const levels = qualityLevels(c.player);
         if (value !== 0 && !levels.some(l => l.height === value)) return false;
         levels.forEach(level => { level.enabled = value === 0 || level.height === value; });
+        requestedQuality = value;
       }
       else if (action === 'danmaku' && (value === 0 || value === 1)) {
         const layer = c.root.querySelector('.vjs-danmu');

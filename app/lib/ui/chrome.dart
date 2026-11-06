@@ -101,55 +101,20 @@ class SectionHeading extends StatelessWidget {
   );
 }
 
-class CatalogFooter extends StatelessWidget {
-  const CatalogFooter(this.store, {super.key});
-  final AppStore store;
-  @override
-  Widget build(BuildContext context) {
-    if (store.catalog.items.isEmpty) return const SizedBox.shrink();
-    final date = DateTime.tryParse(
-      store.catalog.fetchedAt,
-    )?.toUtc().add(const Duration(hours: 8));
-    final label = date == null
-        ? ''
-        : '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 24),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '${store.t(store.catalogSource == 'live' ? 'dataLive' : 'dataCached')}  $label',
-              style: TextStyle(fontSize: 11, color: secondary(context)),
-            ),
-          ),
-          if (store.busy)
-            const CupertinoActivityIndicator(radius: 8)
-          else
-            GlassIconButton(
-              size: 36,
-              semanticLabel: store.t('refresh'),
-              icon: const Icon(CupertinoIcons.arrow_clockwise, size: 17),
-              onPressed: store.refreshCatalog,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 class AnimeTile extends StatelessWidget {
   const AnimeTile({
     required this.store,
     required this.anime,
     required this.onTap,
     this.poster = false,
+    this.titleLines = 2,
     super.key,
   });
   final AppStore store;
   final Anime anime;
   final VoidCallback onTap;
   final bool poster;
+  final int titleLines;
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.opaque,
@@ -171,7 +136,7 @@ class AnimeTile extends StatelessWidget {
           const SizedBox(height: 9),
           Text(
             anime.title,
-            maxLines: 2,
+            maxLines: titleLines,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
           ),

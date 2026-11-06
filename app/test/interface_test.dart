@@ -10,6 +10,7 @@ import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/player_page.dart';
+import 'package:baha_plus/ui/detail_page.dart';
 import 'core_test.dart' show MemoryStorage, FakePortal;
 
 void main() {
@@ -73,6 +74,56 @@ void main() {
     expect(find.text('为你推荐'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'popular titles form a vertical waterfall and catalog status text is absent',
+    (tester) async {
+      final store = await launch(tester);
+      final titles = List.generate(
+        20,
+        (index) => index == 1
+            ? 'A longer title that wraps across several lines in the waterfall'
+            : 'Anime ${index + 1}',
+      );
+      store.catalog = Catalog(
+        fetchedAt: '2026-11-06T00:00:00Z',
+        items: [
+          for (var index = 0; index < titles.length; index++)
+            Anime(
+              id: '${index + 1}',
+              title: titles[index],
+              cover: 'https://p2.bahamut.com.tw/${index + 1}.jpg',
+              poster: 'https://p2.bahamut.com.tw/${index + 1}.jpg',
+              episodeLabel: '第1集',
+              sections: const ['hot'],
+            ),
+        ],
+      );
+      store.selectTab(0);
+      await frames(tester);
+      expect(find.textContaining(store.t('dataCached')), findsNothing);
+      expect(find.textContaining(store.t('dataLive')), findsNothing);
+      expect(find.byType(ListView), findsNothing);
+      final first = tester.getRect(find.byKey(const ValueKey('popular-1')));
+      final second = tester.getRect(find.byKey(const ValueKey('popular-2')));
+      expect(first.top, second.top);
+      expect(first.left, lessThan(second.left));
+      expect(first.height, lessThan(second.height));
+      final lastTile = find.byKey(const ValueKey('popular-20')).hitTestable();
+      for (var step = 0; step < 35 && lastTile.evaluate().isEmpty; step++) {
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, -350));
+        await frames(tester);
+      }
+      expect(lastTile, findsOneWidget);
+      await tester.tap(lastTile);
+      await frames(tester);
+      expect(find.byType(DetailPage), findsOneWidget);
+      expect(store.selectedAnime?.id, '20');
+      // The native portal is disabled in this layout test.
+      store.navigationFailed();
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Android and iOS use the same header and floating glass tabs', (
     tester,
@@ -186,6 +237,20 @@ void main() {
       expect(video.width / video.height, closeTo(16 / 9, .001));
       await tester.tap(find.bySemanticsLabel(store.t('pausePlayback')));
       expect(portal.scripts.last, contains('"pause"'));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await frames(tester);
+      expect(
+        portal.scripts.last,
+        contains('window.__bahaMediaSuspended = true'),
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await frames(tester);
+      expect(
+        portal.scripts.last,
+        contains('window.__bahaMediaSuspended = false'),
+      );
+      expect(portal.scripts.last, isNot(contains('.play(')));
       await state('advertisement');
       await frames(tester);
       final before = portal.scripts.length;

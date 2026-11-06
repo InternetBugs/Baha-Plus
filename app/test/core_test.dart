@@ -150,6 +150,84 @@ void main() {
   );
 
   test(
+    'background playback stays paused across a new document and foreground return',
+    () async {
+      final store = await AppStore.create(storage: MemoryStorage());
+      addTearDown(store.dispose);
+      final portal = FakePortal();
+      await store.attach(portal);
+      final idleCount = portal.scripts.length;
+      await store.setApplicationActive(false);
+      expect(portal.scripts.length, idleCount);
+      await store.setApplicationActive(true);
+      const anime = Anime(
+        id: '10',
+        title: 'Test',
+        cover: 'https://p2.bahamut.com.tw/10.jpg',
+        latestVideoId: '20',
+      );
+      await store.play(anime);
+      await store.receive(
+        jsonEncode({...playerState(), 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.video('20'),
+        isMainFrame: true,
+      );
+      await store.setApplicationActive(false);
+      expect(
+        portal.scripts.last,
+        contains('window.__bahaMediaSuspended = true'),
+      );
+      expect(portal.scripts.last, contains('media.pause()'));
+      expect(portal.scripts.last, contains(store.operation.id));
+      final count = portal.scripts.length;
+      await store.controlPlayer('play');
+      expect(portal.scripts.length, count);
+      await store.navigationFinished(OfficialSite.video('20'));
+      final configuration = portal.scripts[portal.scripts.length - 2];
+      expect(configuration, contains('window.__bahaMediaSuspended = true'));
+      expect(configuration, contains('media.pause()'));
+      await store.setApplicationActive(true);
+      expect(
+        portal.scripts.last,
+        contains('window.__bahaMediaSuspended = false'),
+      );
+      expect(portal.scripts.last, isNot(contains('.play(')));
+      await store.controlPlayer('play');
+      expect(portal.scripts.last, contains('"play"'));
+    },
+  );
+
+  test(
+    'account sync returns from the login site to the official account origin',
+    () async {
+      final store = await AppStore.create(storage: MemoryStorage());
+      addTearDown(store.dispose);
+      final portal = FakePortal();
+      await store.attach(portal);
+      await store.connectAccount();
+      store.updateNavigation(
+        Uri.parse('https://user.gamer.com.tw/login.php'),
+        canGoBack: true,
+      );
+      final before = portal.scripts.length;
+      await store.syncAccount();
+      expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
+      expect(store.browserVisible, isTrue);
+      expect(store.operation.intent, BrowserIntent.account);
+      expect(
+        portal.scripts
+            .skip(before)
+            .any((script) => script.contains("post({type:'account-guest'})")),
+        isFalse,
+      );
+      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
+      expect(store.operation.intent, BrowserIntent.accountRefresh);
+      expect(portal.scripts.last, contains("post({type:'account-guest'})"));
+    },
+  );
+
+  test(
     'desktop presentation removes mobile markers but keeps the real engine',
     () {
       const native =

@@ -119,6 +119,7 @@ class AppStore extends ChangeNotifier {
   Uri? _pendingUri;
   Anime? _pendingAnime;
   bool _desiredFavorite = false, _disposed = false;
+  bool _applicationActive = true;
   Timer? _deadline;
 
   String t(String key) => dictionaries[language]?[key] ?? key;
@@ -150,8 +151,26 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  Future<void> setApplicationActive(bool active) async {
+    if (_applicationActive == active) return;
+    _applicationActive = active;
+    if (!browserVisible || !showsPlayer) return;
+    final document = operation.id;
+    try {
+      await _portal?.evaluate('''
+if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
+  ${active ? 'window.__bahaMediaSuspended = false;' : _suspendMedia}
+} true;
+''');
+    } catch (_) {
+      // A navigation can replace the document while the application is hidden.
+      // Its next commit receives the current lifecycle state below.
+    }
+  }
+
   Future<void> controlPlayer(String action, [double? value]) async {
-    if (!browserVisible ||
+    if (!_applicationActive ||
+        !browserVisible ||
         !showsPlayer ||
         !playback.value.canOperate ||
         !const [
@@ -413,6 +432,15 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> syncAccount() async {
     if (browserUri == null || !OfficialSite.trustedOrigin(browserUri!)) {
+      if (browserVisible) {
+        browserTitle = t('officialAccount');
+        await _load(
+          OfficialSite.home.resolve('mygather.php'),
+          BrowserIntent.account,
+          visible: true,
+        );
+        return;
+      }
       busy = false;
       notice = t('accountHint');
       _emit();
@@ -445,7 +473,8 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     }
     await _portal?.evaluate('''
 window.__bahaDocumentNonce = ${jsonEncode(operation.id)};
-window.__bahaMediaSuspended = false; true;
+window.__bahaMediaSuspended = ${!_applicationActive};
+${_applicationActive ? '' : _suspendMedia} true;
 ''');
     await _runScript('player', {'%ANIME_ID%': playingAnime!.id});
   }

@@ -282,6 +282,18 @@ test('native player preserves age confirmation and rejects stale or suspended co
   assert.deepEqual(fixture.commands, []);
 });
 
+test('single available quality distinguishes an explicit selection from automatic mode', async () => {
+  const fixture = playerFixture();
+  fixture.levels.splice(0, fixture.levels.length, { height: 360, enabled: true });
+  fixture.tick();
+  assert.deepEqual(Array.from(fixture.messages.at(-1).qualities), [360]);
+  assert.equal(fixture.messages.at(-1).quality, 0);
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 360), true);
+  assert.equal(fixture.messages.at(-1).quality, 360);
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 0), true);
+  assert.equal(fixture.messages.at(-1).quality, 0);
+});
+
 test('favorite action uses the official control and reports only verified resulting state', async () => {
   const fixture = setup('<a class="btn-logout">登出</a><div class="anime_name"><button onclick="animefun.toggleGather(500, 10, x)"></button></div>');
   const button = fixture.document.querySelector('button')!;

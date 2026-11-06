@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -17,10 +18,25 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final _titles = List.generate(4, (_) => GlassLargeTitleController());
   final _search = TextEditingController();
   AppStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state != null) {
+      unawaited(store.setApplicationActive(state == AppLifecycleState.resumed));
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(store.setApplicationActive(state == AppLifecycleState.resumed));
+  }
 
   void _account() => GlassModalSheet.show<void>(
     context: context,
@@ -147,22 +163,24 @@ class _AppRootState extends State<AppRoot> {
           ),
         SliverPadding(
           padding: EdgeInsets.fromLTRB(20, 0, 20, bottomSpace),
-          sliver: SliverToBoxAdapter(
-            child: switch (store.tab) {
-              1 => ScheduleContent(store: store, openDetail: _detail),
-              2 => LibraryContent(
-                store: store,
-                openDetail: _detail,
-                connectAccount: store.connectAccount,
-              ),
-              3 => SearchContent(store: store, openDetail: _detail),
-              _ => HomeContent(
-                store: store,
-                openDetail: _detail,
-                openHistory: _history,
-              ),
-            },
-          ),
+          sliver: store.tab == 0
+              ? HomeContent(
+                  store: store,
+                  openDetail: _detail,
+                  openHistory: _history,
+                )
+              : SliverToBoxAdapter(
+                  child: switch (store.tab) {
+                    1 => ScheduleContent(store: store, openDetail: _detail),
+                    2 => LibraryContent(
+                      store: store,
+                      openDetail: _detail,
+                      connectAccount: store.connectAccount,
+                    ),
+                    3 => SearchContent(store: store, openDetail: _detail),
+                    _ => const SizedBox.shrink(),
+                  },
+                ),
         ),
       ],
     );
@@ -234,6 +252,7 @@ class _AppRootState extends State<AppRoot> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _search.dispose();
     for (final title in _titles) {
       title.dispose();
