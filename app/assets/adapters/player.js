@@ -7,6 +7,8 @@
   if (window.__bahaPlayerBridge?.ticket === nonce) return;
   window.__bahaPlayerBridge?.dispose();
   let timer, style, metadataSent = false, last = '', requestedQuality = 0;
+  let preferences = window.__bahaDanmakuPreferences || null;
+  let appliedManager = null, appliedPreferences = '';
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -24,6 +26,7 @@
     const matches = series === expectedID;
     const player = root?.querySelector('#ani_video, video-js, .video-js')?.player;
     const core = player?.usingPlugin?.('m3u8') ? player.m3u8() : null;
+    const controls = player?.usingPlugin?.('animePlayer') ? player.animePlayer() : null;
     const media = root?.querySelector('video');
     const age = visible(root?.querySelector('.ncc-choosebar'));
     const error = !!media?.error || !!player?.error?.();
@@ -35,7 +38,36 @@
     else if (core?.state?.playingVideo === true &&
       String(core.state.videoSn) === videoID) phase = 'content';
     else if (root && !core) phase = 'official';
-    return { root, player, media, phase, matches };
+    return { root, player, media, manager: controls?.danmuManager, phase, matches };
+  }
+  function applyDanmaku(c) {
+    if (!preferences || c.phase !== 'content') {
+      appliedManager = null;
+      return;
+    }
+    const layer = c.root?.querySelector('.vjs-danmu');
+    const manager = c.manager;
+    if (layer) layer.style.display = preferences.enabled ? '' : 'none';
+    const key = JSON.stringify(preferences);
+    if (!manager || (manager === appliedManager && key === appliedPreferences)) return;
+    manager.setDanmuOpacityRate?.(preferences.opacity);
+    manager.setDanmuSizeRate?.(preferences.scale);
+    for (const mode of ['rolling', 'top', 'bottom']) {
+      manager.setDanmuModeAllow?.(mode, preferences[mode]);
+    }
+    manager.setDanmuProcess?.(preferences.enabled);
+    manager.cleanAll?.();
+    appliedManager = manager; appliedPreferences = key;
+  }
+  function configure(ticket, value) {
+    if (ticket !== nonce || window.__bahaDocumentNonce !== nonce ||
+        !value || !Number.isFinite(value.opacity) || value.opacity < .1 || value.opacity > 1 ||
+        !Number.isFinite(value.scale) || value.scale < .5 || value.scale > 1.5 ||
+        ['enabled', 'rolling', 'top', 'bottom'].some(key => typeof value[key] !== 'boolean')) return false;
+    preferences = { enabled: value.enabled, opacity: value.opacity, scale: value.scale,
+      rolling: value.rolling, top: value.top, bottom: value.bottom };
+    window.__bahaDanmakuPreferences = preferences;
+    tick(); return true;
   }
   function mount(root) {
     if (!root || style) return;
@@ -79,10 +111,29 @@
       }
     });
     const img = document.querySelector('.data-img');
+    const score = Number(text(document.querySelector('#acg_review .score-overall-number')));
+    const count = Number((text(document.querySelector('#acg_review .score-overall-people'))
+      .match(/[0-9,]+/) || ['0'])[0].replaceAll(',', ''));
+    let rating;
+    const source = [...document.querySelectorAll('script')]
+      .map(script => script.textContent || '').find(code => code.includes('new Bahamut.AcgReview'));
+    const match = source?.match(/new Bahamut\.AcgReview\([^,]+,\s*(\d+),\s*(\{[^}]+\})/);
+    if (match && Number.isFinite(score) && score >= 0 && score <= 5 &&
+        Number.isInteger(count) && count >= 0) {
+      try {
+        const values = JSON.parse(match[2]);
+        const distribution = [1, 2, 3, 4, 5].map(star => Number(values[String(star)] || 0));
+        if (distribution.every(value => Number.isInteger(value) && value >= 0) &&
+            distribution.reduce((sum, value) => sum + value, 0) <= count) {
+          rating = { value: score, count, distribution };
+        }
+      } catch (_) {}
+    }
     const detail = {
       title: text(document.querySelector('.anime_name h1')).replace(/\s*\[[^\]]+\]\s*$/, ''),
       description: text(intro).split(/[＜<](?:製作團隊|制作团队|STAFF|CAST)[＞>]/i)[0].trim(),
       poster: img?.getAttribute('data-src') || img?.getAttribute('src'),
+      ...(rating ? { rating } : {}),
       episodes: [...episodes.values()],
       metadata: [...document.querySelectorAll('.type-list>li')].map(li => ({
         label: text(li.querySelector('.title')),
@@ -97,6 +148,7 @@
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
     const c = context();
     if (c.matches) mount(c.root);
+    applyDanmaku(c);
     metadata();
     const duration = finite(c.media?.duration);
     const position = Math.min(duration, finite(c.media?.currentTime));
@@ -150,6 +202,7 @@
         const layer = c.root.querySelector('.vjs-danmu');
         if (!layer) return false;
         layer.style.display = value === 0 ? 'none' : '';
+        if (preferences) preferences.enabled = value === 1;
       }
       else return false;
       tick(); return true;
@@ -164,7 +217,7 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  window.__bahaPlayerBridge = { ticket: nonce, command, dispose };
+  window.__bahaPlayerBridge = { ticket: nonce, command, configure, dispose };
   tick();
   timer = setInterval(tick, 500);
 })(); true;

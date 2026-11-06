@@ -578,7 +578,14 @@ void main() {
     'the entire playback page is native and controls follow the current official episode',
     (tester) async {
       final store = await launch(tester);
-      final portal = FakePortal();
+      final portal = FakePortal()
+        ..communityResponse = {
+          'ok': true,
+          'messageId': '123',
+          'total': 0,
+          'nextPage': 0,
+          'comments': <Json>[],
+        };
       await store.attach(portal);
       const anime = Anime(
         id: '10',
@@ -640,6 +647,21 @@ void main() {
         find.byKey(const ValueKey('test-video-surface')),
       );
       expect(video.width / video.height, closeTo(16 / 9, .001));
+      final danmakuButton = tester.getRect(
+        find.byKey(const ValueKey('player-danmaku-button')),
+      );
+      expect(video.contains(danmakuButton.center), isTrue);
+      expect(find.text(store.t('danmaku')), findsNothing);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('synopsis-section'))).dy,
+        lessThan(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey('compact-comments-preview')),
+              )
+              .dy,
+        ),
+      );
       await tester.tap(find.bySemanticsLabel(store.t('pausePlayback')));
       expect(portal.scripts.last, contains('"pause"'));
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
@@ -677,6 +699,15 @@ void main() {
       await frames(tester);
       expect(store.playerFullscreen, isTrue);
       expect(find.byKey(const ValueKey('test-video-surface')), findsOneWidget);
+      final fullVideo = tester.getRect(
+        find.byKey(const ValueKey('test-video-surface')),
+      );
+      expect(
+        fullVideo.contains(
+          tester.getCenter(find.byKey(const ValueKey('player-danmaku-button'))),
+        ),
+        isTrue,
+      );
       await store.dismissBrowser();
       await frames(tester);
       expect(store.playerFullscreen, isFalse);

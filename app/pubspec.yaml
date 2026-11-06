@@ -1,7 +1,7 @@
 name: baha_plus
 description: A Flutter client for Bahamut Anime with shared Liquid Glass controls.
 publish_to: none
-version: 0.2.1+3
+version: 0.3.0+4
 
 environment:
   sdk: ">=3.10.0 <4.0.0"

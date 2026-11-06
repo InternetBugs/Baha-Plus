@@ -219,11 +219,42 @@ class Metadata {
   final String label, value;
 }
 
+class RatingSummary {
+  RatingSummary.fromJson(Json json)
+    : value = (json['value'] as num).toDouble(),
+      count = json['count'] as int,
+      distribution = (json['distribution'] as List).cast<int>() {
+    if (!value.isFinite ||
+        value < 0 ||
+        value > 5 ||
+        count < 0 ||
+        count > 100000000 ||
+        distribution.length != 5 ||
+        distribution.any((item) => item < 0 || item > count) ||
+        distribution.fold<int>(0, (sum, item) => sum + item) > count) {
+      throw const FormatException('Invalid rating summary');
+    }
+  }
+
+  final double value;
+  final int count;
+  final List<int> distribution;
+
+  Json toJson() => {
+    'value': value,
+    'count': count,
+    'distribution': distribution,
+  };
+}
+
 class AnimeDetail {
   AnimeDetail.fromJson(Json json)
     : title = json['title'] as String,
       description = json['description'] as String,
       poster = json['poster'] as String?,
+      rating = json['rating'] == null
+          ? null
+          : RatingSummary.fromJson(json['rating'] as Json),
       episodes = (json['episodes'] as List)
           .map((item) => Episode.fromJson(item as Json))
           .toList(growable: false),
@@ -242,6 +273,7 @@ class AnimeDetail {
   }
   final String title, description;
   final String? poster;
+  final RatingSummary? rating;
   final List<Episode> episodes;
   final List<Metadata> metadata;
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../core/browser_request.dart';
+import '../core/community.dart';
 import '../core/models.dart';
 import '../core/playback_state.dart';
 import '../core/search_folding.dart';
@@ -15,6 +16,7 @@ abstract interface class OfficialPortal {
   Future<void> goBack();
   Future<dynamic> evaluate(String script);
   Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount});
+  Future<Json> community(String action, Json arguments);
 }
 
 class AppStore extends ChangeNotifier {
@@ -68,17 +70,19 @@ class AppStore extends ChangeNotifier {
       'account-sync',
       'favorite-action',
       'player',
+      'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
-    String? language, appearance;
+    String? language, appearance, danmaku;
     try {
       language = await disk.read('baha.device.language');
       appearance = await disk.read('baha.device.appearance');
+      danmaku = await disk.read('baha.device.danmaku');
     } catch (_) {
       // Missing device preferences must not prevent startup.
     }
-    return AppStore(
+    final store = AppStore(
       storage: disk,
       dictionaries: dictionaries,
       folding: SearchFolding(folding, traditionalMapping: traditional),
@@ -94,6 +98,16 @@ class AppStore extends ChangeNotifier {
           : 'system',
       catalog: await CatalogCache(disk).load() ?? const Catalog(),
     );
+    try {
+      if (danmaku != null) {
+        store.danmakuSettings = DanmakuSettings.fromJson(
+          jsonDecode(danmaku) as Json,
+        );
+      }
+    } catch (_) {
+      // A damaged device preference falls back to readable defaults.
+    }
+    return store;
   }
 
   static String languageForSystem(String tag) {
@@ -147,6 +161,243 @@ class AppStore extends ChangeNotifier {
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
+  DanmakuSettings danmakuSettings = const DanmakuSettings();
+  List<AnimeNotification> notifications = [];
+  final Set<String> _readNotifications = {};
+  bool notificationsLoading = false;
+  String? notificationsError;
+  int _notificationGeneration = 0;
+  final Set<String> _communityWrites = {};
+
+  int get unreadNotifications =>
+      notifications.where((item) => !notificationRead(item)).length;
+  bool notificationRead(AnimeNotification item) =>
+      _readNotifications.contains(item.id);
+
+  Future<Json> community(String action, Json arguments) async {
+    final portal = _portal;
+    if (portal == null || !_applicationActive || _disposed) {
+      throw const CommunityException('unavailable');
+    }
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final result = await portal.community(action, {
+          ...arguments,
+          if (accountProfile != null) 'owner': accountProfile!.id,
+        });
+        if (result['ok'] != true) {
+          throw CommunityException(result['code'] as String? ?? 'network');
+        }
+        return result;
+      } on CommunityException catch (error) {
+        // Background account sync can replace its ticket without replacing the
+        // official document. Retry only reads; a write must never be repeated.
+        if (attempt != 0 ||
+            error.code != 'stale' ||
+            !communityReadActions.contains(action) ||
+            _disposed ||
+            !_applicationActive) {
+          rethrow;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        if (_disposed || !_applicationActive) {
+          throw const CommunityException('unavailable');
+        }
+      }
+    }
+    throw const CommunityException('stale');
+  }
+
+  Future<CommentPage> loadComments(
+    String videoId, {
+    int order = 1,
+    int page = 0,
+  }) async => CommentPage.fromJson(
+    await community('comments', {
+      'videoId': videoId,
+      'order': order,
+      'page': page,
+    }),
+  );
+
+  Future<List<OfficialComment>> loadReplies(String commentId) async =>
+      CommentPage.parseComments(
+        (await community('replies', {'commentId': commentId}))['comments'],
+      );
+
+  Future<void> _writeCommunity(
+    String key,
+    String action,
+    Json arguments,
+  ) async {
+    if (!_communityWrites.add(key)) throw const CommunityException('busy');
+    try {
+      await community(action, arguments);
+    } finally {
+      _communityWrites.remove(key);
+    }
+  }
+
+  Future<void> sendComment({
+    required String videoId,
+    required String messageId,
+    required String text,
+    String? commentId,
+  }) async {
+    if (text.trim().isEmpty || text.runes.length > 2000) {
+      throw const CommunityException('input');
+    }
+    await _writeCommunity('comment:$messageId', 'comment-send', {
+      'videoId': videoId,
+      'messageId': messageId,
+      'text': text.trim(),
+      'commentId': ?commentId,
+    });
+  }
+
+  Future<void> voteComment(OfficialComment comment, int type) =>
+      _writeCommunity('vote:${comment.id}', 'comment-vote', {
+        'commentId': comment.id,
+        'type': type,
+        'remove': comment.vote == (type == 1 ? 1 : -1),
+      });
+
+  Future<void> sendDanmaku(
+    String text, {
+    String color = '#FFFFFF',
+    int position = 0,
+    int size = 1,
+  }) async {
+    if (!showsPlayer ||
+        !playback.value.canControl ||
+        playingVideoId == null ||
+        !DanmakuSettings.validMessage(text)) {
+      throw const CommunityException('input');
+    }
+    await _writeCommunity('danmaku', 'danmaku-send', {
+      'videoId': playingVideoId,
+      'text': text.trim(),
+      'color': color,
+      'position': position,
+      'size': size,
+    });
+  }
+
+  Future<void> setDanmakuSettings(DanmakuSettings value) async {
+    danmakuSettings = value;
+    _emit();
+    if (showsPlayer) {
+      try {
+        await _portal?.evaluate(
+          'window.__bahaPlayerBridge?.configure(${jsonEncode(operation.id)},'
+          '${jsonEncode(value.toJson())}); true;',
+        );
+      } catch (_) {
+        // The next document commit receives the saved preferences.
+      }
+    }
+    await _savePreference('baha.device.danmaku', jsonEncode(value.toJson()));
+  }
+
+  Future<void> refreshNotifications() async {
+    if (notificationsLoading) return;
+    final generation = ++_notificationGeneration;
+    final owner = accountProfile?.id.toLowerCase();
+    notificationsLoading = true;
+    notificationsError = null;
+    _emit();
+    try {
+      final result = await community('notifications', {});
+      if (_disposed || generation != _notificationGeneration) return;
+      final actualOwner = result['owner'] as String;
+      if (actualOwner.isEmpty || (owner != null && actualOwner != owner)) {
+        throw const CommunityException('login');
+      }
+      final raw = result['items'] as List;
+      if (raw.length > 200) {
+        throw const FormatException('Too many notifications');
+      }
+      final items = raw
+          .map((item) => AnimeNotification.fromJson(item as Json))
+          .toList();
+      if (items.map((item) => item.id).toSet().length != items.length) {
+        throw const FormatException('Duplicate notifications');
+      }
+      final stored = await storage.read('baha.notifications.read.$actualOwner');
+      if (_disposed || generation != _notificationGeneration) return;
+      final currentRead = actualOwner == _notificationOwner
+          ? _readNotifications.toSet()
+          : <String>{};
+      _readNotifications.clear();
+      if (stored != null) {
+        try {
+          _readNotifications.addAll(
+            (jsonDecode(stored) as List).cast<String>().take(500),
+          );
+        } catch (_) {}
+      }
+      _readNotifications.addAll(currentRead);
+      notifications = items;
+      _notificationOwner = actualOwner;
+    } catch (error) {
+      if (_disposed || generation != _notificationGeneration) return;
+      notificationsError = error is CommunityException ? error.code : 'network';
+      if (notificationsError == 'login') {
+        notifications = [];
+        _readNotifications.clear();
+      }
+    } finally {
+      if (!_disposed && generation == _notificationGeneration) {
+        notificationsLoading = false;
+        _emit();
+      }
+    }
+  }
+
+  String? _notificationOwner;
+  Future<void> markNotificationsRead([AnimeNotification? item]) async {
+    final owner = _notificationOwner;
+    if (owner == null) return;
+    _readNotifications.addAll(
+      item == null ? notifications.map((e) => e.id) : [item.id],
+    );
+    _emit();
+    await _savePreference(
+      'baha.notifications.read.$owner',
+      jsonEncode(_readNotifications.toList().reversed.take(500).toList()),
+    );
+  }
+
+  Future<void> openNotification(AnimeNotification item) async {
+    await markNotificationsRead(item);
+    // Resolve the real series ID; a video ID must never be used as a series ID.
+    try {
+      final detail = await community('notification-target', {
+        'videoId': item.videoId,
+      });
+      final anime = Anime.fromJson(detail['anime'] as Json);
+      await play(
+        anime,
+        episode: Episode(id: item.videoId, label: ''),
+      );
+    } catch (_) {
+      browserTitle = item.title;
+      await _load(
+        OfficialSite.video(item.videoId),
+        BrowserIntent.browse,
+        visible: true,
+      );
+    }
+  }
+
+  void _resetNotifications() {
+    _notificationGeneration++;
+    notifications = [];
+    _readNotifications.clear();
+    _notificationOwner = null;
+    notificationsLoading = false;
+    notificationsError = null;
+  }
 
   String t(String key) => dictionaries[language]?[key] ?? key;
   bool get simplified => language == 'zh-Hans';
@@ -471,6 +722,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> connectAccount() async {
+    _resetNotifications();
     accountProfile = null;
     favorites = [];
     history = [];
@@ -609,6 +861,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     await _portal?.evaluate('''
 window.__bahaDocumentNonce = ${jsonEncode(operation.id)};
 window.__bahaMediaSuspended = ${!_applicationActive};
+window.__bahaDanmakuPreferences = ${jsonEncode(danmakuSettings.toJson())};
 ${_applicationActive ? '' : _suspendMedia} true;
 ''');
     await _runScript('player', {'%ANIME_ID%': playingAnime!.id});
@@ -747,9 +1000,13 @@ window.__bahaMediaSuspended = false; true;
         detailFailed = true;
         _begin(BrowserIntent.idle);
       case 'account-synced':
+        final previousOwner = accountProfile?.id.toLowerCase();
         accountProfile = body['profile'] == null
             ? null
             : AccountProfile.fromJson(body['profile'] as Json);
+        if (previousOwner != accountProfile?.id.toLowerCase()) {
+          _resetNotifications();
+        }
         favorites = (body['favorites'] as List)
             .map((item) => Anime.fromJson(item as Json))
             .toList();
@@ -762,6 +1019,7 @@ window.__bahaMediaSuspended = false; true;
         _begin(BrowserIntent.idle);
         if (catalog.items.isEmpty) await refreshCatalog();
       case 'account-guest':
+        _resetNotifications();
         accountProfile = null;
         favorites = [];
         history = [];

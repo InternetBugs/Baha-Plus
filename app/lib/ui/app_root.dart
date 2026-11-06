@@ -10,6 +10,7 @@ import 'chrome.dart';
 import 'detail_page.dart';
 import 'official_browser.dart';
 import 'seasonal_page.dart';
+import 'notifications_page.dart';
 
 class AppRoot extends StatefulWidget {
   const AppRoot({required this.store, this.mountPortal = true, super.key});
@@ -84,7 +85,21 @@ class _AppRootState extends State<AppRoot>
     showDragIndicator: false,
     expandedColor: const Color(0xfff2f2f7),
     expandedDarkColor: const Color(0xff111113),
-    builder: (_) => AccountPage(store: store),
+    builder: (_) => AccountPage(store: store, onNotifications: _notifications),
+  );
+
+  void _notifications() => Navigator.push(
+    context,
+    CupertinoPageRoute<void>(builder: (_) => NotificationsPage(store: store)),
+  );
+
+  Widget _accountActions() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      NotificationBell(store: store, onTap: _notifications),
+      const SizedBox(width: 8),
+      AccountAvatar(store: store, onTap: _account),
+    ],
   );
 
   void _detail(Anime anime) {
@@ -203,7 +218,7 @@ class _AppRootState extends State<AppRoot>
           text: title,
           controller: controller,
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
-          trailing: AccountAvatar(store: store, onTap: _account),
+          trailing: _accountActions(),
         ),
         if (store.tab == 4 || store.tab == 2)
           SliverToBoxAdapter(
@@ -268,7 +283,7 @@ class _AppRootState extends State<AppRoot>
               ignoring: controller.collapseProgress < .5,
               child: Opacity(
                 opacity: controller.collapseProgress,
-                child: AccountAvatar(store: store, onTap: _account),
+                child: _accountActions(),
               ),
             ),
           ),

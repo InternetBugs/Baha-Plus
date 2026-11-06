@@ -4,6 +4,8 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'comments_preview.dart';
+import 'synopsis_section.dart';
 
 class DetailPage extends StatelessWidget {
   const DetailPage({required this.store, required this.anime, super.key});
@@ -204,15 +206,21 @@ class DetailPage extends StatelessWidget {
               ],
               if (detail.description.isNotEmpty) ...[
                 const SizedBox(height: 28),
-                SectionHeading(store.t('synopsis')),
-                const SizedBox(height: 14),
-                Text(
-                  detail.description,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: secondary(context),
-                    height: 1.75,
-                  ),
+                SynopsisSection(
+                  store: store,
+                  title: anime.title,
+                  description: detail.description,
+                ),
+              ],
+              if (anime.latestVideoId != null ||
+                  detail.episodes.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                CompactCommentsPreview(
+                  store: store,
+                  videoId: anime.latestVideoId ?? detail.episodes.last.id,
+                  title: anime.title,
+                  rating: detail.rating,
+                  episodes: detail.episodes,
                 ),
               ],
               if (detail.metadata.isNotEmpty) ...[

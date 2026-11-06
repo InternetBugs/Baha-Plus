@@ -5,8 +5,9 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 
 class AccountPage extends StatelessWidget {
-  const AccountPage({required this.store, super.key});
+  const AccountPage({required this.store, this.onNotifications, super.key});
   final AppStore store;
+  final VoidCallback? onNotifications;
 
   void _connect(BuildContext context) {
     Navigator.pop(context);
@@ -94,6 +95,19 @@ class AccountPage extends StatelessWidget {
           ]),
           const SizedBox(height: 22),
           _group(context, [
+            if (onNotifications != null)
+              _row(
+                context,
+                store.t('notifications'),
+                CupertinoIcons.bell,
+                () {
+                  Navigator.pop(context);
+                  onNotifications!();
+                },
+                value: store.unreadNotifications > 0
+                    ? '${store.unreadNotifications}'
+                    : null,
+              ),
             _row(context, store.t('favorites'), CupertinoIcons.bookmark, () {
               Navigator.pop(context);
               store.selectTab(2, filter: 'favorites');
@@ -143,7 +157,7 @@ class AccountPage extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(child: Text('Baha Plus')),
-                  Text('0.2.0', style: TextStyle(color: Colors.grey)),
+                  Text('0.3.0', style: TextStyle(color: Colors.grey)),
                 ],
               ),
             ),

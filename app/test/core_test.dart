@@ -39,6 +39,17 @@ class MemoryStorage implements DeviceStorage {
 }
 
 class FakePortal implements OfficialPortal {
+  final communityRequests = <Json>[];
+  Json communityResponse = {'ok': false, 'code': 'unavailable'};
+  Completer<Json>? communityPending;
+  Future<Json> Function(String, Json)? communityHandler;
+  @override
+  Future<Json> community(String action, Json arguments) async {
+    communityRequests.add({'action': action, ...arguments});
+    if (communityHandler != null) return communityHandler!(action, arguments);
+    return communityPending?.future ?? communityResponse;
+  }
+
   final visited = <Uri>[];
   final scripts = <String>[];
   final publicRequests = <Uri>[];

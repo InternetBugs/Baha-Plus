@@ -26,6 +26,7 @@ for (const filename of fs.readdirSync('app/assets/adapters').filter(name => name
   const script = fs.readFileSync(`app/assets/adapters/${filename}`, 'utf8')
     .replaceAll('%KIND%', 'catalog')
     .replaceAll('%ANIME_ID%', '10')
+    .replaceAll('__BAHA_COMMUNITY_REQUEST__', '{"action":"comments","args":{"videoId":"20","order":1,"page":0}}')
     .replaceAll('__BAHA_DESIRED__', 'true');
   assert.doesNotThrow(() => new vm.Script(script, { filename }));
 }

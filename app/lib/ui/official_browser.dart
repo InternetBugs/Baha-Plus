@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/browser_presentation.dart';
+import '../core/community.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'player_page.dart';
@@ -28,6 +29,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   bool _desktop = false;
   bool _publicDocumentReady = false;
   String? _nativeAgent;
+  int _documentGeneration = 0;
   AppStore get store => widget.store;
 
   InAppWebViewSettings _settingsForMode(bool desktop) => InAppWebViewSettings(
@@ -84,6 +86,52 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   @override
   Future<dynamic> evaluate(String script) async =>
       _controller?.evaluateJavascript(source: script);
+
+  @override
+  Future<Json> community(String action, Json arguments) async {
+    final script = store.scripts['community'];
+    if (script == null) throw const CommunityException('unavailable');
+    InAppWebViewController? controller;
+    String? source;
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      final candidate = _controller;
+      final url = await candidate?.getUrl();
+      if (_publicDocumentReady &&
+          candidate != null &&
+          url != null &&
+          OfficialSite.trustedOrigin(Uri.parse(url.toString()))) {
+        controller = candidate;
+        source = url.toString();
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted || controller == null || source == null) {
+      throw const CommunityException('unavailable');
+    }
+    final generation = _documentGeneration;
+    final operation = store.operation.id;
+    final body = script.replaceAll(
+      '__BAHA_COMMUNITY_REQUEST__',
+      jsonEncode({'action': action, 'args': arguments}),
+    );
+    final result = await controller
+        .callAsyncJavaScript(functionBody: 'return await $body;')
+        .timeout(const Duration(seconds: 30));
+    final current = await controller.getUrl();
+    if (!mounted ||
+        generation != _documentGeneration ||
+        (!communityReadActions.contains(action) &&
+            store.operation.id != operation) ||
+        current?.toString() != source) {
+      throw const CommunityException('stale');
+    }
+    if (result?.error != null || result?.value is! Map) {
+      throw const CommunityException('network');
+    }
+    return jsonDecode(jsonEncode(result!.value)) as Json;
+  }
 
   @override
   Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount}) async {
@@ -296,6 +344,7 @@ try {
         initialSettings: _settingsForMode(_desktop),
         onWebViewCreated: _created,
         onLoadStart: (controller, url) async {
+          _documentGeneration++;
           _publicDocumentReady = false;
           _progress.value = 1;
           await _updateNavigation();

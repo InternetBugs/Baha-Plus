@@ -32,6 +32,19 @@
         episodeLabel && !episodes.has(id)) episodes.set(id, { id, label });
   });
   const img = doc.querySelector('.data-img');
+  const score = Number(text(doc.querySelector('#acg_review .score-overall-number')));
+  const countText = text(doc.querySelector('#acg_review .score-overall-people'));
+  const count = Number((countText.match(/[0-9,]+/) || ['0'])[0].replaceAll(',', ''));
+  let distribution = null;
+  const scoreScript = [...doc.querySelectorAll('script')].map(script => script.textContent || '')
+    .find(source => source.includes('new Bahamut.AcgReview'));
+  const scoreMatch = scoreScript?.match(/new Bahamut\.AcgReview\([^,]+,\s*(\d+),\s*(\{[^}]+\})/);
+  if (scoreMatch) {
+    try {
+      const values = JSON.parse(scoreMatch[2]);
+      distribution = [1, 2, 3, 4, 5].map(star => Number(values[String(star)] || 0));
+    } catch (_) { distribution = null; }
+  }
   const intro = doc.querySelector('.data-intro')?.cloneNode(true);
   intro?.querySelectorAll('.link, .link-button, .material-icons, button, script, style')
     .forEach(node => node.remove());
@@ -39,6 +52,9 @@
     title: text(doc.querySelector('.anime_name h1')).replace(/\s*\[[^\]]+\]\s*$/, ''),
     description: text(intro).split(/[＜<](?:製作團隊|制作团队|STAFF|CAST)[＞>]/i)[0].trim(),
     poster: img?.getAttribute('data-src') || img?.getAttribute('src'),
+    ...(Number.isFinite(score) && score >= 0 && score <= 5 && Number.isInteger(count) &&
+        count >= 0 && distribution?.length === 5
+      ? { rating: { value: score, count, distribution } } : {}),
     episodes: [...episodes.values()],
     metadata: [...doc.querySelectorAll('.type-list > li')].map(li => ({
       label: text(li.querySelector('.title')),

@@ -154,7 +154,11 @@ test('detail resolves redirected season links and special episodes without loadi
           <li><a href="?sn=23" data-ani-video-sn="24">Wrong ID</a></li>
           <li><a href="https://attacker.test/animeVideo.php?sn=25">15</a></li>
           <li><a href="animeRef.php?sn=26">第一季</a></li>
-        </ul></section><a href="?sn=27">Related series</a><video autoplay></video>`
+        </ul></section><div id="acg_review">
+          <div class="score-overall-number">4.7</div>
+          <div class="score-overall-people">894人評價</div>
+        </div><script>var acgReview = new Bahamut.AcgReview('#acg_review', 894, {"1":23,"2":15,"3":42,"4":81,"5":733}, 60657, 4);</script>
+        <a href="?sn=27">Related series</a><video autoplay></video>`
     }
   });
   vm.runInContext(fs.readFileSync(folder + 'detail.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
@@ -162,6 +166,8 @@ test('detail resolves redirected season links and special episodes without loadi
   assert.equal(fixture.messages[0].type, 'detail');
   assert.deepEqual(JSON.parse(JSON.stringify(fixture.messages[0].detail.episodes)),
                    [{ id: '20', label: '13' }, { id: '21', label: '14' }, { id: '22', label: 'SP' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.messages[0].detail.rating)),
+                   { value: 4.7, count: 894, distribution: [23, 15, 42, 81, 733] });
   assert.equal(fixture.document.querySelector('video'), null);
   assert.deepEqual(fixture.requests, ['https://ani.gamer.com.tw/animeRef.php?sn=10']);
 });
@@ -259,11 +265,15 @@ function playerFixture() {
   const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
     <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
     <div class="data-intro"><p>故事簡介</p><div class="link">作品資料</div></div>
+    <div id="acg_review"><div class="score-overall-number">4.7</div>
+      <div class="score-overall-people">894人評價</div></div>
+    <script>var acgReview = new Bahamut.AcgReview('#acg_review', 894, {"1":23,"2":15,"3":42,"4":81,"5":733}, 60657, 4);</script>
     <div class="season"><a href="?sn=20">1</a><a href="?sn=21">2</a></div>
     <div id="video-container"><video-js id="ani_video"><video></video><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
     </body></html>`, '/animeVideo.php?sn=20');
   const media = fixture.document.querySelector('video') as any;
   const core = { state: { playingVideo: true, playingAd: false, videoSn: 20 } };
+  const controls: { danmuManager?: any } = {};
   const commands: any[] = [];
   const fault = { code: 0 };
   const levels = [{ height: 720, enabled: true }, { height: 1080, enabled: true }];
@@ -275,8 +285,9 @@ function playerFixture() {
     buffered: { length: 1, end: () => 90 },
   }).map(([key, value]) => [key, { value, writable: true, configurable: true }])));
   (fixture.document.querySelector('#ani_video') as any).player = {
-    usingPlugin: (name: string) => name === 'm3u8',
-    m3u8: () => core, error: () => fault.code ? { code: fault.code } : null,
+    usingPlugin: (name: string) => ['m3u8', 'animePlayer'].includes(name),
+    m3u8: () => core, animePlayer: () => controls,
+    error: () => fault.code ? { code: fault.code } : null,
     qualityLevels: () => levels,
     play: async () => { commands.push(['play']); media.paused = false; },
     pause: () => { commands.push(['pause']); media.paused = true; },
@@ -289,7 +300,7 @@ function playerFixture() {
   fixture.context.setInterval = (callback: () => void) => { tick = callback; return 1; };
   fixture.context.clearInterval = () => { stopped = true; };
   vm.runInContext(fs.readFileSync(folder + 'player.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
-  return { ...fixture, core, media, commands, levels, fault, tick: () => tick(), stopped: () => stopped,
+  return { ...fixture, core, controls, media, commands, levels, fault, tick: () => tick(), stopped: () => stopped,
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
 
@@ -299,6 +310,8 @@ test('native player projects real metadata and uses the official core to gate co
   const state = fixture.messages.find(m => m.type === 'player-state');
   assert.equal(detail.detail.description, '故事簡介');
   assert.equal(detail.detail.episodes.length, 2);
+  assert.equal(detail.detail.rating.value, 4.7);
+  assert.deepEqual(Array.from(detail.detail.rating.distribution), [23, 15, 42, 81, 733]);
   assert.equal(state.videoId, '20');
   assert.equal(state.phase, 'content');
   assert.equal(state.position, 37);
@@ -368,6 +381,280 @@ test('single available quality distinguishes an explicit selection from automati
   assert.equal(fixture.messages.at(-1).quality, 360);
   assert.equal(await fixture.bridge.command('ticket', 'quality', 0), true);
   assert.equal(fixture.messages.at(-1).quality, 0);
+});
+
+function communityFixture(
+  responses: Record<string, string | { html: string; url: string }> = {},
+  pathname = '/',
+) {
+  const fixture = setup(`<html><head></head><body><a class="btn-logout">登出</a></body></html>`,
+    pathname, responses);
+  const identity = { id: 'reader' };
+  const csrfCalls: string[] = [];
+  fixture.context.TextEncoder = TextEncoder;
+  fixture.context.URLSearchParams = URLSearchParams;
+  fixture.context.FormData = FormData;
+  fixture.context.window = {
+    __bahaDocumentNonce: 'ticket',
+    User: { Login: { getUserid: () => identity.id } },
+    Bahamut: { Csrf: class {
+      setCookie() { csrfCalls.push('cookie'); }
+      getJqueryHeaders() { return { 'X-Bahamut-Csrf-Token': 'offline-token' }; }
+    } },
+  };
+  const sent: { url: string; method: string; body: any; headers: any }[] = [];
+  const offlineFetch = fixture.context.fetch;
+  fixture.context.fetch = async (url: string, options: any = {}) => {
+    // This closure is the only transport. It cannot reach the real network.
+    sent.push({ url: String(url), method: options.method || 'GET',
+      body: options.body, headers: options.headers });
+    return offlineFetch(url);
+  };
+  function run(action: string, args: Record<string, any> = {}) {
+    return vm.runInContext(
+      fs.readFileSync(folder + 'community.js', 'utf8')
+        .replaceAll('__BAHA_COMMUNITY_REQUEST__', JSON.stringify({ action, args })),
+      fixture.context,
+    ) as Promise<any>;
+  }
+  return { ...fixture, identity, sent, csrfCalls, run };
+}
+const boardURL = 'https://wall.gamer.com.tw/app/v2/comment_detail.php?service=4&serviceId=20&order=1';
+const rawComment = (id: string, text = '故事 &amp; 心得') => ({
+  id, userid: 'reader', name: '讀者', text, time: '1天前',
+  propic: 'https://avatar2.bahamut.com.tw/reader.png', image: [],
+  likeCount: 3, dislikeCount: 1, isLike: -1, commentCount: '2', isFolded: false,
+});
+const rawBoard = (extra: Record<string, any> = {}) => ({
+  messageId: 123, commentCount: 15, nextPage: 2,
+  comments: [rawComment('1'), rawComment('2')], ...extra,
+});
+
+test('community reads official per-episode comments, exact cursor, sort, replies and folded content', async () => {
+  const fixture = communityFixture({
+    [boardURL]: JSON.stringify(rawBoard()),
+    [boardURL.replace('order=1', 'order=0') + '&nextPage=2']: JSON.stringify(
+      rawBoard({ nextPage: 0, comments: [{ ...rawComment('3'), isFolded: true }] })),
+    'https://wall.gamer.com.tw/app/v1/reply_detail.php?commentId=2':
+      JSON.stringify({ comments: [rawComment('4')] }),
+  });
+  const first = await fixture.run('comments', { videoId: '20', order: 1, page: 0 });
+  assert.equal(first.ok, true);
+  assert.equal(first.messageId, '123');
+  assert.equal(first.nextPage, 2);
+  assert.deepEqual(Array.from(first.comments, (c: any) => c.id), ['2', '1']);
+  assert.equal(first.comments[0].text, '故事 &amp; 心得');
+  assert.equal(first.comments[0].replies, 2);
+  const second = await fixture.run('comments', { videoId: '20', order: 0, page: 2 });
+  assert.equal(second.comments[0].folded, true);
+  const replies = await fixture.run('replies', { commentId: '2' });
+  assert.equal(replies.comments[0].id, '4');
+  assert.ok(fixture.sent.every(r => r.method === 'GET'));
+});
+
+test('community rejects changed endpoint redirects and invalid input without treating errors as empty boards', async () => {
+  const fixture = communityFixture({
+    [boardURL]: { url: 'https://attacker.test/login', html: JSON.stringify(rawBoard()) },
+  });
+  assert.equal((await fixture.run('comments', { videoId: '20', order: 1, page: 0 })).ok, false);
+  assert.equal((await fixture.run('comments', { videoId: '20;alert(1)', order: 1, page: 0 })).code, 'input');
+  assert.equal((await fixture.run('comments', { videoId: '20', order: 9, page: 0 })).code, 'input');
+  assert.equal(fixture.sent.length, 1);
+});
+
+test('offline comment sends correct episode/message/reply, CSRF and text, then awaits acknowledgement', async () => {
+  const fixture = communityFixture({
+    [boardURL]: JSON.stringify(rawBoard()),
+    'https://wall.gamer.com.tw/app/v1/comment_new.php': JSON.stringify({ commentId: 88 }),
+  });
+  const result = await fixture.run('comment-send', {
+    owner: 'reader', videoId: '20', messageId: '123', commentId: '2', text: '  測試\n第二行 <tag>  ',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.id, '88');
+  const request = fixture.sent.at(-1)!;
+  assert.equal(request.method, 'POST');
+  assert.equal(request.body.get('messageId'), '123');
+  assert.equal(request.body.get('commentId'), '2');
+  assert.equal(request.body.get('message'), '測試\n第二行 <tag>');
+  assert.equal(request.headers['X-Bahamut-Csrf-Token'], 'offline-token');
+  assert.deepEqual(fixture.csrfCalls, ['cookie']);
+});
+
+test('offline comment rejects guest, account mismatch, changed board, server failure and duplicate submission', async () => {
+  const fixture = communityFixture({
+    [boardURL]: JSON.stringify(rawBoard()),
+    'https://wall.gamer.com.tw/app/v1/comment_new.php': JSON.stringify({ code: 9, message: '拒絕' }),
+  });
+  const args = { owner: 'reader', videoId: '20', messageId: '123', text: '測試' };
+  assert.equal((await fixture.run('comment-send', { ...args, owner: 'other' })).code, 'login');
+  assert.equal(fixture.sent.length, 0);
+  assert.equal((await fixture.run('comment-send', { ...args, messageId: '999' })).code, 'stale');
+  assert.equal(fixture.sent.filter(r => r.method === 'POST').length, 0);
+  assert.equal((await fixture.run('comment-send', args)).code, 'rejected');
+  fixture.context.window.__bahaCommunityLocks = new Set(['comment:123']);
+  assert.equal((await fixture.run('comment-send', args)).code, 'busy');
+  assert.equal(fixture.context.window.__bahaCommunityLocks.has('comment:123'), true);
+  fixture.document.querySelector('.btn-logout')!.remove();
+  assert.equal((await fixture.run('comment-send', args)).code, 'login');
+});
+
+test('offline comment drops a pending submission when the account or document changes before writing', async () => {
+  for (const change of ['owner', 'document']) {
+    const fixture = communityFixture({ [boardURL]: JSON.stringify(rawBoard()) });
+    const original = fixture.context.fetch;
+    fixture.context.fetch = async (...args: any[]) => {
+      if (change === 'owner') fixture.identity.id = 'another';
+      else fixture.context.window.__bahaDocumentNonce = 'new-document';
+      return original(...args);
+    };
+    const result = await fixture.run('comment-send', {
+      videoId: '20', messageId: '123', text: '測試',
+    });
+    assert.equal(result.code, 'stale');
+    assert.equal(fixture.sent.filter(r => r.method === 'POST').length, 0);
+  }
+});
+
+test('a background sync ticket change preserves a same-document read but still blocks writes', async () => {
+  const fixture = communityFixture({ [boardURL]: JSON.stringify(rawBoard()) });
+  const original = fixture.context.fetch;
+  fixture.context.fetch = async (...args: any[]) => {
+    fixture.context.window.__bahaDocumentNonce = 'background-account-sync';
+    return original(...args);
+  };
+  const result = await fixture.run('comments', { videoId: '20', order: 1, page: 0 });
+  assert.equal(result.ok, true);
+  assert.equal(result.comments.length, 2);
+  assert.equal(fixture.sent.filter(request => request.method === 'POST').length, 0);
+});
+
+test('notifications parse both official feeds, deduplicate episodes and exclude unrelated or unsafe targets', async () => {
+  const html = `<ul><li><img src="https://p2.bahamut.com.tw/10.jpg">
+    <a href="https://ani.gamer.com.tw/animeVideo.php?sn=20">測試動畫 [6] 更新囉！</a>
+    <small>1天前</small></li>
+    <li><a href="https://forum.gamer.com.tw/C.php?sn=20">論壇回覆</a></li>
+    <li><a href="javascript:alert(1)">有新通知</a></li>
+    <li><a href="https://attacker.test/animeVideo.php?sn=22">錯誤來源</a></li></ul>`;
+  const fixture = communityFixture({
+    'https://api.gamer.com.tw/ajax/common/topBar.php?type=light_0': html,
+    'https://api.gamer.com.tw/ajax/common/topBar.php?type=light_1': html +
+      '<li><a href="/animeVideo.php?sn=21">另一部 [3] 更新囉！</a><small>2天前</small></li>',
+  });
+  const result = await fixture.run('notifications');
+  assert.equal(result.ok, true);
+  assert.equal(result.owner, 'reader');
+  assert.equal(result.items.length, 2);
+  assert.equal(result.items[0].videoId, '20');
+  assert.equal(result.items[0].time, '1天前');
+  assert.equal(result.items[0].cover, 'https://p2.bahamut.com.tw/10.jpg');
+  assert.ok(fixture.sent.every(r => r.method === 'GET'));
+});
+
+test('notification target resolves the official series using inert HTML without starting playback', async () => {
+  const fixture = communityFixture({
+    'https://ani.gamer.com.tw/animeVideo.php?sn=20': `
+      <div class="anime_name"><h1>測試動畫 [6]</h1>
+      <button onclick="animefun.toggleGather(500, 10, x)"></button></div>
+      <img class="data-img" src="https://p2.bahamut.com.tw/10.jpg"><video autoplay></video>`,
+  });
+  const result = await fixture.run('notification-target', { videoId: '20' });
+  assert.equal(result.anime.id, '10');
+  assert.equal(result.anime.latestVideoId, '20');
+  assert.equal(fixture.document.querySelector('video'), null);
+});
+
+function danmakuSendFixture() {
+  const fixture = communityFixture({
+    'https://ani.gamer.com.tw/ajax/getCSRFToken.php': 'offline-csrf',
+    'https://ani.gamer.com.tw/ajax/danmuSet.php': JSON.stringify({ sn: 91 }),
+  }, '/animeVideo.php?sn=20');
+  const root = fixture.document.createElement('div');
+  root.id = 'video-container';
+  root.innerHTML = '<video-js id="ani_video"><video></video></video-js>';
+  fixture.document.body.appendChild(root);
+  const media = root.querySelector('video') as any;
+  media.duration = 1200; media.currentTime = 37.8;
+  const inserted: any[] = [];
+  const core = { state: { playingVideo: true, playingAd: false, videoSn: 20 } };
+  const controls = {
+    danmuManager: { danmuPush: (value: any) => value, buildDanmu: (value: any) => inserted.push(value) }
+  };
+  (root.querySelector('#ani_video') as any).player = {
+    usingPlugin: (name: string) => ['m3u8', 'animePlayer'].includes(name),
+    m3u8: () => core, animePlayer: () => controls,
+  };
+  const args = { owner: 'reader', videoId: '20', text: '測試彈幕',
+    color: '#FFFFFF', position: 0, size: 1 };
+  return { ...fixture, core, media, inserted, args };
+}
+
+test('offline danmaku send uses current content time, official token, formatting and acknowledged display', async () => {
+  const fixture = danmakuSendFixture();
+  const result = await fixture.run('danmaku-send', fixture.args);
+  assert.equal(result.ok, true);
+  const body = fixture.sent.at(-1)!.body;
+  assert.equal(body.get('sn'), '20');
+  assert.equal(body.get('time'), '378');
+  assert.equal(body.get('token'), 'offline-csrf');
+  assert.equal(body.get('content'), '測試彈幕');
+  assert.equal(body.get('color'), '#FFFFFF');
+  assert.equal(body.get('position'), '0');
+  assert.equal(fixture.inserted.length, 1);
+});
+
+test('offline danmaku enforces 60 UTF-8 bytes and rejects ads, stale episodes, suspension and server rejection', async () => {
+  const fixture = danmakuSendFixture();
+  assert.equal((await fixture.run('danmaku-send', { ...fixture.args, text: '字'.repeat(21) })).code, 'input');
+  assert.equal(fixture.sent.length, 0);
+  assert.equal((await fixture.run('danmaku-send', { ...fixture.args, videoId: '21' })).ok, false);
+  fixture.core.state.playingAd = true;
+  assert.equal((await fixture.run('danmaku-send', fixture.args)).ok, false);
+  fixture.core.state.playingAd = false;
+  fixture.context.window.__bahaMediaSuspended = true;
+  assert.equal((await fixture.run('danmaku-send', fixture.args)).ok, false);
+  fixture.context.window.__bahaMediaSuspended = false;
+  const original = fixture.context.fetch;
+  fixture.context.fetch = async (...args: any[]) => {
+    if (String(args[0]).includes('danmuSet.php')) {
+      return { ok: true, url: args[0], text: async () => JSON.stringify({ error: 1, msg: '拒絕' }) };
+    }
+    return original(...args);
+  };
+  assert.equal((await fixture.run('danmaku-send', fixture.args)).code, 'rejected');
+  assert.equal(fixture.inserted.length, 0);
+});
+
+test('offline danmaku rechecks ad state after CSRF and never posts after entering an advertisement', async () => {
+  const fixture = danmakuSendFixture();
+  const original = fixture.context.fetch;
+  fixture.context.fetch = async (...args: any[]) => {
+    fixture.core.state.playingAd = true;
+    return original(...args);
+  };
+  assert.equal((await fixture.run('danmaku-send', fixture.args)).ok, false);
+  assert.equal(fixture.sent.filter(r => r.method === 'POST').length, 0);
+});
+
+test('danmaku display preferences apply to the official renderer and reject stale configuration', () => {
+  const fixture = playerFixture();
+  const changes: any[] = [];
+  fixture.controls.danmuManager = {
+    setDanmuOpacityRate: (value: any) => changes.push(['opacity', value]),
+    setDanmuSizeRate: (value: any) => changes.push(['scale', value]),
+    setDanmuModeAllow: (mode: any, value: any) => changes.push([mode, value]),
+    setDanmuProcess: (value: any) => changes.push(['enabled', value]),
+    cleanAll: () => changes.push(['clean']),
+  };
+  const settings = { enabled: true, opacity: .6, scale: 1.2, rolling: true, top: false, bottom: true };
+  assert.equal(fixture.bridge.configure('ticket', settings), true);
+  assert.ok(changes.some(([key, value]) => key === 'opacity' && value === .6));
+  assert.ok(changes.some(([key, value]) => key === 'top' && value === false));
+  const count = changes.length;
+  fixture.tick();
+  assert.equal(changes.length, count);
+  assert.equal(fixture.bridge.configure('old-ticket', settings), false);
+  assert.equal(fixture.bridge.configure('ticket', { ...settings, scale: 99 }), false);
 });
 
 test('favorite action uses the official control and reports only verified resulting state', async () => {

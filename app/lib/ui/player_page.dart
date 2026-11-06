@@ -6,6 +6,9 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/playback_state.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'comments_preview.dart';
+import 'danmaku_panel.dart';
+import 'synopsis_section.dart';
 
 /// The complete app playback page. The session-owned video surface is passed
 /// in so changing layouts never creates a second official player or session.
@@ -20,7 +23,7 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> {
   AppStore get store => widget.store;
   double? _scrub;
-  bool _fullscreen = false, _expandedSynopsis = false;
+  bool _fullscreen = false;
   bool _controlsVisible = true;
   String _controlState = '';
   Timer? _hideTimer;
@@ -215,28 +218,22 @@ class _PlayerPageState extends State<PlayerPage> {
               ),
             if (detail != null && detail.description.isNotEmpty) ...[
               const SizedBox(height: 30),
-              SectionHeading(store.t('synopsis')),
-              const SizedBox(height: 14),
-              Text(
-                detail.description,
-                maxLines: _expandedSynopsis ? null : 4,
-                overflow: _expandedSynopsis
-                    ? TextOverflow.visible
-                    : TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: secondary(context),
-                  height: 1.7,
-                  fontSize: 14,
-                ),
+              SynopsisSection(
+                store: store,
+                title: anime.title,
+                description: detail.description,
               ),
-              CupertinoButton(
-                padding: EdgeInsets.zero,
-                onPressed: () =>
-                    setState(() => _expandedSynopsis = !_expandedSynopsis),
-                child: Text(
-                  store.t(_expandedSynopsis ? 'showLess' : 'showMore'),
-                  style: const TextStyle(fontSize: 13),
-                ),
+            ],
+            if (store.playingVideoId != null) ...[
+              const SizedBox(height: 28),
+              CompactCommentsPreview(
+                key: ValueKey('player-board-${store.playingVideoId}'),
+                store: store,
+                videoId: store.playingVideoId!,
+                title: anime.title,
+                rating: detail?.rating,
+                episodes: detail?.episodes ?? const [],
+                episodeLabel: store.playingEpisodeLabel,
               ),
             ],
             if (detail != null && detail.metadata.isNotEmpty) ...[
@@ -328,6 +325,23 @@ class _PlayerPageState extends State<PlayerPage> {
                           'fullScreen',
                           () => store.setPlayerFullscreen(true),
                         ),
+                      const SizedBox(width: 8),
+                      GlassIconButton(
+                        key: const ValueKey('player-danmaku-button'),
+                        size: 36,
+                        iconSize: 19,
+                        useOwnLayer: true,
+                        platformViewBackdrop: true,
+                        settings: mediaGlass.copyWith(
+                          backerColor: const Color(0x66000000),
+                        ),
+                        semanticLabel: store.t('danmakuSettings'),
+                        icon: const Icon(
+                          CupertinoIcons.text_bubble,
+                          color: Colors.white,
+                        ),
+                        onPressed: () => showDanmakuPanel(context, store),
+                      ),
                       const SizedBox(width: 8),
                       _videoAction(
                         CupertinoIcons.ellipsis,
@@ -606,11 +620,9 @@ class _PlayerPageState extends State<PlayerPage> {
             CupertinoActionSheetAction(
               onPressed: () {
                 Navigator.pop(sheet);
-                store.controlPlayer('danmaku', state.danmaku ? 0 : 1);
+                showDanmakuPanel(context, store);
               },
-              child: Text(
-                store.t(state.danmaku ? 'hideDanmaku' : 'showDanmaku'),
-              ),
+              child: Text(store.t('danmakuSettings')),
             ),
           CupertinoActionSheetAction(
             onPressed: () {
@@ -700,6 +712,21 @@ class _PlayerPageState extends State<PlayerPage> {
                 ),
               ),
               const SizedBox(width: 16),
+              GlassIconButton(
+                key: const ValueKey('player-danmaku-button'),
+                useOwnLayer: true,
+                platformViewBackdrop: true,
+                settings: mediaGlass.copyWith(
+                  backerColor: const Color(0x66000000),
+                ),
+                semanticLabel: store.t('danmakuSettings'),
+                onPressed: () => showDanmakuPanel(context, store),
+                icon: const Icon(
+                  CupertinoIcons.text_bubble,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
               GlassIconButton(
                 useOwnLayer: true,
                 platformViewBackdrop: true,
