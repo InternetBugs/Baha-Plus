@@ -18,18 +18,51 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
-  final _titles = List.generate(4, (_) => GlassLargeTitleController());
+class _AppRootState extends State<AppRoot>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+  final _titles = List.generate(5, (_) => GlassLargeTitleController());
   final _search = TextEditingController();
+  late final AnimationController _tabAnimation;
+  late int _lastTab;
+  double _tabDirection = 1;
   AppStore get store => widget.store;
 
   @override
   void initState() {
     super.initState();
+    _lastTab = store.tab;
+    _tabAnimation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      value: 1,
+    );
+    store.addListener(_tabChanged);
     WidgetsBinding.instance.addObserver(this);
     final state = WidgetsBinding.instance.lifecycleState;
     if (state != null) {
       unawaited(store.setApplicationActive(state == AppLifecycleState.resumed));
+    }
+  }
+
+  void _tabChanged() {
+    if (_lastTab == store.tab) return;
+    _tabDirection = store.tab > _lastTab ? 1 : -1;
+    _lastTab = store.tab;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _tabAnimation.value = 1;
+    } else {
+      _tabAnimation.forward(from: 0);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AppRoot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != store) {
+      oldWidget.store.removeListener(_tabChanged);
+      store.addListener(_tabChanged);
+      _lastTab = store.tab;
+      _tabAnimation.value = 1;
     }
   }
 
@@ -51,11 +84,6 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     expandedColor: const Color(0xfff2f2f7),
     expandedDarkColor: const Color(0xff111113),
     builder: (_) => AccountPage(store: store),
-  );
-
-  void _history() => Navigator.push(
-    context,
-    CupertinoPageRoute<void>(builder: (_) => HistoryPage(store: store)),
   );
 
   void _detail(Anime anime) {
@@ -119,7 +147,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   );
 
   Widget _native(BuildContext context) {
-    final keys = ['explore', 'schedule', 'library', 'search'];
+    final keys = ['explore', 'schedule', 'library', 'watchHistory', 'search'];
     final title = store.t(keys[store.tab]);
     final controller = _titles[store.tab];
     final bottomSpace = MediaQuery.paddingOf(context).bottom + 110;
@@ -130,17 +158,19 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         parent: AlwaysScrollableScrollPhysics(),
       ),
       slivers: [
+        CupertinoSliverRefreshControl(
+          onRefresh: store.tab == 3 ? store.syncAccount : store.refreshCatalog,
+        ),
         SliverToBoxAdapter(
           child: SizedBox(height: MediaQuery.paddingOf(context).top + 44),
         ),
-        CupertinoSliverRefreshControl(onRefresh: store.refreshCatalog),
         GlassLargeTitle(
           text: title,
           controller: controller,
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
           trailing: AccountAvatar(store: store, onTap: _account),
         ),
-        if (store.tab == 3 || store.tab == 2)
+        if (store.tab == 4 || store.tab == 2)
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -167,8 +197,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
               ? HomeContent(
                   store: store,
                   openDetail: _detail,
-                  openHistory: _history,
+                  openHistory: () => store.selectTab(3),
                 )
+              : store.tab == 3
+              ? HistoryContent(store: store)
               : SliverToBoxAdapter(
                   child: switch (store.tab) {
                     1 => ScheduleContent(store: store, openDetail: _detail),
@@ -177,7 +209,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
                       openDetail: _detail,
                       connectAccount: store.connectAccount,
                     ),
-                    3 => SearchContent(store: store, openDetail: _detail),
+                    4 => SearchContent(store: store, openDetail: _detail),
                     _ => const SizedBox.shrink(),
                   },
                 ),
@@ -205,6 +237,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         ],
       ),
       bottomBar: GlassTabBar.bottom(
+        key: const ValueKey('main-tab-bar'),
         settings:
             (Theme.of(context).brightness == Brightness.dark
                     ? LiquidGlassSettings.ios27Dark
@@ -241,18 +274,35 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
             label: store.t('library'),
           ),
           GlassTab(
+            icon: const Icon(CupertinoIcons.clock),
+            label: store.t('watchHistory'),
+          ),
+          GlassTab(
             icon: const Icon(CupertinoIcons.search),
             label: store.t('search'),
           ),
         ],
       ),
-      body: body,
+      body: AnimatedBuilder(
+        animation: _tabAnimation,
+        child: body,
+        builder: (context, child) {
+          final progress = Curves.easeOutCubic.transform(_tabAnimation.value);
+          return Transform.translate(
+            key: const ValueKey('tab-page-transition'),
+            offset: Offset(_tabDirection * 24 * (1 - progress), 0),
+            child: Opacity(opacity: .65 + .35 * progress, child: child),
+          );
+        },
+      ),
     );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    store.removeListener(_tabChanged);
+    _tabAnimation.dispose();
     _search.dispose();
     for (final title in _titles) {
       title.dispose();

@@ -2,7 +2,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
-import 'catalog_pages.dart';
 import 'chrome.dart';
 
 class AccountPage extends StatelessWidget {
@@ -95,30 +94,10 @@ class AccountPage extends StatelessWidget {
           ]),
           const SizedBox(height: 22),
           _group(context, [
-            _row(
-              context,
-              store.t('syncAccount'),
-              CupertinoIcons.arrow_2_circlepath,
-              () => _connect(context),
-            ),
             _row(context, store.t('favorites'), CupertinoIcons.bookmark, () {
               Navigator.pop(context);
               store.selectTab(2, filter: 'favorites');
             }, value: store.accountSynced ? '${store.favorites.length}' : null),
-            _row(context, store.t('history'), CupertinoIcons.clock, () {
-              Navigator.push(
-                context,
-                CupertinoPageRoute<void>(
-                  builder: (_) => HistoryPage(store: store),
-                ),
-              );
-            }),
-            _row(
-              context,
-              store.t('manageAccount'),
-              CupertinoIcons.person_crop_circle,
-              () => _connect(context),
-            ),
             _row(context, store.t('openOfficial'), CupertinoIcons.globe, () {
               Navigator.pop(context);
               store.openOfficial();
@@ -133,29 +112,6 @@ class AccountPage extends StatelessWidget {
                   store.openOfficial();
                 },
               ),
-          ]),
-          const SizedBox(height: 28),
-          _group(context, [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-              child: Row(
-                children: [
-                  _shortcut(store.t('favorites'), CupertinoIcons.bookmark, () {
-                    Navigator.pop(context);
-                    store.selectTab(2, filter: 'favorites');
-                  }),
-                  _shortcut(
-                    store.t('syncAccount'),
-                    CupertinoIcons.arrow_2_circlepath,
-                    () => _connect(context),
-                  ),
-                  _shortcut(store.t('schedule'), CupertinoIcons.calendar, () {
-                    Navigator.pop(context);
-                    store.selectTab(1);
-                  }),
-                ],
-              ),
-            ),
           ]),
           const SizedBox(height: 28),
           _sectionLabel(context, store.t('preferences')),
@@ -281,24 +237,6 @@ class AccountPage extends StatelessWidget {
     ),
   );
 
-  Widget _shortcut(String title, IconData icon, VoidCallback action) =>
-      Expanded(
-        child: CupertinoButton(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          onPressed: action,
-          child: Column(
-            children: [
-              Icon(icon, color: brandBlue, size: 24),
-              const SizedBox(height: 10),
-              Text(
-                title,
-                style: const TextStyle(color: brandBlue, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      );
-
   void _language(BuildContext context) => showCupertinoModalPopup<void>(
     context: context,
     builder: (sheet) => CupertinoActionSheet(
@@ -337,59 +275,6 @@ class AccountPage extends StatelessWidget {
       cancelButton: CupertinoActionSheetAction(
         onPressed: () => Navigator.pop(sheet),
         child: Text(store.t('close')),
-      ),
-    ),
-  );
-}
-
-class HistoryPage extends StatelessWidget {
-  const HistoryPage({required this.store, super.key});
-  final AppStore store;
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
-    builder: (context, child) => GlassScaffold(
-      extendBody: false,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      statusBarStyle: GlassStatusBarStyle.auto,
-      appBar: GlassAppBar(
-        title: Text(store.t('history')),
-        leading: GlassIconButton(
-          semanticLabel: store.t('back'),
-          icon: const Icon(CupertinoIcons.chevron_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          if (store.history.isEmpty) ...[
-            Text(store.t('historyHint')),
-            const SizedBox(height: 24),
-            GlassButton.custom(
-              shape: const LiquidRoundedRectangle(borderRadius: 22),
-              width: 200,
-              height: 44,
-              onTap: () {
-                Navigator.popUntil(context, (route) => route.isFirst);
-                store.connectAccount();
-              },
-              child: Text(store.t('syncAccount')),
-            ),
-          ],
-          for (final entry in store.history) ...[
-            GestureDetector(
-              onTap: () {
-                Navigator.popUntil(context, (route) => route.isFirst);
-                store.continueWatching(entry);
-              },
-              child: IgnorePointer(
-                child: ContinueCard(store: store, entry: entry),
-              ),
-            ),
-            const SizedBox(height: 14),
-          ],
-        ],
       ),
     ),
   );

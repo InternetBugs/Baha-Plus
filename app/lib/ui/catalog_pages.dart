@@ -362,6 +362,58 @@ class ContinueCard extends StatelessWidget {
   );
 }
 
+class HistoryContent extends StatelessWidget {
+  const HistoryContent({required this.store, super.key});
+  final AppStore store;
+
+  @override
+  Widget build(BuildContext context) {
+    if (store.history.isEmpty) {
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 54),
+          child: Column(
+            children: [
+              if (store.busy)
+                const CupertinoActivityIndicator(radius: 16)
+              else
+                Icon(CupertinoIcons.clock, size: 48, color: secondary(context)),
+              const SizedBox(height: 20),
+              Text(
+                store.busy
+                    ? store.t('loading')
+                    : store.notice == store.t('accountSyncError')
+                    ? store.notice!
+                    : store.t(
+                        store.accountSynced ? 'noHistory' : 'historyHint',
+                      ),
+                textAlign: TextAlign.center,
+              ),
+              if (!store.accountSynced && !store.busy) ...[
+                const SizedBox(height: 24),
+                GlassButton.custom(
+                  shape: const LiquidRoundedRectangle(borderRadius: 22),
+                  width: 225,
+                  height: 46,
+                  onTap: store.connectAccount,
+                  child: Text(store.t('connectAccount')),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+    return SliverList.builder(
+      itemCount: store.history.length,
+      itemBuilder: (context, index) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: ContinueCard(store: store, entry: store.history[index]),
+      ),
+    );
+  }
+}
+
 class SearchContent extends StatelessWidget {
   const SearchContent({
     required this.store,

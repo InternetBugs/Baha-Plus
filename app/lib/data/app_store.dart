@@ -122,6 +122,7 @@ class AppStore extends ChangeNotifier {
   bool _desiredFavorite = false, _disposed = false;
   bool _applicationActive = true;
   Timer? _deadline;
+  String? _accountSyncDocument;
 
   String t(String key) => dictionaries[language]?[key] ?? key;
   bool get simplified => language == 'zh-Hans';
@@ -155,6 +156,9 @@ class AppStore extends ChangeNotifier {
   Future<void> setApplicationActive(bool active) async {
     if (_applicationActive == active) return;
     _applicationActive = active;
+    if (active && !browserVisible && !busy && _portal != null) {
+      await syncAccount();
+    }
     if (!browserVisible || !showsPlayer) return;
     final document = operation.id;
     try {
@@ -241,6 +245,9 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       query = '';
     }
     _emit();
+    if (value == 3 && !browserVisible && !busy && _portal != null) {
+      unawaited(syncAccount());
+    }
   }
 
   Future<void> setLanguage(String value) async {
@@ -394,7 +401,10 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> closeBrowser() async {
     final document = operation.id;
-    final refreshAccount = accountNeedsRefresh;
+    final refreshAccount =
+        accountNeedsRefresh ||
+        operation.intent == BrowserIntent.account ||
+        operation.intent == BrowserIntent.accountRefresh;
     browserVisible = false;
     playerFullscreen = false;
     busy = false;
@@ -433,22 +443,23 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   Future<void> goBack() async => _portal?.goBack();
 
   Future<void> syncAccount() async {
+    if (showsPlayer ||
+        (busy &&
+            operation.intent == BrowserIntent.accountRefresh &&
+            _accountSyncDocument == operation.id)) {
+      return;
+    }
     if (browserUri == null || !OfficialSite.trustedOrigin(browserUri!)) {
-      if (browserVisible) {
-        browserTitle = t('officialAccount');
-        await _load(
-          OfficialSite.home.resolve('mygather.php'),
-          BrowserIntent.account,
-          visible: true,
-        );
-        return;
-      }
-      busy = false;
-      notice = t('accountHint');
-      _emit();
+      browserTitle = t('officialAccount');
+      await _load(
+        OfficialSite.home.resolve('mygather.php'),
+        browserVisible ? BrowserIntent.account : BrowserIntent.accountRefresh,
+        visible: browserVisible,
+      );
       return;
     }
     _begin(BrowserIntent.accountRefresh);
+    _accountSyncDocument = operation.id;
     notice = null;
     busy = true;
     _armDeadline();

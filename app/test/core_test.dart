@@ -228,6 +228,64 @@ void main() {
   );
 
   test(
+    'account data updates automatically on history entry and foreground without duplicate requests',
+    () async {
+      final store = await AppStore.create(storage: MemoryStorage());
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      store.updateNavigation(OfficialSite.home, canGoBack: false);
+      Future<void> finish() => store.receive(
+        jsonEncode({
+          'type': 'account-synced',
+          'requestId': store.operation.id,
+          'favorites': [],
+          'history': [],
+        }),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      await store.syncAccount();
+      await finish();
+      final before = portal.scripts.length;
+      store.selectTab(3);
+      expect(portal.scripts.length, before + 1);
+      store.selectTab(3);
+      await store.syncAccount();
+      expect(portal.scripts.length, before + 1);
+      await finish();
+      await store.setApplicationActive(false);
+      await store.setApplicationActive(true);
+      expect(portal.scripts.length, before + 2);
+      await finish();
+      expect(store.accountSynced, isTrue);
+    },
+  );
+
+  test(
+    'closing the login page automatically returns to the official account for hidden sync',
+    () async {
+      final store = await AppStore.create(storage: MemoryStorage());
+      addTearDown(store.dispose);
+      final portal = FakePortal();
+      await store.attach(portal);
+      await store.connectAccount();
+      store.updateNavigation(
+        Uri.parse('https://user.gamer.com.tw/login.php'),
+        canGoBack: true,
+      );
+      await store.closeBrowser();
+      expect(store.browserVisible, isFalse);
+      expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
+      expect(store.operation.intent, BrowserIntent.accountRefresh);
+      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
+      expect(portal.scripts.last, contains("post({type:'account-guest'})"));
+    },
+  );
+
+  test(
     'official account profile validates public avatar URLs and clears with the account session',
     () async {
       const profile = {

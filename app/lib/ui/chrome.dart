@@ -22,14 +22,25 @@ class Artwork extends StatelessWidget {
   final String url;
   final double? width, height;
   @override
-  Widget build(BuildContext context) => CachedNetworkImage(
-    imageUrl: url,
-    width: width,
-    height: height,
-    fit: BoxFit.cover,
-    fadeInDuration: const Duration(milliseconds: 180),
-    placeholder: (context, url) => _placeholder(context),
-    errorWidget: (context, url, error) => _placeholder(context),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final displayWidth =
+          width ?? (constraints.hasBoundedWidth ? constraints.maxWidth : null);
+      return CachedNetworkImage(
+        imageUrl: url,
+        width: width,
+        height: height,
+        memCacheWidth: displayWidth == null
+            ? null
+            : (displayWidth * MediaQuery.devicePixelRatioOf(context))
+                  .ceil()
+                  .clamp(1, 2048),
+        fit: BoxFit.cover,
+        fadeInDuration: const Duration(milliseconds: 180),
+        placeholder: (context, url) => _placeholder(context),
+        errorWidget: (context, url, error) => _placeholder(context),
+      );
+    },
   );
 
   Widget _placeholder(BuildContext context) => ColoredBox(

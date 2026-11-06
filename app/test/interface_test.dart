@@ -55,7 +55,7 @@ void main() {
     tester,
   ) async {
     final store = await launch(tester);
-    store.selectTab(3);
+    store.selectTab(4);
     await frames(tester);
     expect(find.text('為你推薦'), findsOneWidget);
     await tester.enterText(find.byType(EditableText), 'BahaNoMatch');
@@ -161,13 +161,124 @@ void main() {
     await frames(tester);
     expect(find.text(store.t('officialAccount')), findsOneWidget);
     expect(find.text(store.t('localProfile')), findsOneWidget);
-    expect(find.text(store.t('syncAccount')), findsNWidgets(2));
+    expect(find.text(store.t('syncAccount')), findsNothing);
+    expect(find.text(store.t('favorites')), findsOneWidget);
+    expect(find.text(store.t('manageAccount')), findsNothing);
+    expect(find.text(store.t('history')), findsNothing);
     expect(find.byType(GlassModalSheet), findsOneWidget);
     await tester.tap(find.bySemanticsLabel(store.t('close')));
     await frames(tester);
     expect(find.byType(GlassModalSheet), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'history tab distinguishes guest and synced empty states and resumes the cloud episode',
+    (tester) async {
+      final store = await launch(tester);
+      store.catalog = const Catalog(
+        items: [
+          Anime(
+            id: '10',
+            title: 'Catalog Anime',
+            cover: 'https://p2.bahamut.com.tw/10.jpg',
+          ),
+        ],
+      );
+      final tabs = find.byType(GlassTabBar);
+      expect(tester.widget<GlassTabBar>(tabs).tabs.length, 5);
+      await tester.tap(
+        find.descendant(of: tabs, matching: find.text(store.t('watchHistory'))),
+      );
+      await frames(tester);
+      expect(store.tab, 3);
+      expect(find.text(store.t('historyHint')), findsOneWidget);
+      expect(find.text(store.t('connectAccount')), findsOneWidget);
+      final portal = FakePortal();
+      await store.attach(portal);
+      store.updateNavigation(
+        OfficialSite.home.resolve('mygather.php'),
+        canGoBack: false,
+      );
+      Future<void> synced(List<Map<String, dynamic>> history) async {
+        await store.syncAccount();
+        await store.receive(
+          jsonEncode({
+            'type': 'account-synced',
+            'requestId': store.operation.id,
+            'favorites': [],
+            'history': history,
+          }),
+          origin: OfficialSite.home,
+          source: OfficialSite.home.resolve('mygather.php'),
+          isMainFrame: true,
+        );
+        await frames(tester);
+      }
+
+      await synced([]);
+      expect(find.text(store.t('noHistory')), findsOneWidget);
+      expect(find.text(store.t('historyHint')), findsNothing);
+      expect(find.text(store.t('syncAccount')), findsNothing);
+      final before = portal.scripts.length;
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
+      await frames(tester);
+      expect(portal.scripts.length, greaterThan(before));
+      expect(portal.scripts.last, contains('account-synced'));
+      await synced([
+        {
+          'anime': {
+            'id': '10',
+            'title': 'Cloud History Anime',
+            'cover': 'https://p2.bahamut.com.tw/10.jpg',
+            'latestVideoId': '21',
+            'sections': [],
+          },
+          'videoId': '20',
+          'episodeLabel': '1',
+          'progress': .4,
+          'progressLabel': '08:00',
+        },
+      ]);
+      expect(store.history.length, 1);
+      expect(find.text('Cloud History Anime'), findsOneWidget);
+      expect(find.text('08:00'), findsOneWidget);
+      await tester.tap(find.text('Cloud History Anime'));
+      await frames(tester);
+      expect(portal.visited.last, OfficialSite.video('20'));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'tab pages slide in the selected direction and keep one tab bar',
+    (tester) async {
+      final store = await launch(tester);
+      final bar = tester.state(find.byType(GlassTabBar));
+      store.selectTab(4);
+      await tester.pump();
+      final moving = find.byKey(const ValueKey('tab-page-transition'));
+      expect(
+        tester.widget<Transform>(moving).transform.storage[12],
+        greaterThan(0),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      final midway = tester.widget<Transform>(moving).transform.storage[12];
+      expect(midway, greaterThan(0));
+      expect(midway, lessThan(24));
+      store.selectTab(0);
+      await tester.pump();
+      expect(
+        tester.widget<Transform>(moving).transform.storage[12],
+        lessThan(0),
+      );
+      await frames(tester);
+      expect(tester.widget<Transform>(moving).transform.storage[12], 0);
+      expect(tester.state(find.byType(GlassTabBar)), same(bar));
+      expect(find.byType(CustomScrollView), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'account card and header use the official profile and clear after logout',

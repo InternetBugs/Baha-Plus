@@ -22,7 +22,7 @@ function setup(html: string, pathname = '/mygather.php',
       assert.notEqual(response, undefined, `Unexpected URL: ${resolved}`);
       const body = typeof response === 'string' ? response : response.html;
       const responseURL = typeof response === 'string' ? resolved : response.url;
-      return { ok: true, url: responseURL, text: async () => body };
+      return { ok: true, url: responseURL, text: async () => body, json: async () => JSON.parse(body) };
     },
   });
   return { context, document: window.document, messages, requests };
@@ -32,6 +32,10 @@ const card = (id: string, title = '測試動畫') => `
 <div onclick="animefun.toggleGather(500, ${id}, x)"></div>
 <img class="theme-img" data-src="https://p2.bahamut.com.tw/${id}.jpg">
 <p class="theme-name">${title}</p><span class="theme-number">共5集</span></a>`;
+const historyRecord = (animeSn = 10, videoSn = 20, point = 960) => ({
+  animeSn, videoSn, title: '測試動畫', cover: `https://p2.bahamut.com.tw/${animeSn}.jpg`,
+  episode: '5', duration: 25, breakPoint: { breakPoint: point },
+});
 
 test('native catalog adapter preserves series/video identity, schedule and portrait across sections', () => {
   const fixture = setup(`<div id="blockVideoInSeason"><div data-animesn="10">
@@ -155,11 +159,8 @@ test('native account adapter reads paginated cloud favorites and exact cloud vie
     <div class="page_number"><a href="mygather.php?page=2">2</a></div>`,
   '/mygather.php', {
     'https://ani.gamer.com.tw/mygather.php?page=2': card('11'),
-    'https://ani.gamer.com.tw/viewList.php?u=fixture-user': `<div class="history-wrapper">
-      <div class="user-watch-list"><div class="anime-card"><img class="theme-img" data-src="https://p2.bahamut.com.tw/10.jpg">
-      <p class="history-anime-title">測試動畫</p><p class="history-lastwatch">觀看至 <span class="user-lastwatch">5</span> 集</p>
-      <p class="history-lastwatch">觀看至 14 分 41 秒</p><div class="progress" style="width:64%"></div>
-      <div data-anime-sn="10"></div><a class="play-btn" href="animeVideo.php?sn=20">播放</a></div></div></div>`,
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [historyRecord()], totalPage: 1 } }),
   });
   await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
   // The resource's async IIFE is followed by a true sentinel, as required by
@@ -173,8 +174,49 @@ test('native account adapter reads paginated cloud favorites and exact cloud vie
   assert.equal(fixture.messages[0].favorites.length, 2);
   assert.equal(fixture.messages[0].history[0].videoId, '20');
   assert.equal(fixture.messages[0].history[0].progress, 0.64);
-  assert.equal(fixture.messages[0].history[0].progressLabel, '觀看至 14 分 41 秒');
+  assert.equal(fixture.messages[0].history[0].progressLabel, '16:00');
   assert.equal(fixture.requests.length, 2);
+});
+
+test('cloud history loads API pages instead of treating an inert HTML wrapper as empty', async () => {
+  const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a><div class="history-wrapper"></div>`,
+  '/mygather.php', {
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [historyRecord()], totalPage: 2 } }),
+    'https://api.gamer.com.tw/anime/v3/history.php?page=2':
+      JSON.stringify({ data: { history: [
+        historyRecord(), historyRecord(11, 21, -1), { ...historyRecord(12, 22), breakPoint: {} },
+      ], totalPage: 2 } }),
+  });
+  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  assert.equal(fixture.messages[0].type, 'account-synced');
+  assert.equal(fixture.messages[0].history.length, 3);
+  assert.equal(fixture.messages[0].history[1].progress, 1);
+  assert.equal(fixture.messages[0].history[1].progressLabel, '觀看結束');
+  assert.equal(fixture.messages[0].history[2].progress, undefined);
+  assert.equal(fixture.messages[0].history[2].progressLabel, undefined);
+  assert.equal(fixture.requests.length, 2);
+});
+
+test('malformed cloud history reports a sync error instead of an empty account', async () => {
+  const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1': JSON.stringify({ error: { code: 401 } }),
+  });
+  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
+});
+
+test('an official empty history response is accepted without fabricating records', async () => {
+  const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [], totalPage: 0 } }),
+  });
+  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  assert.equal(fixture.messages[0].type, 'account-synced');
+  assert.deepEqual(fixture.messages[0].history, []);
 });
 
 test('account profile never pairs one user identity with another user history', async () => {

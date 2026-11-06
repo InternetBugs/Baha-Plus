@@ -48,6 +48,47 @@
     if (!response.ok || new URL(response.url).origin !== location.origin) throw Error('Account page unavailable');
     return new DOMParser().parseFromString(await response.text(),'text/html');
   }
+  async function getHistory() {
+    var history = [], seen = new Set(), totalPage = 1;
+    for (var page = 1; page <= totalPage; page++) {
+      var url = new URL('/anime/v3/history.php', 'https://api.gamer.com.tw');
+      url.searchParams.set('page', String(page));
+      var controller = new AbortController();
+      var timer = setTimeout(function(){controller.abort();},12000);
+      var response, body;
+      try {
+        response = await fetch(url.href,{credentials:'include',signal:controller.signal});
+        if (!response.ok || new URL(response.url).origin !== url.origin ||
+            new URL(response.url).pathname !== url.pathname) throw Error('History unavailable');
+        body = await response.json();
+      } finally { clearTimeout(timer); }
+      var data = body && body.data;
+      if (!data || !Array.isArray(data.history) ||
+          !Number.isInteger(data.totalPage) || data.totalPage < 0 || data.totalPage > 50) throw Error('History format changed');
+      totalPage = data.totalPage;
+      data.history.forEach(function(item) {
+        var id = String(item.animeSn), videoId = String(item.videoSn);
+        if (!/^\d{1,10}$/.test(id) || !/^\d{1,10}$/.test(videoId) ||
+            typeof item.title !== 'string' || !item.title.trim() ||
+            typeof item.episode !== 'string') throw Error('Invalid history record');
+        var cover = new URL(item.cover);
+        if (cover.protocol !== 'https:' || !cover.hostname.endsWith('.bahamut.com.tw') ||
+            cover.username || cover.password || (cover.port && cover.port !== '443')) throw Error('Invalid history artwork');
+        if (seen.has(id)) return;
+        seen.add(id);
+        var point = item.breakPoint && item.breakPoint.breakPoint;
+        if ((point != null && (!Number.isFinite(point) || point < -1)) ||
+            !Number.isFinite(item.duration) || item.duration < 0) throw Error('Invalid history progress');
+        var progress = point == null ? undefined : point === -1 ? 1 : item.duration > 0 ? Math.min(1,point/(item.duration*60)) : undefined;
+        var seconds = Math.max(0, Math.floor(point));
+        var label = point === -1 ? '觀看結束' : point > 0 ? Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0') : undefined;
+        history.push({anime:{id:id,title:item.title.trim(),cover:cover.href,poster:cover.href,sections:[]},
+          videoId:videoId,episodeLabel:item.episode,progress:progress,progressLabel:label});
+      });
+      if (history.length > 1000) throw Error('History exceeds account limit');
+    }
+    return history;
+  }
   try {
     var first = location.pathname === '/mygather.php' ? document : await getPage('/mygather.php');
     if (!first.querySelector('.theme-title')?.textContent.includes('我的動畫')) throw Error('Collection page unavailable');
@@ -64,27 +105,11 @@
     }
     var historyLink = document.querySelector('a[href*="viewList.php"]');
     var historyUrl = historyLink && new URL(historyLink.getAttribute('href'),location.origin);
-    if (!historyUrl || !historyUrl.searchParams.get('u')) throw Error('History link unavailable');
+    if (!historyUrl || historyUrl.origin !== location.origin ||
+        historyUrl.pathname !== '/viewList.php' || !historyUrl.searchParams.get('u')) throw Error('History link unavailable');
     var profile = collectProfile(document) || collectProfile(first);
     if (profile && profile.id.toLowerCase() !== historyUrl.searchParams.get('u').toLowerCase()) throw Error('Account identity mismatch');
-    var historyDoc = location.pathname === '/viewList.php' ? document : await getPage(historyUrl.href);
-    if (!historyDoc.querySelector('.history-wrapper')) throw Error('History format changed');
-    var history = [];
-    historyDoc.querySelectorAll('.user-watch-list').forEach(function(card) {
-      var id = card.querySelector('[data-anime-sn]')?.getAttribute('data-anime-sn');
-      var play = card.querySelector('a.play-btn');
-      var videoId = play && new URL(play.getAttribute('href'),location.origin).searchParams.get('sn');
-      var title = card.querySelector('.history-anime-title')?.textContent.trim();
-      var img = card.querySelector('img.theme-img');
-      var cover = img && (img.getAttribute('data-src') || img.src);
-      if (!/^\d{1,10}$/.test(id||'') || !/^\d{1,10}$/.test(videoId||'') || !title || !/^https:\/\/[^/]+\.bahamut\.com\.tw\//.test(cover||'')) return;
-      var progress = parseFloat(card.querySelector('.progress')?.style.width || '');
-      var labels = card.querySelectorAll('.history-lastwatch');
-      history.push({anime:{id:id,title:title,cover:cover,poster:cover,sections:[]},videoId:videoId,
-        episodeLabel:card.querySelector('.user-lastwatch')?.textContent.trim() || '',
-        progress:Number.isFinite(progress)?Math.min(1,Math.max(0,progress/100)):undefined,
-        progressLabel:labels.length>1?labels[labels.length-1].textContent.trim():''});
-    });
+    var history = await getHistory();
     favorites = Array.from(new Map(favorites.map(function(a){return [a.id,a];})).values());
     post({type:'account-synced',profile:profile,favorites:favorites,history:history});
   } catch(e) { post({type:'account-error'}); }

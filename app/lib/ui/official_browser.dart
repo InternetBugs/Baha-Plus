@@ -182,12 +182,6 @@ class _OfficialBrowserState extends State<OfficialBrowser>
             icon: const Icon(CupertinoIcons.arrow_clockwise),
             onPressed: store.reloadBrowser,
           ),
-          if (!store.browserIsPlayer)
-            GlassIconButton(
-              semanticLabel: store.t('syncAccount'),
-              icon: const Icon(CupertinoIcons.arrow_2_circlepath),
-              onPressed: store.busy ? null : store.syncAccount,
-            ),
           if (store.canRetryFavorite)
             GlassIconButton(
               semanticLabel: store.t('retryFavorite'),
