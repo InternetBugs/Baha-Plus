@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { parseHTML, DOMParser } from 'linkedom';
 
-const folder = 'Sources/BahaPlus/Resources/';
+const folder = 'app/assets/adapters/';
 function setup(html: string, pathname = '/mygather.php',
                responses: Record<string, string | { html: string; url: string }> = {}) {
   const { window } = parseHTML(html);
@@ -57,6 +57,24 @@ test('native search results are not falsely labelled as popular catalog entries'
   assert.deepEqual(fixture.messages[0].items[0].sections, []);
 });
 
+test('duplicate popularity cards cannot erase the official timeline schedule', () => {
+  const fixture = setup(`<div id="blockVideoInSeason">
+    <div data-animesn="10"><a class="anime-card-block" href="animeVideo.php?sn=20">
+      <div class="anime-blocker"><img data-src="https://p2.bahamut.com.tw/landscape.jpg"></div>
+      <p class="anime-name">測試動畫</p><span class="anime-hours">01:15</span>
+      <div class="anime-episode"><p>第17集</p></div></a>
+      <span class="anime-date-info"><svg><title>svg_is_active</title></svg>11/05 (四)</span>
+    </div>
+    <div data-animesn="10"><a class="anime-card-block" href="animeVideo.php?sn=20">
+      <div class="anime-blocker"><img data-src="https://p2.bahamut.com.tw/landscape.jpg"></div>
+      <p class="anime-name">測試動畫</p></a></div></div>`, '/');
+  vm.runInContext(fs.readFileSync(folder + 'catalog.js', 'utf8').replaceAll('%KIND%', 'catalog'), fixture.context);
+  assert.equal(fixture.messages[0].items.length, 1);
+  assert.equal(fixture.messages[0].items[0].updateDay, 4);
+  assert.equal(fixture.messages[0].items[0].updateTime, '01:15');
+  assert.equal(fixture.messages[0].items[0].episodeLabel, '第17集');
+});
+
 test('detail reads inert HTML without creating a live player or modifying the current page', async () => {
   const fixture = setup('<main>原生資料橋接頁</main>', '/', {
     'https://ani.gamer.com.tw/animeRef.php?sn=10': `
@@ -84,6 +102,23 @@ test('detail mismatch returns an explicit failure instead of another series meta
   vm.runInContext(fs.readFileSync(folder + 'detail.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(fixture.messages, [{ type: 'detail-error', id: '10' }]);
+});
+
+test('detail excludes website action text and accepts both production credit headings', async () => {
+  for (const heading of ['＜製作團隊＞', '＜STAFF＞']) {
+    const fixture = setup('<main>bridge</main>', '/', {
+      'https://ani.gamer.com.tw/animeRef.php?sn=10': `
+        <div class="anime_name"><h1>測試動畫</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
+        <div class="data-intro"><p>故事簡介 ${heading} 製作名單</p>
+          <div class="link"><a class="link-button">作品資料<i class="material-icons">keyboard_arrow_down</i></a></div></div>
+        <ul class="type-list"><li><span class="title">作品分類</span>
+          <ul><li>冒險</li><li>奇幻</li></ul></li></ul>`
+    });
+    vm.runInContext(fs.readFileSync(folder + 'detail.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.messages[0]?.detail.description, '故事簡介');
+    assert.equal(fixture.messages[0]?.detail.metadata[0].value, '冒險、奇幻');
+  }
 });
 
 test('detail resolves redirected season links and special episodes without loading a player', async () => {
@@ -144,6 +179,109 @@ test('guest accounts produce no synthetic collection or viewing history', async 
   assert.equal(fixture.requests.length, 0);
 });
 
+function playerFixture() {
+  const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
+    <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
+    <div class="data-intro"><p>故事簡介</p><div class="link">作品資料</div></div>
+    <div class="season"><a href="?sn=20">1</a><a href="?sn=21">2</a></div>
+    <div id="video-container"><video-js id="ani_video"><video></video><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
+    </body></html>`, '/animeVideo.php?sn=20');
+  const media = fixture.document.querySelector('video') as any;
+  const core = { state: { playingVideo: true, playingAd: false, videoSn: 20 } };
+  const commands: any[] = [];
+  const fault = { code: 0 };
+  const levels = [{ height: 720, enabled: true }, { height: 1080, enabled: true }];
+  let tick = () => {};
+  let stopped = false;
+  Object.defineProperties(media, Object.fromEntries(Object.entries({
+    duration: 1200, currentTime: 37, paused: false, ended: false, muted: false,
+    playbackRate: 1, readyState: 4, error: null,
+    buffered: { length: 1, end: () => 90 },
+  }).map(([key, value]) => [key, { value, writable: true, configurable: true }])));
+  (fixture.document.querySelector('#ani_video') as any).player = {
+    usingPlugin: (name: string) => name === 'm3u8',
+    m3u8: () => core, error: () => fault.code ? { code: fault.code } : null,
+    qualityLevels: () => levels,
+    play: async () => { commands.push(['play']); media.paused = false; },
+    pause: () => { commands.push(['pause']); media.paused = true; },
+    currentTime: (value: number) => { commands.push(['seek', value]); media.currentTime = value; },
+    playbackRate: (value: number) => { commands.push(['rate', value]); media.playbackRate = value; },
+    muted: (value?: boolean) => value === undefined ? media.muted : (media.muted = value),
+  };
+  fixture.context.window = { __bahaDocumentNonce: 'ticket', __bahaMediaSuspended: false };
+  fixture.context.getComputedStyle = (node: any) => ({ display: node.style?.display || 'block', visibility: 'visible', opacity: '1' });
+  fixture.context.setInterval = (callback: () => void) => { tick = callback; return 1; };
+  fixture.context.clearInterval = () => { stopped = true; };
+  vm.runInContext(fs.readFileSync(folder + 'player.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
+  return { ...fixture, core, media, commands, levels, fault, tick: () => tick(), stopped: () => stopped,
+    bridge: fixture.context.window.__bahaPlayerBridge };
+}
+
+test('native player projects real metadata and uses the official core to gate controls', async () => {
+  const fixture = playerFixture();
+  const detail = fixture.messages.find(m => m.type === 'player-detail');
+  const state = fixture.messages.find(m => m.type === 'player-state');
+  assert.equal(detail.detail.description, '故事簡介');
+  assert.equal(detail.detail.episodes.length, 2);
+  assert.equal(state.videoId, '20');
+  assert.equal(state.phase, 'content');
+  assert.equal(state.position, 37);
+  assert.ok(fixture.document.querySelector('.official-ad-controls'));
+  assert.equal(await fixture.bridge.command('ticket', 'seek', 67), true);
+  assert.deepEqual(fixture.commands, [['seek', 67]]);
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 1080), true);
+  assert.deepEqual(fixture.levels.map(l => l.enabled), [false, true]);
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 1440), false);
+  assert.equal(await fixture.bridge.command('ticket', 'danmaku', 0), true);
+  assert.equal(fixture.messages.at(-1).danmaku, false);
+  fixture.core.state.playingVideo = false;
+  fixture.core.state.playingAd = true;
+  assert.equal(await fixture.bridge.command('ticket', 'seek', 1000), false);
+  assert.equal(await fixture.bridge.command('ticket', 'rate', 2), false);
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 720), false);
+  fixture.tick();
+  assert.equal(fixture.messages.at(-1).phase, 'advertisement');
+  assert.equal(fixture.document.documentElement.classList.contains('baha-native-controls'), true);
+  assert.deepEqual(fixture.commands, [['seek', 67]]);
+  assert.equal(await fixture.bridge.command('ticket', 'pause'), true);
+  assert.equal(fixture.media.paused, true);
+  fixture.fault.code = 1015;
+  fixture.tick();
+  assert.equal(fixture.messages.at(-1).phase, 'error');
+  assert.equal(await fixture.bridge.command('ticket', 'play'), false);
+});
+
+test('native player preserves age confirmation and rejects stale or suspended commands', async () => {
+  const fixture = playerFixture();
+  fixture.core.state.playingVideo = false;
+  const age = fixture.document.createElement('div') as any;
+  age.className = 'ncc-choosebar';
+  age.innerHTML = '<button id="adult">同意</button>';
+  age.getBoundingClientRect = () => ({ height: 50 });
+  fixture.document.querySelector('#video-container')!.appendChild(age);
+  fixture.tick();
+  assert.equal(fixture.messages.at(-1).phase, 'age');
+  assert.equal(await fixture.bridge.command('ticket', 'play'), false);
+  assert.ok(fixture.document.querySelector('#adult'));
+  age.remove();
+  fixture.core.state.playingVideo = true;
+  const identity = fixture.document.querySelector('.anime_name button')!;
+  identity.setAttribute('onclick', 'animefun.toggleGather(500, 11, x)');
+  fixture.tick();
+  assert.equal(fixture.messages.at(-1).surfaceReady, false);
+  assert.equal(await fixture.bridge.command('ticket', 'play'), false);
+  identity.setAttribute('onclick', 'animefun.toggleGather(500, 10, x)');
+  fixture.context.window.__bahaMediaSuspended = true;
+  assert.equal(await fixture.bridge.command('ticket', 'play'), false);
+  fixture.context.window.__bahaMediaSuspended = false;
+  assert.equal(await fixture.bridge.command('old-ticket', 'seek', 0), false);
+  fixture.context.window.__bahaDocumentNonce = 'another-document';
+  fixture.tick();
+  assert.equal(fixture.stopped(), true);
+  assert.equal(fixture.document.querySelector('#baha-player-layout'), null);
+  assert.deepEqual(fixture.commands, []);
+});
+
 test('favorite action uses the official control and reports only verified resulting state', async () => {
   const fixture = setup('<a class="btn-logout">登出</a><div class="anime_name"><button onclick="animefun.toggleGather(500, 10, x)"></button></div>');
   const button = fixture.document.querySelector('button')!;
@@ -171,12 +309,12 @@ test('favorite uses the official search card without opening a video page', asyn
   assert.equal(fixture.requests.length, 0);
 });
 
-test('SwiftUI resources contain both locales, valid public snapshot and no account snapshots', () => {
-  const read = (file: string) => JSON.parse(fs.readFileSync('Sources/BahaCore/Resources/' + file, 'utf8'));
-  const hans = read('zh-Hans.json'), hant = read('zh-Hant.json'), catalog = read('catalog-snapshot.json');
+test('Flutter resources contain both locales, a valid test fixture and no account snapshots', () => {
+  const read = (file: string) => JSON.parse(fs.readFileSync('app/assets/i18n/' + file, 'utf8'));
+  const hans = read('zh-Hans.json'), hant = read('zh-Hant.json'), catalog = JSON.parse(fs.readFileSync('app/test/fixtures/catalog.json', 'utf8'));
   assert.deepEqual(Object.keys(hans).sort(), Object.keys(hant).sort());
   assert.ok(catalog.items.length >= 20);
   assert.deepEqual(Object.keys(catalog).sort(), ['fetchedAt', 'items']);
-  assert.ok(!fs.readdirSync('Sources/BahaCore/Resources').some(name => /history|favorites|account/.test(name)));
+  assert.ok(!fs.readdirSync('app/assets/data').some(name => /history|favorites|account/.test(name)));
   for (const item of catalog.items) assert.match(item.id, /^\d+$/);
 });

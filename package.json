@@ -1,6 +1,6 @@
 {
   "name": "baha-plus-tools",
-  "description": "Resource and adapter verification for the Baha Plus SwiftUI app.",
+  "description": "Resource and official-page adapter verification for the Baha Plus Flutter app.",
   "private": true,
   "version": "0.1.0",
   "engines": {

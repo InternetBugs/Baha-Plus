@@ -8,5 +8,5 @@ for (let value = 0x3400; value <= 0x9fff; value++) {
   const converted = fold(character);
   if (converted !== character) mapping[character] = converted;
 }
-fs.writeFileSync('Sources/BahaCore/Resources/search-folding.json', JSON.stringify(mapping) + '\n');
-console.log('Updated the native simplified/traditional search dictionary.');
+fs.writeFileSync('app/assets/data/search-folding.json', JSON.stringify(mapping) + '\n');
+console.log('Updated the Flutter simplified/traditional search dictionary.');

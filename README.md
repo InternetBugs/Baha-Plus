@@ -1,37 +1,68 @@
 # Baha Plus
 
-面向 Android 和 iOS 的巴哈姆特动画疯第三方客户端。**当前产品前端使用 SwiftUI**，通过 Skip Lite 把共享界面转换为 Android 原生 Kotlin / Jetpack Compose。
+面向 Android 和 iOS 的巴哈姆特动画疯第三方客户端，使用 **Flutter / Dart**。两端共用页面、中文字体和 [`liquid_glass_widgets`](https://pub.dev/packages/liquid_glass_widgets) 玻璃控件。
 
-## 当前实现
+## 功能
 
-- 探索、本季新番、每周时间表、片库、搜索、作品详情与选集。
-- 简体中文、繁体中文；按系统语言初始化，可在右上角账户面板切换。
-- 参考 App Store 的大标题、封面主卡、胶囊操作与分组账户 Sheet；搜索有独立入口。
-- 浅色、深色、跟随系统。
-- iOS 26 使用 Apple 原生 Liquid Glass：系统标签栏、工具栏、Sheet，以及封面上的 clear glass 控件。
-- Android 使用带背景模糊、边缘高光和明暗适配的悬浮胶囊导航，页面与 iOS 共用 SwiftUI。
-- 官方 WebView 会话用于登录、收藏、观看记录、会员管理和播放；App 不读取密码。
-- 收藏和观看记录从官方账号读取，播放进度由官方播放器回写。App 不另建本地收藏或本地观看记录。
-- 本机保存语言、外观偏好和上次成功加载的公开目录。首页没有缓存时留白，有缓存时立即显示并在后台刷新；刷新失败保留缓存。内置快照仅用于开发预览，不作为正式页面的兜底数据。
+- 探索、每周时间表、片库、搜索、作品详情与选集。
+- 简体中文、繁体中文；浅色、深色、跟随系统。
+- App Store 风格的大标题、封面卡片、悬浮玻璃标签栏、玻璃操作按钮。
+- 完整 Flutter 播放页面：视频区域、进度与玻璃控制、选集、简介和作品资料；支持横屏、十秒快进/后退、静音与倍速。
+- 无目录缓存时首页留白，有缓存时立即显示并后台刷新；失败保留已有缓存。
+- 收藏、观看记录和播放进度来自官方账号，应用不另建本地收藏或本地历史。
+- 官方持久 WebView 会话负责登录、会员、广告、视频解码、年龄验证与地区限制。播放页面的导航、布局和交互由 Flutter 绘制，视频区域保留官方引擎及其必要确认界面。
+- 详情仅读取静态 HTML，不为了获取选集在后台运行播放器。官方播放页使用桌面展示模式。
+- 官方验证需要用户在完整可见的官方页面手动完成。
 
-## 工程入口
+视频内使用一套自定义玻璃控制条，支持自动隐藏。广告阶段显示实际广告进度并提供播放、暂停与静音；拖动、快进、画质及倍速仅在官方核心明确报告正片状态后启用。广告提示、合法跳过按钮和年龄确认保留在视频内。应用不导出流地址、密码或 Cookie，也不另建播放进度数据库。
+
+源码只保留 Flutter 工程。Android 平台壳使用 Kotlin，iOS 平台壳使用 Objective-C，业务界面均为 Dart。旧实现可以从 Git 历史查看。
+
+## 目录
 
 ```text
-Project.xcworkspace            Xcode 入口
-Package.swift                 Swift Package / Skip 模块
-Darwin/                       iOS App 壳、图标和签名配置
-Android/                      Android 原生入口与 Gradle 配置
-Sources/BahaPlus/              SwiftUI 页面、状态与官方会话适配
-Sources/BahaCore/              数据模型、目录缓存、简繁搜索、双语与预览资源
-tests/BahaCoreTests/           Swift 核心测试
-tests/native-adapters.test.ts  官方 DOM 适配器的离线测试
+app/lib/core/         数据模型、官网 URL 与桥接校验、简繁搜索
+app/lib/data/         状态、公开目录缓存、官方会话适配
+app/lib/ui/           共用 Flutter 页面和 Liquid Glass 控件
+app/assets/           双语、官网 DOM 适配器、中文字体
+app/android/          Android 平台工程
+app/ios/              iOS 平台工程
+app/test/             Dart 核心与界面测试
+tests/                官网 JavaScript 适配器离线测试
+tools/android-local.ps1
 ```
 
-公开仓库仅包含 SwiftUI 主工程及必要的资源、构建与验证工具。早期 Expo 预览、本机开发缓存和工具链不包含在仓库中。
+## 本地开发
 
-## 日常本地检查
+要求 Flutter **3.47.9**、Java 21、Android SDK 和模拟器。玻璃组件锁定 **1.16.1**，要求 Flutter 3.41 以上。工具链、缓存、构建产物与账号会话不提交到仓库。
 
-日常修改先在本机运行轻量检查，Windows 也可以执行：
+```powershell
+$env:FLUTTER_ROOT = 'D:\BahaPlusTools\flutter'
+.\tools\android-local.ps1 -Action Check
+.\tools\android-local.ps1 -Action Build
+.\tools\android-local.ps1 -Action Run -Device emulator-5554
+```
+
+本地脚本会优先读取 `FLUTTER_ROOT`、`ANDROID_HOME`，当前开发机也可以使用项目内的 `.tools/android-sdk`。只有这台电脑的网络需要代理时，才传入 `-ProxyUrl http://127.0.0.1:7890`。该选项不修改系统代理。
+
+默认构建用于当前 x86_64 模拟器的 debug APK，输出到 `artifacts/flutter-local/BahaPlus-debug.apk`。连接 Android 真机时可用：
+
+```powershell
+.\tools\android-local.ps1 -Action Build -TargetPlatform android-arm64
+```
+
+也可以直接使用 Flutter：
+
+```sh
+cd app
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --debug
+flutter run -d emulator-5554
+```
+
+双语资源、官网适配器另外检查：
 
 ```sh
 npm ci
@@ -40,93 +71,30 @@ npm test
 npm run typecheck
 ```
 
-原生编译与安装包使用下方的手动 Actions。Windows/WSL 也可以运行纯 Swift 核心测试，不能运行 Xcode。
+## 账号与播放
 
-## GitHub Actions（按需构建）
+右上角账号入口打开官方账号页面，用户自行登录并完成验证，再点工具栏的同步按钮。密码和 Cookie 留在平台 WebView，应用只接受官方主文档、当前请求标识匹配且内容通过校验的投影数据。
 
-提交代码、推送到 `main`、创建 Pull Request 都不会自动运行云端构建。日常修改先在本机完成资源、适配器和纯 Swift 核心检查，一批修改完成后再按需手动运行 **Native build**。
+本机保存公开目录缓存、字体、图片缓存与语言/外观偏好；账号收藏和观看历史是当前官方会话的内存投影。更换账号时清空旧投影，重新读取。播放关闭时暂停媒体，再刷新云端记录。
 
-工作流不设置固定的每日次数或冷却时间。两个工作流共用一个并发组，一次运行一轮云端验证，保留正在进行的构建。需要新安装包时正常构建，验证已有 APK 时直接指定已有的构建编号，不重新编译。
+## iOS 与发布
 
-构建步骤：
+Android 日常开发、打包、模拟器验证均在本地完成。当前不自动运行任何 GitHub Actions。功能验收完成后再配置并执行正式发布流程，调试包不代表正式签名版本。
 
-1. 在 Linux runner 检查双语资源、官方页面适配器和 TypeScript。
-2. 在 macOS 26 runner 安装 Skip / Gradle，运行 Swift XCTest，构建 iOS 和 Android。
-3. 使用 iPhoneOS SDK 另外构建 arm64 真机应用，并打包未签名的 IPA。
-4. 成功后从 `BahaPlus-native` 下载 Android debug APK、iOS 模拟器 App 压缩包和 `BahaPlus-unsigned.ipa`。
-
-iOS 原生预览仅在手动勾选 `include_previews` 时生成，完成打包后串行运行，在 iOS 26 模拟器上导出首页、搜索、账户面板和繁体深色模式截图，可从 `ios-ui-previews` 下载。预览使用公开目录和占位账号，不代表真实账号登录或播放验收。安装包和截图保留 7 天，构建日志保留 3 天。
-
-**Android runtime smoke** 也仅手动运行。指定已有的成功构建编号 `build_run_id` 后，它会下载实际 APK，在 Android 模拟器中安装并检查启动、搜索输入与清空、账户面板和简繁切换。截图、界面树和运行日志保存在 `android-runtime-evidence`，这项检查使用访客界面。
-
-iOS 模拟器产物用于模拟器验收，不能直接安装到 iPhone。`BahaPlus-unsigned.ipa` 使用真机 SDK 与 arm64 架构，安装前仍需使用自己的 Apple 账号完成签名；它不是已经签名、可直接安装的 iPhone 应用。CI 不需要保存 Apple 账号凭据，工作流不自动发布 Release 或上传应用商店。
-
-## 在 Mac 上运行
-
-需要 Xcode 26 或更新版本，以编译 Liquid Glass API；iOS 最低部署版本为 17。
-
-1. 按 [Skip 官方入门文档](https://skip.dev/docs/gettingstarted/)安装 Skip、Android Studio 和 Android SDK。
-2. 在项目目录执行 `skip checkup` 检查工具链。
-3. 打开 `Project.xcworkspace`。
-4. 选择 **BahaPlus App** Scheme 和 iPhone 模拟器，运行。
-
-如果以后需要 Mac 本机构建，准备 Node.js 24+、Java 21、Skip、Android SDK 后可执行 `bash tools/build-local-macos.sh`。它会检查资源并生成与云端相同类别的三个原生产物，输出到 `artifacts/native-macos`。本地 iOS 截图可单独运行 `bash tools/build-ios-previews.sh`，Android 安装检查则在模拟器启动后运行 `python3 tools/android-smoke.py --apk artifacts/native-macos/BahaPlus-debug.apk --output artifacts/android-smoke`。
-
-`Darwin/BahaPlus.xcconfig` 默认设置 `SKIP_ACTION = none`，先让 iOS 独立运行。要同时构建、启动 Android，在 Android Studio 启动模拟器后，把它改为 `launch`。也可打开 `Android` 项目进行构建。
-
-在 iPhone 真机上运行时，需要在 Xcode 中设置自己的开发团队和签名。这里没有配置开发者账号，也没有上传或发布应用。
-
-## 账号流程
-
-在右上角账户面板进入巴哈姆特官方登录页，完成登录后点工具栏的同步按钮。账号收藏、观看至哪一集、播放进度和官方进度文字会显示到 SwiftUI 页面。启动时会复用应用内的官方持久会话，尝试自动同步；播放结束返回时会暂停媒体，并重新读取云端记录。
-
-追番按钮使用官方搜索卡片自己的订阅控件，复用其登录检查、CSRF 和成功响应。查看详情只读取并解析 HTML，不把详情页的视频播放器加载到后台；收藏操作也不需要打开视频页。不会仅凭本地点击把 UI 标为收藏成功。接口或 DOM 变化、登录失效、网络失败会保留错误提示，不制造本地记录。
-
-公开目录与详情也从官方页面的 DOM 提取为数据；实际列表与卡片由 SwiftUI 绘制。详情读取重定向后的静态 HTML，并按最终页面地址解析选集。官方播放页使用桌面版展示，账号与登录页面保留移动版；播放器、广告、年龄验证、地区限制和会员权限继续使用官方服务。
-
-## 验证
-
-在具有 Swift 工具链的电脑上运行核心测试：
+iOS 共用同一 Flutter 前端和玻璃组件。构建 iOS 仍需 macOS、Xcode 和签名环境；Windows 可以维护工程和运行 Dart 测试，不能在本机生成可安装的 iPhone 包。在 Mac 上：
 
 ```sh
-BAHA_CORE_ONLY=1 swift test
+cd app
+flutter pub get
+flutter build ios --no-codesign
 ```
 
-在 Mac 上验证两端：
+页面与控件一致性由共用 Dart 实现保证，系统键盘、WebView、媒体解码和系统权限界面仍需在目标设备上验收。
 
-```sh
-skip checkup
-swift test
-skip test
-```
+已完成的本地检查及待验收项见 [本地验收记录](docs/verification.md)。当前开发版本尚未完成正片播放与真实账号的完整验收。
 
-完整构建可使用：
+## 设计与字体
 
-```sh
-bash tools/verify-native-macos.sh
-```
+玻璃用于导航与操作层，内容卡片保留清晰、不透明的图像和文字。设计依据见 [设计说明](docs/liquid-glass.md)。
 
-它会检查工具链与工程布局、运行 Swift 核心测试，并使用 Xcode 的 Android 构建阶段同时构建 iOS 模拟器 App 和 Android debug APK。只有两个实际产物都存在且 APK 包含 Manifest 与 DEX 文件时才报告构建成功。日志和产物放在 `artifacts/native-macos`。这仍不替代真机上的登录、播放、云端同步、简繁切换和玻璃视觉验收。
-
-JavaScript 只用于官方页面的数据适配，不承担 App 前端：
-
-```sh
-npm install
-npm run resources:check
-npm test
-npm run typecheck
-```
-
-原生资源直接维护在 `Sources/BahaCore/Resources` 和 `Sources/BahaPlus/Resources`。需要重建简繁搜索字典时运行 `npm run resources:search`，重建图标时运行 `npm run icons`。
-
-Windows 上可以检查适配器和资源，并使用 `tools/check-swift-syntax.py` 检查 Swift 语法。在 WSL 中也可以使用官方 Swift Linux 工具链，真实编译并运行 `BAHA_CORE_ONLY=1 swift test`。这些检查**不等于** SwiftUI 类型检查、Xcode 编译、Skip 转译或真机验收。
-
-本机检查结果：官方 Swift 6.2.4 编译并运行的 21 项 XCTest 通过，覆盖目录缓存、双语资源、Unicode 搜索、官方 URL、播放页展示策略、账号请求隔离和桥接消息校验。公开仓库保留的 10 项原生页面适配 / 详情 HTML 读取 / 资源测试通过。SwiftUI 和两端原生构建以 Actions 的实际结果为准，真实账号播放仍需目标设备验收。
-
-项目提供 `tools/setup-swift-wsl.sh` 与 `tools/run-swift-wsl.sh` 供当前 Windows 开发环境复用临时 Swift 工具链；它们不会改系统 Swift 安装或 shell 配置。WSL 只能完成这里的纯 Swift 核心验证；完整 Skip App 的原生构建仍需要 [macOS 与 Xcode](https://skip.dev/docs/faq/#can-i-use-skip-on-windows-or-linux)。
-
-## 实现依据
-
-详见 [Liquid Glass 设计依据](docs/liquid-glass.md)。
-
-双平台工程配置基于 [Skip 官方 HelloSkip 模板](https://github.com/skiptools/skipapp-hello)。WebView 锁定 [SkipWeb 官方修复提交 `4ae9b16`](https://github.com/skiptools/skip-web/commit/4ae9b16f5835d37ab63dc4cb4064df4fef3574a4)，修复 Android WebView 124 在导航时返回空请求头导致的启动崩溃；该补丁晚于 0.12.0 标签。SwiftUI 的 iOS 26 专有 API 用条件编译隔离。
+应用内附 Noto Sans TC 与 Noto Sans SC 字体，使两端中文排版共用相同字体并覆盖简繁字形；许可证位于 `app/assets/fonts/OFL.txt` 与 `OFL-SC.txt`。第三方客户端与巴哈姆特官方没有从属关系。

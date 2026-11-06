@@ -1,40 +1,40 @@
-# Liquid Glass 实现依据
+# Liquid Glass
 
-产品前端是 `Sources/BahaPlus` 中的 SwiftUI 视图。早期 React Native 页面仅为历史预览，不代表当前原生实现。
+Android 与 iOS 共用 Flutter / Dart 界面及 `liquid_glass_widgets 1.16.1`。使用相同的布局、字体、颜色和玻璃组件，让页面有一致的设计语言。
 
-## Apple 官方参考
+## 组件
 
-- [Materials — Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/materials)
-- [Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)
-- [Applying Liquid Glass to custom views](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)
-
-指南读取日期：2026-11-04。
-
-## 在应用中的使用
-
-| 位置 | 实现 |
+| 页面元素 | 实现 |
 | --- | --- |
-| 底部标签栏 | 系统 `TabView`；没有覆写背景，iOS 26 自动提供原生玻璃与滚动边缘效果 |
-| 顶部工具栏 | `NavigationStack` 与标准 `ToolbarItem`，不添加固定白色底板 |
-| 详情页 | 系统 `.sheet` 与原生导航栏 |
-| 封面上的播放、追番按钮 | `GlassEffectContainer`、`.glassEffect(.clear.interactive(), in: …)` 与 `glassEffectID` |
-| 封面控件的可读性 | 图片上的 35% 黑色遮罩与底部渐变；明亮封面下仍保留白色控件的对比 |
-| 内容卡片与作品文字 | 普通内容层，避免把所有卡片都变成玻璃 |
-| 滚动行为 | iOS 26 `.tabBarMinimizeBehavior(.onScrollDown)` |
-| 辅助功能 | 原生材质跟随系统减少透明度、减少动态效果及外观设置 |
-| iOS 17–25 | 标准 `.ultraThinMaterial` 降级 |
-| Android | SwiftUI 悬浮胶囊标签栏通过 Haze 1.6.10 采样后方页面，使用真实背景模糊、明暗适配、边缘高光和选中状态；原生标签导航保留页面状态，Apple 专有 API 由条件编译隔离 |
+| 页面与玻璃背景采样 | `GlassScaffold` |
+| 可折叠大标题 | `GlassLargeTitle`、`GlassAppBar` |
+| 悬浮标签导航与选中胶囊 | `GlassTabBar.bottom` |
+| 头像、关闭、刷新等操作 | `GlassIconButton` |
+| 封面上的播放按钮 | `GlassButton.custom` |
+| 搜索 | `GlassSearchBar` |
+| 完整播放页面 | Flutter `PlayerPage`，包含视频、播放控制、选集、简介与作品资料 |
+| 播放进度和控制 | `GlassContainer`、`GlassSlider` 与 Cupertino 图标 |
+| 海报、简介、片单、设置分组 | 普通不透明内容 |
 
-## App Store 版式参考
+在启动时预载组件的 shader，两端使用同一套 `GlassThemeData.ios27` premium 配置、中文字体与 Cupertino 图标。悬浮标签栏保留形状一致的薄背衬；封面上的按钮单独取样，确保按钮文字与边缘高光清楚可见。系统渲染能力仍可能影响折射质量和性能。
 
-界面采用 App Store 的层级关系：系统大标题与白底、封面主卡、圆角图标与胶囊操作、独立的搜索标签，以及通过右上角账户入口打开的分组 Sheet。账户头像在未获得真实账号资料时显示系统占位图标。
+玻璃只用于导航与控制层，避免将每张内容卡片都做成透明面板，也避免嵌套玻璃表面削弱折射。大标题和主封面承担视觉层级，页面减少副标题。
 
-iOS 26 使用 `ToolbarItemPlacement.largeTitle` 将标题与账户入口置于同一标题区。搜索采用普通导航标签和顶部搜索抽屉，保留 App Store 参考图中顶部输入框与完整底部标签栏的关系。
+官方 WebView 在原生页面中使用 `Offstage` 保持同一会话，但不提交到画面合成。这样玻璃只采样当前 Flutter 内容，不会出现后台官网文字穿透导航栏的问题。打开登录时显示完整网页，播放时由视频区域承载官方引擎。
 
-首页、搜索和账户的预览由 GitHub Actions 启动真实 iOS 26 模拟器并截图。Debug 预览模式使用内置公开目录、占位账号状态和显式指定的界面语言；它用于验证视觉，不代表完成真实账号和播放验收。
+播放页面将同一会话中的视频表面嵌入圆角区域，导航、控制、选集、简介及资料均由 Flutter 实现。竖屏与横屏均将玻璃控制条叠放在视频内；正片播放时自动隐藏，触碰视频重新显示。切换布局保留同一个 WebView。原有控制栏隐藏，广告进度、提示、合法跳过按钮和年龄界面继续保留；广告期间只提供播放、暂停和静音。控制桥接读取官方核心的正片/广告状态，不将流地址或会话令牌传入 Dart。
 
-Apple 的指南说明的是材质的用途、层级、可读性和系统行为，没有为第三方界面给出一套固定的 CSS 模糊、透明度或折射参数。本项目 iOS 26 的效果由系统绘制。
+## 本地验收
 
-Android 使用 [Haze 官方背景模糊 API](https://github.com/chrisbanes/haze/blob/1.6.10/docs/usage.md)，锁定与当前 Android SDK 36 兼容的 1.6.10。页面作为采样源，导航控件独立叠放，避免将控件自身包含在模糊采样中。它延续玻璃的层次与可读性；Apple 的 Liquid Glass 光学绘制仍由 iOS 提供。
+- 实际 Android APK 在本地模拟器运行。
+- 检查玻璃导航的背景采样、选中指示器、按钮按压与滚动。
+- 检查浅色、深色、简体、繁体以及大字体下的溢出。
+- 检查账号页、搜索、空白首页与已有缓存首页。
+- iOS 渲染、键盘、WebView 和播放必须在 Mac 模拟器或真机另外验收。
 
-Windows 无法渲染 SwiftUI 或执行 Xcode 构建。原生实际观感、Dynamic Type、VoiceOver、系统减少透明度与滚动行为需要在 Mac / iPhone 上验收。
+## 依据
+
+- [组件官方文档](https://pub.dev/packages/liquid_glass_widgets)
+- [Apple Materials](https://developer.apple.com/design/human-interface-guidelines/materials)
+- [Apple Adopting Liquid Glass](https://developer.apple.com/documentation/TechnologyOverviews/adopting-liquid-glass)
+- [Flutter iOS setup](https://docs.flutter.dev/platform-integration/ios/setup)
