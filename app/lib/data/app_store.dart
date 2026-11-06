@@ -98,6 +98,7 @@ class AppStore extends ChangeNotifier {
   String catalogSource;
   List<Anime> favorites = [], searchResults = [];
   List<WatchEntry> history = [];
+  AccountProfile? accountProfile;
   bool accountSynced = false, accountNeedsRefresh = false;
   int tab = 0;
   String libraryFilter = 'all', _query = '', searchedQuery = '';
@@ -341,6 +342,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> connectAccount() async {
+    accountProfile = null;
     favorites = [];
     history = [];
     accountSynced = false;
@@ -608,6 +610,9 @@ window.__bahaMediaSuspended = false; true;
         detailFailed = true;
         _begin(BrowserIntent.idle);
       case 'account-synced':
+        accountProfile = body['profile'] == null
+            ? null
+            : AccountProfile.fromJson(body['profile'] as Json);
         favorites = (body['favorites'] as List)
             .map((item) => Anime.fromJson(item as Json))
             .toList();
@@ -620,6 +625,7 @@ window.__bahaMediaSuspended = false; true;
         _begin(BrowserIntent.idle);
         if (catalog.items.isEmpty) await refreshCatalog();
       case 'account-guest':
+        accountProfile = null;
         favorites = [];
         history = [];
         accountSynced = false;

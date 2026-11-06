@@ -228,6 +228,65 @@ void main() {
   );
 
   test(
+    'official account profile validates public avatar URLs and clears with the account session',
+    () async {
+      const profile = {
+        'id': 'fixture-user',
+        'displayName': '測試暱稱',
+        'avatar':
+            'https://avatar2.bahamut.com.tw/avataruserpic/f/i/fixture-user/fixture-user.png',
+      };
+      expect(AccountProfile.fromJson(profile).displayName, '測試暱稱');
+      for (final avatar in [
+        'https://attacker.test/avatar.png',
+        'http://avatar2.bahamut.com.tw/avatar.png',
+        'https://user@avatar2.bahamut.com.tw/avatar.png',
+      ]) {
+        expect(
+          () => AccountProfile.fromJson({...profile, 'avatar': avatar}),
+          throwsFormatException,
+        );
+      }
+      final disk = MemoryStorage();
+      final store = await AppStore.create(storage: disk);
+      addTearDown(store.dispose);
+      await store.attach(FakePortal());
+      store.updateNavigation(
+        OfficialSite.home.resolve('mygather.php'),
+        canGoBack: false,
+      );
+      Future<void> send(Json body) => store.receive(
+        jsonEncode({...body, 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.home.resolve('mygather.php'),
+        isMainFrame: true,
+      );
+      await store.syncAccount();
+      await send({
+        'type': 'account-synced',
+        'profile': profile,
+        'favorites': [],
+        'history': [],
+      });
+      expect(store.accountProfile?.id, 'fixture-user');
+      expect(disk.values, isEmpty);
+      await store.syncAccount();
+      await send({'type': 'account-guest'});
+      expect(store.accountProfile, isNull);
+      expect(store.accountSynced, isFalse);
+      await store.syncAccount();
+      await send({
+        'type': 'account-synced',
+        'profile': profile,
+        'favorites': [],
+        'history': [],
+      });
+      await store.connectAccount();
+      expect(store.accountProfile, isNull);
+    },
+  );
+
+  test(
     'desktop presentation removes mobile markers but keeps the real engine',
     () {
       const native =

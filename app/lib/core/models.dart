@@ -155,6 +155,40 @@ class Episode {
   final String id, label;
 }
 
+class AccountProfile {
+  const AccountProfile({
+    required this.id,
+    required this.displayName,
+    this.avatar,
+  });
+
+  factory AccountProfile.fromJson(Json json) {
+    final profile = AccountProfile(
+      id: json['id'] as String,
+      displayName: json['displayName'] as String,
+      avatar: json['avatar'] as String?,
+    );
+    final avatarUri = profile.avatar == null
+        ? null
+        : Uri.tryParse(profile.avatar!);
+    if (!RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(profile.id) ||
+        profile.displayName.trim().isEmpty ||
+        profile.displayName.runes.length > 100 ||
+        RegExp(r'[\u0000-\u001f\u007f]').hasMatch(profile.displayName) ||
+        (profile.avatar != null &&
+            (avatarUri == null ||
+                !OfficialSite.validImage(profile.avatar!) ||
+                avatarUri.userInfo.isNotEmpty ||
+                avatarUri.port != 443))) {
+      throw const FormatException('Invalid official account profile');
+    }
+    return profile;
+  }
+
+  final String id, displayName;
+  final String? avatar;
+}
+
 class Metadata {
   const Metadata({required this.label, required this.value});
   factory Metadata.fromJson(Json json) {

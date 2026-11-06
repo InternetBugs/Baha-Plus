@@ -3,6 +3,23 @@
   if (location.origin !== 'https://ani.gamer.com.tw') return;
   function post(value) { bahaPostJSON(JSON.stringify(value)); }
   if (!document.querySelector('.btn-logout')) { post({type:'account-guest'}); return; }
+  function collectProfile(doc) {
+    var owner = doc.querySelector('a.user-info');
+    var id = owner?.querySelector('.user-id')?.textContent.trim();
+    var displayName = owner?.querySelector('.user-name')?.textContent.trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id || '') || !displayName) return null;
+    var img = owner.querySelector('.avatar img');
+    var raw = img && (img.getAttribute('data-src') || img.getAttribute('src'));
+    var avatar;
+    if (raw) {
+      var url = new URL(raw, location.origin);
+      if (url.protocol === 'https:' && url.hostname.endsWith('.bahamut.com.tw') &&
+          !url.username && !url.password && (!url.port || url.port === '443')) {
+        avatar = url.href;
+      }
+    }
+    return {id:id,displayName:displayName,avatar:avatar};
+  }
   function collectFavorites(doc) {
   var items = [], seen = {};
   doc.querySelectorAll('a.theme-list-main, a.anime-card-block').forEach(function(card) {
@@ -48,6 +65,8 @@
     var historyLink = document.querySelector('a[href*="viewList.php"]');
     var historyUrl = historyLink && new URL(historyLink.getAttribute('href'),location.origin);
     if (!historyUrl || !historyUrl.searchParams.get('u')) throw Error('History link unavailable');
+    var profile = collectProfile(document) || collectProfile(first);
+    if (profile && profile.id.toLowerCase() !== historyUrl.searchParams.get('u').toLowerCase()) throw Error('Account identity mismatch');
     var historyDoc = location.pathname === '/viewList.php' ? document : await getPage(historyUrl.href);
     if (!historyDoc.querySelector('.history-wrapper')) throw Error('History format changed');
     var history = [];
@@ -67,6 +86,6 @@
         progressLabel:labels.length>1?labels[labels.length-1].textContent.trim():''});
     });
     favorites = Array.from(new Map(favorites.map(function(a){return [a.id,a];})).values());
-    post({type:'account-synced',favorites:favorites,history:history});
+    post({type:'account-synced',profile:profile,favorites:favorites,history:history});
   } catch(e) { post({type:'account-error'}); }
 })(); true;

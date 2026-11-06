@@ -149,6 +149,8 @@ test('detail resolves redirected season links and special episodes without loadi
 test('native account adapter reads paginated cloud favorites and exact cloud viewing progress', async () => {
   const fixture = setup(`
     <a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a class="user-info"><div class="avatar"><img src="https://avatar2.bahamut.com.tw/avataruserpic/f/i/fixture-user/fixture-user.png"></div>
+      <div class="user-info-text"><p class="user-name">測試暱稱</p><span class="user-id">fixture-user</span></div></a>
     <a href="viewList.php?u=fixture-user">觀看紀錄</a>${card('10')}
     <div class="page_number"><a href="mygather.php?page=2">2</a></div>`,
   '/mygather.php', {
@@ -164,11 +166,27 @@ test('native account adapter reads paginated cloud favorites and exact cloud vie
   // WebView evaluateJavaScript. Let that IIFE finish before checking its output.
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(fixture.messages[0]?.type, 'account-synced');
+  assert.deepEqual(fixture.messages[0].profile, {
+    id: 'fixture-user', displayName: '測試暱稱',
+    avatar: 'https://avatar2.bahamut.com.tw/avataruserpic/f/i/fixture-user/fixture-user.png'
+  });
   assert.equal(fixture.messages[0].favorites.length, 2);
   assert.equal(fixture.messages[0].history[0].videoId, '20');
   assert.equal(fixture.messages[0].history[0].progress, 0.64);
   assert.equal(fixture.messages[0].history[0].progressLabel, '觀看至 14 分 41 秒');
   assert.equal(fixture.requests.length, 2);
+});
+
+test('account profile never pairs one user identity with another user history', async () => {
+  const fixture = setup(`
+    <a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a class="user-info"><div class="avatar"><img src="https://attacker.test/avatar.png"></div>
+      <p class="user-name">Other account</p><span class="user-id">other-user</span></a>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php');
+  vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8'), fixture.context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
+  assert.equal(fixture.requests.length, 0);
 });
 
 test('guest accounts produce no synthetic collection or viewing history', async () => {

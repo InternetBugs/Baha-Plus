@@ -54,11 +54,7 @@ class AccountAvatar extends StatelessWidget {
           semanticLabel: store.t('me'),
           onPressed: onTap,
           size: 44,
-          icon: Icon(
-            CupertinoIcons.person_crop_circle_fill,
-            color: secondary(context),
-            size: 32,
-          ),
+          icon: AccountPortrait(profile: store.accountProfile, size: 32),
         ),
         if (store.verificationRequired)
           const Positioned(
@@ -75,6 +71,36 @@ class AccountAvatar extends StatelessWidget {
       ],
     ),
   );
+}
+
+class AccountPortrait extends StatelessWidget {
+  const AccountPortrait({required this.profile, this.size = 52, super.key});
+  final AccountProfile? profile;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Icon(
+      CupertinoIcons.person_crop_circle_fill,
+      size: size,
+      color: secondary(context),
+    );
+    final avatar = profile?.avatar;
+    if (avatar == null) return fallback;
+    return ClipOval(
+      child: Image.network(
+        avatar,
+        key: ValueKey('account-portrait-${profile!.id}'),
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        excludeFromSemantics: true,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : fallback,
+        errorBuilder: (context, error, stack) => fallback,
+      ),
+    );
+  }
 }
 
 class SectionHeading extends StatelessWidget {

@@ -50,18 +50,17 @@ class AccountPage extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      CupertinoIcons.person_crop_circle_fill,
-                      size: 52,
-                      color: secondary(context),
-                    ),
+                    AccountPortrait(profile: store.accountProfile),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            store.t('localProfile'),
+                            store.accountProfile?.displayName ??
+                                store.t('localProfile'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.w600,
@@ -69,11 +68,13 @@ class AccountPage extends StatelessWidget {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            store.t(
-                              store.accountSynced
-                                  ? 'accountConnected'
-                                  : 'connectAccount',
-                            ),
+                            store.accountProfile != null
+                                ? '@${store.accountProfile!.id}'
+                                : store.t(
+                                    store.accountSynced
+                                        ? 'accountConnected'
+                                        : 'connectAccount',
+                                  ),
                             style: TextStyle(
                               color: secondary(context),
                               fontSize: 13,

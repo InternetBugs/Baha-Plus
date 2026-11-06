@@ -91,6 +91,9 @@ class BrowserRequest {
         case BrowserIntent.account:
         case BrowserIntent.accountRefresh:
           if (type == 'account-synced') {
+            if (body['profile'] != null) {
+              AccountProfile.fromJson(body['profile'] as Json);
+            }
             _animes(body['favorites'], maximum: 10000);
             final history = (body['history'] as List)
                 .map((item) => WatchEntry.fromJson(item as Json))

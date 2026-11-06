@@ -170,6 +170,56 @@ void main() {
   });
 
   testWidgets(
+    'account card and header use the official profile and clear after logout',
+    (tester) async {
+      final store = await launch(tester);
+      await store.attach(FakePortal());
+      store.updateNavigation(
+        OfficialSite.home.resolve('mygather.php'),
+        canGoBack: false,
+      );
+      await store.syncAccount();
+      Future<void> send(Map<String, dynamic> body) => store.receive(
+        jsonEncode({...body, 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.home.resolve('mygather.php'),
+        isMainFrame: true,
+      );
+      await send({
+        'type': 'account-synced',
+        'profile': {
+          'id': 'fixture-user',
+          'displayName': '測試暱稱',
+          'avatar':
+              'https://avatar2.bahamut.com.tw/avataruserpic/f/i/fixture-user/fixture-user.png',
+        },
+        'favorites': [],
+        'history': [],
+      });
+      await frames(tester);
+      final portrait = tester.widget<AccountPortrait>(
+        find.descendant(
+          of: find.byType(AccountAvatar).hitTestable(),
+          matching: find.byType(AccountPortrait),
+        ),
+      );
+      expect(portrait.profile?.id, 'fixture-user');
+      await tester.tap(find.byType(AccountAvatar).hitTestable());
+      await frames(tester);
+      expect(find.text('測試暱稱'), findsOneWidget);
+      expect(find.text('@fixture-user'), findsOneWidget);
+      expect(find.text(store.t('localProfile')), findsNothing);
+      await store.syncAccount();
+      await send({'type': 'account-guest'});
+      await frames(tester);
+      expect(find.text('測試暱稱'), findsNothing);
+      expect(find.text('@fixture-user'), findsNothing);
+      expect(find.text(store.t('localProfile')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'the entire playback page is native and controls follow the current official episode',
     (tester) async {
       final store = await launch(tester);
