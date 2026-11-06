@@ -1,13 +1,16 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'data/app_store.dart';
+import 'data/system_http.dart';
 import 'ui/app_root.dart';
 import 'ui/chrome.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = SystemHttpOverrides();
   await LiquidGlassWidgets.initialize(enablePerformanceMonitor: false);
   final store = await AppStore.create();
   runApp(

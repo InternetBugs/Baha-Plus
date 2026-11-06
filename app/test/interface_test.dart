@@ -11,7 +11,8 @@ import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/player_page.dart';
 import 'package:baha_plus/ui/detail_page.dart';
-import 'core_test.dart' show MemoryStorage, FakePortal;
+import 'package:baha_plus/ui/seasonal_page.dart';
+import 'core_test.dart' show MemoryStorage, FakePortal, FakeSearch;
 
 void main() {
   Future<void> frames(WidgetTester tester) async {
@@ -26,7 +27,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = (await tester.runAsync(
-      () => AppStore.create(storage: MemoryStorage()),
+      () =>
+          AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
     ))!;
     addTearDown(store.dispose);
     await tester.pumpWidget(
@@ -61,6 +63,8 @@ void main() {
     await tester.enterText(find.byType(EditableText), 'BahaNoMatch');
     await frames(tester);
     expect(find.text('還沒找到這部作品'), findsOneWidget);
+    expect((store.searchService as FakeSearch).queries, ['BahaNoMatch']);
+    expect(find.text(store.t('officialSearch')), findsNothing);
     await store.setLanguage('zh-Hans');
     await store.setAppearance('dark');
     await frames(tester);
@@ -243,8 +247,14 @@ void main() {
       expect(store.history.length, 1);
       expect(find.text('Cloud History Anime'), findsOneWidget);
       expect(find.text('08:00'), findsOneWidget);
-      await tester.tap(find.text('Cloud History Anime'));
+      expect(
+        tester.getSize(find.byType(GlassProgressIndicator)).width,
+        greaterThan(80),
+      );
+      final navigations = portal.visited.length;
+      await tester.tap(find.byKey(const ValueKey('history-play-10')));
       await frames(tester);
+      expect(portal.visited.length, navigations + 1);
       expect(portal.visited.last, OfficialSite.video('20'));
       expect(tester.takeException(), isNull);
     },
@@ -257,6 +267,10 @@ void main() {
       final bar = tester.state(find.byType(GlassTabBar));
       store.selectTab(4);
       await tester.pump();
+      final position = tester
+          .widget<CustomScrollView>(find.byType(CustomScrollView))
+          .controller!
+          .position;
       final moving = find.byKey(const ValueKey('tab-page-transition'));
       expect(
         tester.widget<Transform>(moving).transform.storage[12],
@@ -266,6 +280,14 @@ void main() {
       final midway = tester.widget<Transform>(moving).transform.storage[12];
       expect(midway, greaterThan(0));
       expect(midway, lessThan(24));
+      await frames(tester);
+      expect(
+        tester
+            .widget<CustomScrollView>(find.byType(CustomScrollView))
+            .controller!
+            .position,
+        same(position),
+      );
       store.selectTab(0);
       await tester.pump();
       expect(
@@ -276,6 +298,228 @@ void main() {
       expect(tester.widget<Transform>(moving).transform.storage[12], 0);
       expect(tester.state(find.byType(GlassTabBar)), same(bar));
       expect(find.byType(CustomScrollView), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'library uses the shared waterfall and favorites retain account filtering',
+    (tester) async {
+      final store = await launch(tester);
+      store.catalog = Catalog(
+        items: [
+          for (var index = 1; index <= 20; index++)
+            Anime(
+              id: '$index',
+              title: 'Library Anime $index',
+              cover: 'https://p2.bahamut.com.tw/$index.jpg',
+              sections: [index.isEven ? 'season' : 'hot'],
+            ),
+        ],
+      );
+      store.favorites = [
+        const Anime(
+          id: '99',
+          title: 'Account Only Anime',
+          cover: 'https://p2.bahamut.com.tw/99.jpg',
+        ),
+      ];
+      store.accountSynced = true;
+      store.selectTab(2);
+      await frames(tester);
+      expect(find.byKey(const ValueKey('library-waterfall')), findsOneWidget);
+      final first = tester.getRect(find.byKey(const ValueKey('library-1')));
+      final second = tester.getRect(find.byKey(const ValueKey('library-2')));
+      expect(first.top, second.top);
+      expect(first.left, lessThan(second.left));
+      await tester.tap(find.text(store.t('favorites')).first);
+      await frames(tester);
+      expect(find.text('Account Only Anime'), findsOneWidget);
+      expect(find.text('Library Anime 1'), findsNothing);
+      await tester.tap(find.text('Account Only Anime'));
+      await frames(tester);
+      expect(store.selectedAnime?.id, '99');
+      store.navigationFailed();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'reselecting any bottom tab scrolls its current page to the top',
+    (tester) async {
+      final store = await launch(tester);
+      final day =
+          DateTime.now().toUtc().add(const Duration(hours: 8)).weekday % 7;
+      store.catalog = Catalog(
+        items: [
+          for (var index = 1; index <= 40; index++)
+            Anime(
+              id: '$index',
+              title: 'Scrolling Anime $index',
+              cover: 'https://p2.bahamut.com.tw/$index.jpg',
+              sections: const ['hot', 'season'],
+              updateDay: day,
+            ),
+        ],
+      );
+      store.history = [
+        for (final anime in store.catalog.items)
+          WatchEntry.fromJson({
+            'anime': anime.toJson(),
+            'videoId': '${100 + int.parse(anime.id)}',
+            'episodeLabel': '1',
+          }),
+      ];
+      store.accountSynced = true;
+      final labels = [
+        'explore',
+        'schedule',
+        'library',
+        'watchHistory',
+        'search',
+      ];
+      for (var index = 0; index < labels.length; index++) {
+        store.selectTab(index);
+        await frames(tester);
+        final view = find.byType(CustomScrollView);
+        await tester.drag(view, const Offset(0, -500));
+        await frames(tester);
+        final controller = tester.widget<CustomScrollView>(view).controller!;
+        expect(controller.offset, greaterThan(0), reason: labels[index]);
+        await tester.tap(
+          find
+              .descendant(
+                of: find.byType(GlassTabBar),
+                matching: find.text(store.t(labels[index])),
+              )
+              .hitTestable()
+              .first,
+        );
+        await frames(tester);
+        expect(controller.offset, closeTo(0, .1), reason: labels[index]);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'home uses a poster carousel and opens an episode timeline distinct from library season posters',
+    (tester) async {
+      final store = await launch(tester);
+      store.catalog = const Catalog(
+        items: [
+          Anime(
+            id: '1',
+            title: 'First Seasonal Show',
+            cover: 'https://p2.bahamut.com.tw/episode-1.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-1.jpg',
+            latestVideoId: '101',
+            sections: ['season'],
+            updateDate: '2026-11-06',
+            updateTime: '10:00',
+          ),
+          Anime(
+            id: '2',
+            title: 'Second Seasonal Show',
+            cover: 'https://p2.bahamut.com.tw/episode-2.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-2.jpg',
+            latestVideoId: '102',
+            sections: ['season'],
+            updateDate: '2026-11-05',
+            updateTime: '09:00',
+          ),
+          Anime(
+            id: '3',
+            title: 'Promoted Popular Show',
+            cover: 'https://p2.bahamut.com.tw/episode-3.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-3.jpg',
+            sections: ['hot'],
+          ),
+        ],
+      );
+      store.selectTab(0);
+      await frames(tester);
+      final carousel = find.byKey(const ValueKey('home-featured-carousel'));
+      final pages = tester.widget<PageView>(
+        find.descendant(of: carousel, matching: find.byType(PageView)),
+      );
+      expect(pages.childrenDelegate.estimatedChildCount, 3);
+      final heroArt = tester.widgetList<Artwork>(
+        find.descendant(
+          of: find.byKey(const ValueKey('featured-1')),
+          matching: find.byType(Artwork),
+        ),
+      );
+      expect(heroArt, isNotEmpty);
+      expect(
+        heroArt.every((art) => art.url == store.catalog.items.first.poster),
+        isTrue,
+      );
+      await tester.drag(carousel, const Offset(-280, 0));
+      await frames(tester);
+      expect(pages.controller!.page, greaterThan(.5));
+      final heading = find.descendant(
+        of: find.byType(SectionHeading),
+        matching: find.text(store.t('seasonal')),
+      );
+      await Scrollable.ensureVisible(tester.element(heading), alignment: .35);
+      await frames(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.ancestor(of: heading, matching: find.byType(SectionHeading)),
+          matching: find.byType(CupertinoButton),
+        ),
+      );
+      await frames(tester);
+      expect(find.byType(SeasonalPage), findsOneWidget);
+      expect(store.tab, 0);
+      expect(find.text('11/06 週五'), findsOneWidget);
+      final timelineImage = find.descendant(
+        of: find.byKey(const ValueKey('timeline-1')),
+        matching: find.byType(Artwork),
+      );
+      expect(
+        tester.widget<Artwork>(timelineImage).url,
+        store.catalog.items.first.cover,
+      );
+      final imageRect = tester.getRect(timelineImage);
+      expect(imageRect.width / imageRect.height, closeTo(16 / 9, .01));
+      await tester.tap(find.bySemanticsLabel(store.t('back')));
+      await frames(tester);
+      store.selectTab(2, filter: 'season');
+      await frames(tester);
+      final poster = find.descendant(
+        of: find.byKey(const ValueKey('library-1')),
+        matching: find.byType(Artwork),
+      );
+      expect(
+        tester.widget<Artwork>(poster).url,
+        store.catalog.items.first.poster,
+      );
+      expect(
+        tester.getRect(poster).width / tester.getRect(poster).height,
+        closeTo(.72, .01),
+      );
+      store.selectTab(0);
+      await frames(tester);
+      await Scrollable.ensureVisible(tester.element(heading), alignment: .35);
+      await frames(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.ancestor(of: heading, matching: find.byType(SectionHeading)),
+          matching: find.byType(CupertinoButton),
+        ),
+      );
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('timeline-1')));
+      await frames(tester);
+      expect(find.byType(DetailPage), findsOneWidget);
+      await tester.tap(find.text(store.t('playLatest')));
+      await frames(tester);
+      expect(find.byType(DetailPage), findsNothing);
+      expect(find.byType(SeasonalPage), findsNothing);
+      expect(store.playingVideoId, '101');
+      expect(store.browserVisible, isTrue);
       expect(tester.takeException(), isNull);
     },
   );

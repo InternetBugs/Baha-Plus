@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:baha_plus/core/browser_request.dart';
@@ -7,6 +8,27 @@ import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/device_storage.dart';
+import 'package:baha_plus/data/official_search.dart';
+
+class FakeSearch implements AnimeSearch {
+  final queries = <String>[];
+  final pending = <String, Completer<List<Anime>>>{};
+  List<Anime> results = [];
+  List<Anime> recent = [];
+  Object? error;
+  @override
+  Future<List<Anime>> recentSeries() async => recent;
+  @override
+  Future<List<Anime>> search(String query, {bool useAccount = true}) async {
+    queries.add(query);
+    if (pending[query] case final response?) return response.future;
+    if (error case final failure?) throw failure;
+    return results;
+  }
+
+  @override
+  void dispose() {}
+}
 
 class MemoryStorage implements DeviceStorage {
   final values = <String, String>{};
@@ -19,6 +41,18 @@ class MemoryStorage implements DeviceStorage {
 class FakePortal implements OfficialPortal {
   final visited = <Uri>[];
   final scripts = <String>[];
+  final publicRequests = <Uri>[];
+  final publicRequestAccounts = <bool>[];
+  Json publicResponse = {
+    'data': {'animeList': []},
+  };
+  @override
+  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount}) async {
+    publicRequests.add(uri);
+    publicRequestAccounts.add(useAccount);
+    return publicResponse;
+  }
+
   @override
   Future<void> load(Uri uri) async => visited.add(uri);
   @override
@@ -32,6 +66,14 @@ class FakePortal implements OfficialPortal {
   @override
   Future<void> reload() async {}
 }
+
+Future<AppStore> _createStore({
+  DeviceStorage? storage,
+  AnimeSearch? animeSearch,
+}) => AppStore.create(
+  storage: storage ?? MemoryStorage(),
+  animeSearch: animeSearch ?? FakeSearch(),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -104,7 +146,7 @@ void main() {
   test(
     'player metadata updates preserve the active playback operation',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       final portal = FakePortal();
       await store.attach(portal);
@@ -152,7 +194,7 @@ void main() {
   test(
     'background playback stays paused across a new document and foreground return',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       final portal = FakePortal();
       await store.attach(portal);
@@ -201,7 +243,7 @@ void main() {
   test(
     'account sync returns from the login site to the official account origin',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       final portal = FakePortal();
       await store.attach(portal);
@@ -230,7 +272,7 @@ void main() {
   test(
     'account data updates automatically on history entry and foreground without duplicate requests',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       store.catalog = catalog;
       final portal = FakePortal();
@@ -267,7 +309,7 @@ void main() {
   test(
     'closing the login page automatically returns to the official account for hidden sync',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       final portal = FakePortal();
       await store.attach(portal);
@@ -306,7 +348,7 @@ void main() {
         );
       }
       final disk = MemoryStorage();
-      final store = await AppStore.create(storage: disk);
+      final store = await _createStore(storage: disk);
       addTearDown(store.dispose);
       await store.attach(FakePortal());
       store.updateNavigation(
@@ -422,7 +464,7 @@ void main() {
   test(
     'search accepts both scripts, full width, accents and supplementary text',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       expect(store.folding.matches('世界最強的魔女，就此開始', '世界最强的魔女'), isTrue);
       expect(
@@ -431,6 +473,7 @@ void main() {
       );
       expect(store.folding.normalize('𠮷-野'), '𠮷野');
       expect(store.folding.normalize('e\u0301'), store.folding.normalize('é'));
+      expect(store.folding.toTraditional('进击的巨人'), '進擊的巨人');
     },
   );
 
@@ -544,7 +587,7 @@ void main() {
     'app starts blank, caches successful response and keeps it after failed refresh',
     () async {
       final disk = MemoryStorage();
-      final store = await AppStore.create(storage: disk);
+      final store = await _createStore(storage: disk);
       addTearDown(store.dispose);
       expect(store.catalog.items, isEmpty);
       final portal = FakePortal();
@@ -561,7 +604,7 @@ void main() {
       expect(store.catalogSource, 'live');
       store.navigationFailed();
       expect(store.catalog.encode(), catalog.encode());
-      final restarted = await AppStore.create(storage: disk);
+      final restarted = await _createStore(storage: disk);
       addTearDown(restarted.dispose);
       expect(restarted.catalog.encode(), catalog.encode());
       expect(restarted.catalogSource, 'cache');
@@ -572,34 +615,164 @@ void main() {
   );
 
   test('new search discards stale asynchronous response', () async {
-    final store = await AppStore.create(storage: MemoryStorage());
+    final search = FakeSearch();
+    search.pending['old'] = Completer<List<Anime>>();
+    search.pending['new'] = Completer<List<Anime>>();
+    final store = await _createStore(
+      storage: MemoryStorage(),
+      animeSearch: search,
+    );
     addTearDown(store.dispose);
     final portal = FakePortal();
     await store.attach(portal);
     store.query = 'old';
-    await store.search();
-    final old = store.operation;
+    final old = store.search();
     store.query = 'new';
-    await store.search();
-    await store.receive(
-      jsonEncode({
-        'type': 'search',
-        'requestId': old.id,
-        'items': fixture['items'],
-        'fetchedAt': fixture['fetchedAt'],
-      }),
-      origin: OfficialSite.home,
-      source: OfficialSite.search('old'),
-      isMainFrame: true,
-    );
-    expect(store.searchResults, isEmpty);
-    expect(store.operation.query, 'new');
+    final latest = store.search();
+    search.pending['new']!.complete([catalog.items.last]);
+    await latest;
+    search.pending['old']!.complete([catalog.items.first]);
+    await old;
+    expect(store.searchResults.single.id, catalog.items.last.id);
+    expect(store.searchedQuery, 'new');
+    expect(store.operation.intent, BrowserIntent.catalog);
   });
+
+  test(
+    'public search uses the owned official network channel without navigating away',
+    () async {
+      final service = OfficialAnimeSearch(toTraditional: (text) => text);
+      final store = await _createStore(animeSearch: service);
+      addTearDown(store.dispose);
+      final portal = FakePortal()
+        ..publicResponse = {
+          'data': {
+            'history': ['ignored-private-search-history'],
+            'animeList': [
+              {
+                'animeSn': 10,
+                'videoSn': 20,
+                'title': '測試動畫',
+                'cover': 'https://p2.bahamut.com.tw/10.jpg',
+                'totalEpisode': 12,
+              },
+            ],
+          },
+        };
+      await store.attach(portal);
+      store.query = '測試';
+      await store.search();
+      expect(portal.publicRequests.single.path, '/anime/v1/search.php');
+      expect(portal.publicRequests.single.queryParameters['kw'], '測試');
+      expect(portal.publicRequestAccounts, [true]);
+      expect(store.searchResults.single.id, '10');
+      expect(store.browserVisible, isFalse);
+      expect(portal.visited, [OfficialSite.home]);
+      expect(store.favorites, isEmpty);
+      expect(store.history, isEmpty);
+      await service.recentSeries();
+      expect(portal.publicRequestAccounts, [true, false, false]);
+    },
+  );
+
+  test(
+    'public search parses official series and video IDs without account state',
+    () {
+      final record = {
+        'animeSn': 10,
+        'videoSn': 20,
+        'title': '測試動畫',
+        'cover': 'https://p2.bahamut.com.tw/10.jpg',
+        'totalEpisode': 12,
+        'dateInfo': '年份：2026/11',
+        'favorite': true,
+      };
+      Json response(Json value) => {
+        'data': {
+          'animeList': [value],
+        },
+      };
+      final item = OfficialAnimeSearch.parseResponse(response(record)).single;
+      expect(item.id, '10');
+      expect(item.latestVideoId, '20');
+      expect(item.year, '2026/11');
+      expect(item.sections, isEmpty);
+      expect(
+        OfficialAnimeSearch.parseResponse({
+          'data': {'animeList': []},
+        }),
+        isEmpty,
+      );
+      expect(
+        () => OfficialAnimeSearch.parseResponse(
+          response({...record, 'cover': 'https://attacker.test/poster.jpg'}),
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => OfficialAnimeSearch.parseResponse({
+          'error': {'code': 0},
+        }),
+        throwsA(isA<Error>()),
+      );
+    },
+  );
+
+  test(
+    'public main visuals enrich the cache without replacing episode thumbnails or account data',
+    () async {
+      final disk = MemoryStorage();
+      final search = FakeSearch();
+      final item = Anime.fromJson({
+        'id': '10',
+        'title': 'Public Anime',
+        'cover': 'https://p2.bahamut.com.tw/episode.jpg',
+        'sections': ['season'],
+        'updateDate': '2026-11-06',
+      });
+      search.recent = [
+        const Anime(
+          id: '10',
+          title: 'Public Anime',
+          cover: 'https://p2.bahamut.com.tw/main.jpg',
+          poster: 'https://p2.bahamut.com.tw/main.jpg',
+        ),
+      ];
+      final store = await _createStore(storage: disk, animeSearch: search);
+      addTearDown(store.dispose);
+      store.catalog = Catalog(items: [item], fetchedAt: '2026-11-06T00:00:00Z');
+      await store.attach(FakePortal());
+      for (var i = 0; i < 20 && store.postersLoading; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(store.catalog.items.single.cover, item.cover);
+      expect(store.catalog.items.single.poster, search.recent.single.poster);
+      expect(store.favorites, isEmpty);
+      expect(store.history, isEmpty);
+      final cached = await CatalogCache(disk).load();
+      expect(cached!.items.single.poster, search.recent.single.poster);
+      await store.receive(
+        jsonEncode({
+          'type': 'catalog',
+          'requestId': store.operation.id,
+          'fetchedAt': '2026-11-06T00:10:00Z',
+          'items': [item.toJson()],
+        }),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      expect(store.catalog.items.single.poster, search.recent.single.poster);
+      expect(store.catalog.items.single.updateDate, '2026-11-06');
+      expect(Catalog.validDate('2026-02-30'), isFalse);
+      expect(Catalog.validDate('2026-02-28'), isTrue);
+    },
+  );
 
   test(
     'simplified and traditional interface dictionaries are complete',
     () async {
-      final store = await AppStore.create(storage: MemoryStorage());
+      final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
       expect(
         store.dictionaries['zh-Hans']!.keys.toSet(),

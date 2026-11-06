@@ -11,7 +11,7 @@ class DetailPage extends StatelessWidget {
   final Anime anime;
 
   void _play(BuildContext context, {Episode? episode}) {
-    Navigator.of(context).pop();
+    Navigator.of(context).popUntil((route) => route.isFirst);
     store.play(anime, episode: episode);
   }
 
@@ -136,7 +136,9 @@ class DetailPage extends StatelessWidget {
                                   color: Colors.white,
                                 ),
                                 onPressed: () {
-                                  Navigator.pop(context);
+                                  Navigator.of(
+                                    context,
+                                  ).popUntil((route) => route.isFirst);
                                   store.toggleFavorite(anime);
                                 },
                               ),

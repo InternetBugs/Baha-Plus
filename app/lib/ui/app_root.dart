@@ -9,6 +9,7 @@ import 'catalog_pages.dart';
 import 'chrome.dart';
 import 'detail_page.dart';
 import 'official_browser.dart';
+import 'seasonal_page.dart';
 
 class AppRoot extends StatefulWidget {
   const AppRoot({required this.store, this.mountPortal = true, super.key});
@@ -97,6 +98,34 @@ class _AppRootState extends State<AppRoot>
     );
   }
 
+  void _season() => Navigator.push(
+    context,
+    CupertinoPageRoute<void>(
+      builder: (_) => SeasonalPage(store: store, openDetail: _detail),
+    ),
+  );
+
+  void _selectTab(int index) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (index == store.tab) {
+      final scroll = _titles[index].scrollController;
+      if (!scroll.hasClients) return;
+      if (MediaQuery.disableAnimationsOf(context)) {
+        scroll.jumpTo(0);
+      } else {
+        unawaited(
+          scroll.animateTo(
+            0,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      }
+      return;
+    }
+    store.selectTab(index);
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
@@ -159,7 +188,13 @@ class _AppRootState extends State<AppRoot>
       ),
       slivers: [
         CupertinoSliverRefreshControl(
-          onRefresh: store.tab == 3 ? store.syncAccount : store.refreshCatalog,
+          onRefresh: switch (store.tab) {
+            3 => store.syncAccount,
+            4 when store.query.isNotEmpty => store.search,
+            2 when store.query.isNotEmpty && store.libraryFilter == 'all' =>
+              store.search,
+            _ => store.refreshCatalog,
+          },
         ),
         SliverToBoxAdapter(
           child: SizedBox(height: MediaQuery.paddingOf(context).top + 44),
@@ -198,18 +233,21 @@ class _AppRootState extends State<AppRoot>
                   store: store,
                   openDetail: _detail,
                   openHistory: () => store.selectTab(3),
+                  openSeason: _season,
                 )
               : store.tab == 3
               ? HistoryContent(store: store)
+              : store.tab == 2
+              ? LibraryContent(
+                  store: store,
+                  openDetail: _detail,
+                  connectAccount: store.connectAccount,
+                )
+              : store.tab == 4
+              ? SearchContent(store: store, openDetail: _detail)
               : SliverToBoxAdapter(
                   child: switch (store.tab) {
                     1 => ScheduleContent(store: store, openDetail: _detail),
-                    2 => LibraryContent(
-                      store: store,
-                      openDetail: _detail,
-                      connectAccount: store.connectAccount,
-                    ),
-                    4 => SearchContent(store: store, openDetail: _detail),
                     _ => const SizedBox.shrink(),
                   },
                 ),
@@ -248,10 +286,7 @@ class _AppRootState extends State<AppRoot>
                       : const Color(0x45ffffff),
                 ),
         selectedIndex: store.tab,
-        onTabSelected: (index) {
-          FocusManager.instance.primaryFocus?.unfocus();
-          store.selectTab(index);
-        },
+        onTabSelected: _selectTab,
         horizontalPadding: 16,
         verticalPadding: 12,
         selectedIconColor: brandBlue,

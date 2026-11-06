@@ -9,16 +9,54 @@ import 'chrome.dart';
 
 typedef ShowAnime = void Function(Anime anime);
 
+class AnimeWaterfall extends StatelessWidget {
+  const AnimeWaterfall({
+    required this.store,
+    required this.items,
+    required this.openDetail,
+    required this.itemKeyPrefix,
+    super.key,
+  });
+  final AppStore store;
+  final List<Anime> items;
+  final ShowAnime openDetail;
+  final String itemKeyPrefix;
+
+  @override
+  Widget build(BuildContext context) => SliverLayoutBuilder(
+    builder: (context, constraints) => SliverMasonryGrid.count(
+      key: ValueKey('$itemKeyPrefix-waterfall'),
+      crossAxisCount: (constraints.crossAxisExtent / 190).floor().clamp(2, 4),
+      mainAxisSpacing: 24,
+      crossAxisSpacing: 16,
+      childCount: items.length,
+      itemBuilder: (context, index) {
+        final anime = items[index];
+        return AnimeTile(
+          key: ValueKey('$itemKeyPrefix-${anime.id}'),
+          store: store,
+          anime: anime,
+          poster: true,
+          titleLines: 3,
+          onTap: () => openDetail(anime),
+        );
+      },
+    ),
+  );
+}
+
 class HomeContent extends StatelessWidget {
   const HomeContent({
     required this.store,
     required this.openDetail,
     required this.openHistory,
+    required this.openSeason,
     super.key,
   });
   final AppStore store;
   final ShowAnime openDetail;
   final VoidCallback openHistory;
+  final VoidCallback openSeason;
 
   @override
   Widget build(BuildContext context) {
@@ -26,14 +64,25 @@ class HomeContent extends StatelessWidget {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
     }
     final popular = store.popular;
+    final featured = {
+      for (final anime in [
+        ...store.seasonal,
+        if (popular.isNotEmpty) popular.first,
+      ])
+        anime.id: anime,
+    }.values.toList();
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (store.seasonal.isNotEmpty)
-                _hero(context, store.seasonal.first),
+              if (featured.isNotEmpty)
+                FeaturedCarousel(
+                  key: const ValueKey('home-featured-carousel'),
+                  items: featured,
+                  itemBuilder: _hero,
+                ),
               if (store.history.isNotEmpty) ...[
                 const SizedBox(height: 24),
                 SectionHeading(store.t('history'), onTap: openHistory),
@@ -54,16 +103,9 @@ class HomeContent extends StatelessWidget {
                   ),
                 ),
               ],
-              if (popular.isNotEmpty) ...[
-                const SizedBox(height: 28),
-                _compactFeature(popular.first),
-              ],
               if (store.seasonal.isNotEmpty) ...[
                 const SizedBox(height: 28),
-                SectionHeading(
-                  store.t('seasonal'),
-                  onTap: () => store.selectTab(2, filter: 'season'),
-                ),
+                SectionHeading(store.t('seasonal'), onTap: openSeason),
                 const SizedBox(height: 16),
                 _tiles(store.seasonal.take(8).toList()),
               ],
@@ -79,28 +121,11 @@ class HomeContent extends StatelessWidget {
           ),
         ),
         if (popular.isNotEmpty)
-          SliverLayoutBuilder(
-            builder: (context, constraints) => SliverMasonryGrid.count(
-              key: const ValueKey('popular-waterfall'),
-              crossAxisCount: (constraints.crossAxisExtent / 190).floor().clamp(
-                2,
-                4,
-              ),
-              mainAxisSpacing: 24,
-              crossAxisSpacing: 16,
-              childCount: popular.length,
-              itemBuilder: (context, index) {
-                final anime = popular[index];
-                return AnimeTile(
-                  key: ValueKey('popular-${anime.id}'),
-                  store: store,
-                  anime: anime,
-                  poster: true,
-                  titleLines: 3,
-                  onTap: () => openDetail(anime),
-                );
-              },
-            ),
+          AnimeWaterfall(
+            store: store,
+            items: popular,
+            openDetail: openDetail,
+            itemKeyPrefix: 'popular',
           ),
       ],
     );
@@ -114,7 +139,7 @@ class HomeContent extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Artwork(anime.cover),
+            Artwork(anime.poster),
             const ColoredBox(color: Color(0x22000000)),
             const DecoratedBox(
               decoration: BoxDecoration(
@@ -132,7 +157,11 @@ class HomeContent extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Text(
-                    store.t('featured'),
+                    store.t(
+                      anime.sections.contains('season')
+                          ? 'featured'
+                          : 'popular',
+                    ),
                     style: const TextStyle(
                       color: Color(0xbbffffff),
                       fontSize: 12,
@@ -162,7 +191,7 @@ class HomeContent extends StatelessWidget {
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(11),
-                        child: Artwork(anime.artwork, width: 48, height: 48),
+                        child: Artwork(anime.poster, width: 48, height: 48),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -223,55 +252,6 @@ class HomeContent extends StatelessWidget {
     ),
   );
 
-  Widget _compactFeature(Anime anime) => ClipRRect(
-    borderRadius: BorderRadius.circular(24),
-    child: SizedBox(
-      height: 165,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Artwork(anime.cover),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Color(0xcc000000)],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => openDetail(anime),
-                      child: Text(
-                        anime.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  _watch(anime),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
   Widget _tiles(List<Anime> items) => Column(
     children: [
       for (var row = 0; row < (items.length + 1) ~/ 2; row++) ...[
@@ -303,63 +283,181 @@ class HomeContent extends StatelessWidget {
   );
 }
 
+class FeaturedCarousel extends StatefulWidget {
+  const FeaturedCarousel({
+    required this.items,
+    required this.itemBuilder,
+    super.key,
+  });
+  final List<Anime> items;
+  final Widget Function(BuildContext, Anime) itemBuilder;
+
+  @override
+  State<FeaturedCarousel> createState() => _FeaturedCarouselState();
+}
+
+class _FeaturedCarouselState extends State<FeaturedCarousel> {
+  final _pages = PageController(viewportFraction: .96);
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, bounds) => SizedBox(
+      height: math.min(bounds.maxWidth * 1.28, 510),
+      child: PageView.builder(
+        key: const PageStorageKey('featured-carousel-pages'),
+        controller: _pages,
+        padEnds: false,
+        allowImplicitScrolling: true,
+        physics: const BouncingScrollPhysics(),
+        itemCount: widget.items.length,
+        itemBuilder: (context, index) => Padding(
+          key: ValueKey('featured-${widget.items[index].id}'),
+          padding: const EdgeInsets.only(right: 12),
+          child: widget.itemBuilder(context, widget.items[index]),
+        ),
+      ),
+    ),
+  );
+
+  @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+}
+
 class ContinueCard extends StatelessWidget {
   const ContinueCard({required this.store, required this.entry, super.key});
   final AppStore store;
   final WatchEntry entry;
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    behavior: HitTestBehavior.opaque,
-    onTap: () => store.continueWatching(entry),
-    child: Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: secondary(context).withValues(alpha: .06),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Artwork(entry.anime.artwork, width: 60, height: 80),
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final controlsGlass =
+        (dark ? LiquidGlassSettings.ios27Dark : LiquidGlassSettings.ios27Light)
+            .copyWith(
+              bodyMode: GlassBodyMode.clear,
+              glassColor: dark
+                  ? const Color(0x20ffffff)
+                  : const Color(0x55ffffff),
+              backerColor: Colors.transparent,
+              thickness: 14,
+              blur: 3,
+              chromaticAberration: .06,
+            );
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => store.continueWatching(entry),
+      child: GlassBackdropGroup(
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: secondary(context).withValues(alpha: .06),
+            borderRadius: BorderRadius.circular(22),
           ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  entry.anime.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Artwork(entry.anime.artwork, width: 60, height: 80),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      entry.anime.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'EP ${entry.episodeLabel}',
+                      style: TextStyle(fontSize: 12, color: secondary(context)),
+                    ),
+                    if (entry.progress != null) ...[
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 8,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: Colors.white.withValues(
+                                alpha: dark ? .18 : .7,
+                              ),
+                              width: .75,
+                            ),
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.white.withValues(
+                                  alpha: dark ? .12 : .65,
+                                ),
+                                Colors.white.withValues(
+                                  alpha: dark ? .03 : .12,
+                                ),
+                              ],
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(1.5),
+                            child: GlassProgressIndicator.linear(
+                              value: entry.progress,
+                              minWidth: 0,
+                              height: 5,
+                              color: brandBlue.withValues(alpha: .82),
+                              backgroundColor: Colors.transparent,
+                              semanticLabel: store.t('playbackProgress'),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (entry.progressLabel != null) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        entry.progress == 1
+                            ? store.t('historyFinished')
+                            : entry.progressLabel!,
+                        maxLines: 1,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: secondary(context),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  'EP ${entry.episodeLabel}',
-                  style: TextStyle(fontSize: 12, color: secondary(context)),
-                ),
-                if (entry.progress != null) ...[
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(value: entry.progress, minHeight: 3),
-                ],
-                if (entry.progressLabel != null) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    entry.progressLabel!,
-                    maxLines: 1,
-                    style: TextStyle(fontSize: 10, color: secondary(context)),
+              ),
+              const SizedBox(width: 12),
+              GlassIconButton(
+                key: ValueKey('history-play-${entry.anime.id}'),
+                size: 44,
+                useOwnLayer: true,
+                quality: GlassQuality.standard,
+                settings: controlsGlass,
+                semanticLabel: '${store.t('history')} ${entry.anime.title}',
+                icon: const Padding(
+                  padding: EdgeInsets.only(left: 2),
+                  child: Icon(
+                    CupertinoIcons.play_fill,
+                    color: brandBlue,
+                    size: 18,
                   ),
-                ],
-              ],
-            ),
+                ),
+                onPressed: () => store.continueWatching(entry),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          const Icon(CupertinoIcons.play_circle_fill, color: brandBlue),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class HistoryContent extends StatelessWidget {
@@ -424,94 +522,85 @@ class SearchContent extends StatelessWidget {
   final ShowAnime openDetail;
   @override
   Widget build(BuildContext context) {
-    if (store.query.isNotEmpty) {
-      return Column(
+    if (store.query.trim().isNotEmpty) {
+      final items = store.searchMatches;
+      if (store.searching || store.searchFailed || items.isEmpty) {
+        return SliverToBoxAdapter(child: SearchStatus(store: store));
+      }
+      return SliverList.builder(
+        itemCount: items.length,
+        itemBuilder: (context, index) => AnimeRow(
+          store: store,
+          anime: items[index],
+          onTap: () => openDetail(items[index]),
+        ),
+      );
+    }
+    return SliverToBoxAdapter(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (store.searchMatches.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 50),
-              child: Text(
-                store.t('noResults'),
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          for (final anime in store.searchMatches)
+          SectionHeading(
+            store.t('recommended'),
+            onTap: () => store.selectTab(2, filter: 'hot'),
+          ),
+          for (final anime in store.popular.take(3))
             AnimeRow(
               store: store,
               anime: anime,
               onTap: () => openDetail(anime),
             ),
-          const SizedBox(height: 20),
-          GlassButton.custom(
-            shape: const LiquidRoundedRectangle(borderRadius: 22),
-            useOwnLayer: true,
-            onTap: store.officialSearch,
-            height: 44,
-            width: 200,
-            child: Text(store.t('officialSearch')),
+          const SizedBox(height: 26),
+          SectionHeading(
+            store.t('browse'),
+            onTap: () => store.selectTab(2, filter: 'all'),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _category(
+                  store.t('seasonal'),
+                  'season',
+                  store.seasonal.firstOrNull,
+                  Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _category(
+                  store.t('popular'),
+                  'hot',
+                  store.popular.firstOrNull,
+                  Colors.orange,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _category(
+                  store.t('allAnime'),
+                  'all',
+                  store.catalog.items.lastOrNull,
+                  Colors.deepPurple,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _category(
+                  store.t('favorites'),
+                  'favorites',
+                  store.favorites.firstOrNull,
+                  Colors.green,
+                ),
+              ),
+            ],
           ),
         ],
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeading(
-          store.t('recommended'),
-          onTap: () => store.selectTab(2, filter: 'hot'),
-        ),
-        for (final anime in store.popular.take(3))
-          AnimeRow(store: store, anime: anime, onTap: () => openDetail(anime)),
-        const SizedBox(height: 26),
-        SectionHeading(
-          store.t('browse'),
-          onTap: () => store.selectTab(2, filter: 'all'),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: _category(
-                store.t('seasonal'),
-                'season',
-                store.seasonal.firstOrNull,
-                Colors.blue,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _category(
-                store.t('popular'),
-                'hot',
-                store.popular.firstOrNull,
-                Colors.orange,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _category(
-                store.t('allAnime'),
-                'all',
-                store.catalog.items.lastOrNull,
-                Colors.deepPurple,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _category(
-                store.t('favorites'),
-                'favorites',
-                store.favorites.firstOrNull,
-                Colors.green,
-              ),
-            ),
-          ],
-        ),
-      ],
+      ),
     );
   }
 
@@ -556,6 +645,24 @@ class SearchContent extends StatelessWidget {
       );
 }
 
+class SearchStatus extends StatelessWidget {
+  const SearchStatus({required this.store, super.key});
+  final AppStore store;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 50),
+    child: Center(
+      child: store.searching
+          ? const CupertinoActivityIndicator()
+          : Text(
+              store.t(store.searchFailed ? 'searchUnavailable' : 'noResults'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+    ),
+  );
+}
+
 class LibraryContent extends StatelessWidget {
   const LibraryContent({
     required this.store,
@@ -567,46 +674,70 @@ class LibraryContent extends StatelessWidget {
   final ShowAnime openDetail;
   final VoidCallback connectAccount;
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      GlassSegmentedControl(
-        selectedIndex: const [
-          'all',
-          'season',
-          'hot',
-          'favorites',
-        ].indexOf(store.libraryFilter).clamp(0, 3),
-        segments: [
-          for (final key in ['all', 'seasonFilter', 'hotFilter', 'favorites'])
-            GlassSegment(label: store.t(key)),
-        ],
-        onSegmentSelected: (index) => store.selectTab(
-          2,
-          filter: const ['all', 'season', 'hot', 'favorites'][index],
-        ),
-      ),
-      const SizedBox(height: 22),
-      if (store.libraryFilter == 'favorites' && !store.accountSynced)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 40),
-          child: GlassButton.custom(
-            shape: const LiquidRoundedRectangle(borderRadius: 22),
-            onTap: connectAccount,
-            width: 225,
-            height: 46,
-            child: Text(store.t('connectAccount')),
+  Widget build(BuildContext context) {
+    final items = store.libraryItems;
+    final needsAccount =
+        store.libraryFilter == 'favorites' && !store.accountSynced;
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            children: [
+              GlassSegmentedControl(
+                selectedIndex: const [
+                  'all',
+                  'season',
+                  'hot',
+                  'favorites',
+                ].indexOf(store.libraryFilter).clamp(0, 3),
+                segments: [
+                  for (final key in [
+                    'all',
+                    'seasonFilter',
+                    'hotFilter',
+                    'favorites',
+                  ])
+                    GlassSegment(label: store.t(key)),
+                ],
+                onSegmentSelected: (index) => store.selectTab(
+                  2,
+                  filter: const ['all', 'season', 'hot', 'favorites'][index],
+                ),
+              ),
+              const SizedBox(height: 22),
+              if (needsAccount)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: GlassButton.custom(
+                    shape: const LiquidRoundedRectangle(borderRadius: 22),
+                    onTap: connectAccount,
+                    width: 225,
+                    height: 46,
+                    child: Text(store.t('connectAccount')),
+                  ),
+                )
+              else if (items.isEmpty &&
+                  store.query.isNotEmpty &&
+                  store.libraryFilter == 'all')
+                SearchStatus(store: store)
+              else if (items.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: Text(store.t('noResults')),
+                ),
+            ],
           ),
-        )
-      else if (store.libraryItems.isEmpty)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 40),
-          child: Text(store.t('noResults')),
-        )
-      else
-        for (final anime in store.libraryItems)
-          AnimeRow(store: store, anime: anime, onTap: () => openDetail(anime)),
-    ],
-  );
+        ),
+        if (!needsAccount && items.isNotEmpty)
+          AnimeWaterfall(
+            store: store,
+            items: items,
+            openDetail: openDetail,
+            itemKeyPrefix: 'library',
+          ),
+      ],
+    );
+  }
 }
 
 class ScheduleContent extends StatefulWidget {

@@ -61,6 +61,22 @@ test('native search results are not falsely labelled as popular catalog entries'
   assert.deepEqual(fixture.messages[0].items[0].sections, []);
 });
 
+test('season timeline derives actual dates across New Year instead of using ordinal date codes', () => {
+  const fixture = setup(`<div id="blockVideoInSeason"><div data-animesn="10" data-date-code="1">
+    <a class="anime-card-block" href="animeVideo.php?sn=20"><div class="anime-blocker">
+    <img data-src="https://p2.bahamut.com.tw/episode.jpg"></div><p class="anime-name">測試動畫</p>
+    <span class="anime-hours">23:30</span></a>
+    <span class="anime-date-info">12/31 (三)</span></div></div>`, '/');
+  vm.runInContext(`const SystemDate = Date;
+    Date = class extends SystemDate {
+      constructor(...args) { super(...(args.length ? args : ['2026-01-01T00:30:00Z'])); }
+      static now() { return new SystemDate('2026-01-01T00:30:00Z').getTime(); }
+    };`, fixture.context);
+  vm.runInContext(fs.readFileSync(folder + 'catalog.js', 'utf8').replaceAll('%KIND%', 'catalog'), fixture.context);
+  assert.equal(fixture.messages[0].items[0].updateDate, '2025-12-31');
+  assert.equal(fixture.messages[0].items[0].updateTime, '23:30');
+});
+
 test('duplicate popularity cards cannot erase the official timeline schedule', () => {
   const fixture = setup(`<div id="blockVideoInSeason">
     <div data-animesn="10"><a class="anime-card-block" href="animeVideo.php?sn=20">

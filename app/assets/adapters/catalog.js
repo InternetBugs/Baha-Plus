@@ -3,6 +3,19 @@
   const items = new Map();
   const text = (node) => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const image = (node) => node?.getAttribute('data-src') || node?.getAttribute('src');
+  const updateDate = (label) => {
+    const match = label.match(/(\d{1,2})\/(\d{1,2})/);
+    if (!match) return undefined;
+    const today = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const month = Number(match[1]), day = Number(match[2]);
+    let year = today.getUTCFullYear();
+    const difference = month - today.getUTCMonth() - 1;
+    if (difference > 6) year--;
+    else if (difference < -6) year++;
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    if (candidate.getUTCMonth() !== month - 1 || candidate.getUTCDate() !== day) return undefined;
+    return candidate.toISOString().slice(0, 10);
+  };
   const idFrom = (card) => {
     const action = card.querySelector('[onclick*="toggleGather"]')?.getAttribute('onclick') || '';
     const match = action.match(/toggleGather\(\d+,\s*(\d+)/);
@@ -27,6 +40,7 @@
       episodeLabel: old?.episodeLabel || text(card.querySelector('.anime-episode p')),
       updateTime: old?.updateTime || text(card.querySelector('.anime-hours')),
       updateDay: old?.updateDay ?? (weekday ? '日一二三四五六'.indexOf(weekday) : undefined),
+      updateDate: old?.updateDate ?? updateDate(text(parent.querySelector('.anime-date-info'))),
       views: old?.views || text(card.querySelector('.anime-watch-number p')) });
   });
   document.querySelectorAll('a.theme-list-main').forEach(card => {

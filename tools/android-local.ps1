@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Check', 'Build', 'Run')]
+    [ValidateSet('Check', 'Build', 'Run', 'Integration')]
     [string]$Action = 'Build',
     [ValidateSet('debug', 'release')]
     [string]$Mode = 'debug',
@@ -36,18 +36,23 @@ if ($ProxyUrl) {
 }
 Push-Location (Join-Path $projectRoot 'app')
 try {
-    & $flutterTool pub get
-    if ($LASTEXITCODE -ne 0) { throw 'Flutter dependency resolution failed.' }
     if ($Action -eq 'Check') {
+        & $flutterTool pub get
+        if ($LASTEXITCODE -ne 0) { throw 'Flutter dependency resolution failed.' }
         & $flutterTool analyze --no-pub
         if ($LASTEXITCODE -ne 0) { throw 'Flutter analysis failed.' }
         & $flutterTool test --no-pub
         if ($LASTEXITCODE -ne 0) { throw 'Flutter tests failed.' }
+    } elseif ($Action -eq 'Integration') {
+        & $flutterTool test integration_test/catalog_smoke_test.dart -d $Device --no-uninstall
+        if ($LASTEXITCODE -ne 0) { throw 'Flutter Android integration tests failed.' }
     } elseif ($Action -eq 'Run') {
-        & $flutterTool run -d $Device "--$Mode" --no-pub
+        & $flutterTool run -d $Device "--$Mode"
         if ($LASTEXITCODE -ne 0) { throw 'Flutter run failed.' }
     } else {
-        & $flutterTool build apk "--$Mode" --target-platform $TargetPlatform --no-pub
+        # Flutter regenerates native plugin registration for the selected mode.
+        # Skipping pub here can leave debug-only integration plugins in release.
+        & $flutterTool build apk "--$Mode" --target-platform $TargetPlatform
         if ($LASTEXITCODE -ne 0) { throw 'Flutter Android build failed.' }
         $output = Join-Path $projectRoot 'artifacts\flutter-local'
         New-Item -ItemType Directory -Path $output -Force | Out-Null

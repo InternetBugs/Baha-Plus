@@ -19,29 +19,32 @@ Color secondary(BuildContext context) =>
 
 class Artwork extends StatelessWidget {
   const Artwork(this.url, {this.width, this.height, super.key});
-  final String url;
+  final String? url;
   final double? width, height;
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final displayWidth =
-          width ?? (constraints.hasBoundedWidth ? constraints.maxWidth : null);
-      return CachedNetworkImage(
-        imageUrl: url,
-        width: width,
-        height: height,
-        memCacheWidth: displayWidth == null
-            ? null
-            : (displayWidth * MediaQuery.devicePixelRatioOf(context))
-                  .ceil()
-                  .clamp(1, 2048),
-        fit: BoxFit.cover,
-        fadeInDuration: const Duration(milliseconds: 180),
-        placeholder: (context, url) => _placeholder(context),
-        errorWidget: (context, url, error) => _placeholder(context),
-      );
-    },
-  );
+  Widget build(BuildContext context) => url == null
+      ? SizedBox(width: width, height: height, child: _placeholder(context))
+      : LayoutBuilder(
+          builder: (context, constraints) {
+            final displayWidth =
+                width ??
+                (constraints.hasBoundedWidth ? constraints.maxWidth : null);
+            return CachedNetworkImage(
+              imageUrl: url!,
+              width: width,
+              height: height,
+              memCacheWidth: displayWidth == null
+                  ? null
+                  : (displayWidth * MediaQuery.devicePixelRatioOf(context))
+                        .ceil()
+                        .clamp(1, 2048),
+              fit: BoxFit.cover,
+              fadeInDuration: const Duration(milliseconds: 180),
+              placeholder: (context, url) => _placeholder(context),
+              errorWidget: (context, url, error) => _placeholder(context),
+            );
+          },
+        );
 
   Widget _placeholder(BuildContext context) => ColoredBox(
     color: secondary(context).withValues(alpha: .08),
@@ -145,6 +148,7 @@ class AnimeTile extends StatelessWidget {
     required this.onTap,
     this.poster = false,
     this.titleLines = 2,
+    this.showUpdateTime = false,
     super.key,
   });
   final AppStore store;
@@ -152,6 +156,7 @@ class AnimeTile extends StatelessWidget {
   final VoidCallback onTap;
   final bool poster;
   final int titleLines;
+  final bool showUpdateTime;
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.opaque,
@@ -164,10 +169,10 @@ class AnimeTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AspectRatio(
-            aspectRatio: poster ? .72 : 1.65,
+            aspectRatio: poster ? .72 : 16 / 9,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(18),
-              child: Artwork(poster ? anime.artwork : anime.cover),
+              child: Artwork(poster ? anime.poster : anime.cover),
             ),
           ),
           const SizedBox(height: 9),
@@ -182,7 +187,10 @@ class AnimeTile extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  anime.episodeLabel ?? anime.year ?? '',
+                  [
+                    if (showUpdateTime) anime.updateTime,
+                    anime.episodeLabel ?? anime.year,
+                  ].whereType<String>().where((e) => e.isNotEmpty).join(' · '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11, color: secondary(context)),

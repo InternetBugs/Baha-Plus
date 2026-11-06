@@ -7,12 +7,14 @@ import '../core/models.dart';
 import '../core/playback_state.dart';
 import '../core/search_folding.dart';
 import 'device_storage.dart';
+import 'official_search.dart';
 
 abstract interface class OfficialPortal {
   Future<void> load(Uri uri);
   Future<void> reload();
   Future<void> goBack();
   Future<dynamic> evaluate(String script);
+  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount});
 }
 
 class AppStore extends ChangeNotifier {
@@ -21,13 +23,20 @@ class AppStore extends ChangeNotifier {
     required this.dictionaries,
     required this.folding,
     required this.scripts,
+    AnimeSearch? animeSearch,
     this.language = 'zh-Hant',
     this.appearance = 'system',
     this.catalog = const Catalog(),
-  }) : cache = CatalogCache(storage),
+  }) : searchService =
+           animeSearch ??
+           OfficialAnimeSearch(toTraditional: folding.toTraditional),
+       cache = CatalogCache(storage),
        catalogSource = catalog.items.isEmpty ? 'empty' : 'cache';
 
-  static Future<AppStore> create({DeviceStorage? storage}) async {
+  static Future<AppStore> create({
+    DeviceStorage? storage,
+    AnimeSearch? animeSearch,
+  }) async {
     final disk = storage ?? PreferencesStorage();
     final dictionaries = <String, Map<String, String>>{};
     for (final locale in ['zh-Hans', 'zh-Hant']) {
@@ -40,6 +49,14 @@ class AppStore extends ChangeNotifier {
         (jsonDecode(
                   await rootBundle.loadString(
                     'assets/data/search-folding.json',
+                  ),
+                )
+                as Map<String, dynamic>)
+            .cast<String, String>();
+    final traditional =
+        (jsonDecode(
+                  await rootBundle.loadString(
+                    'assets/data/search-traditional.json',
                   ),
                 )
                 as Map<String, dynamic>)
@@ -64,7 +81,8 @@ class AppStore extends ChangeNotifier {
     return AppStore(
       storage: disk,
       dictionaries: dictionaries,
-      folding: SearchFolding(folding),
+      folding: SearchFolding(folding, traditionalMapping: traditional),
+      animeSearch: animeSearch,
       scripts: scripts,
       language: const ['zh-Hans', 'zh-Hant'].contains(language)
           ? language!
@@ -89,6 +107,7 @@ class AppStore extends ChangeNotifier {
   }
 
   final DeviceStorage storage;
+  final AnimeSearch searchService;
   final CatalogCache cache;
   final Map<String, Map<String, String>> dictionaries;
   final SearchFolding folding;
@@ -100,6 +119,7 @@ class AppStore extends ChangeNotifier {
   List<WatchEntry> history = [];
   AccountProfile? accountProfile;
   bool accountSynced = false, accountNeedsRefresh = false;
+  bool searching = false, searchFailed = false;
   int tab = 0;
   String libraryFilter = 'all', _query = '', searchedQuery = '';
   Anime? selectedAnime;
@@ -122,6 +142,10 @@ class AppStore extends ChangeNotifier {
   bool _desiredFavorite = false, _disposed = false;
   bool _applicationActive = true;
   Timer? _deadline;
+  Timer? _searchDebounce;
+  int _searchGeneration = 0;
+  bool postersLoading = false;
+  final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
 
   String t(String key) => dictionaries[language]?[key] ?? key;
@@ -204,30 +228,36 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       catalog.items.where((item) => item.sections.contains('season')).toList();
   List<Anime> get popular =>
       catalog.items.where((item) => item.sections.contains('hot')).toList();
+  bool get _usesOfficialSearch =>
+      tab == 4 || (tab == 2 && libraryFilter == 'all');
   String get query => _query;
   set query(String value) {
     if (value == _query) return;
     _query = value;
     searchedQuery = '';
     searchResults = [];
+    _searchDebounce?.cancel();
+    _searchGeneration++;
+    searching = value.trim().isNotEmpty && _usesOfficialSearch;
+    searchFailed = false;
     _emit();
+    if (searching) {
+      _searchDebounce = Timer(
+        const Duration(milliseconds: 350),
+        () => unawaited(search()),
+      );
+    }
   }
 
   bool isFavorite(Anime item) => favorites.any((e) => e.id == item.id);
   List<Anime> get searchMatches {
-    final result = catalog.items
-        .where((e) => folding.matches(e.title, query))
-        .toList();
-    if (query.isNotEmpty && searchedQuery == query) {
-      for (final item in searchResults) {
-        if (!result.any((e) => e.id == item.id)) result.add(item);
-      }
-    }
-    return result;
+    if (query.trim().isEmpty) return catalog.items;
+    return searchedQuery == query ? searchResults : [];
   }
 
   List<Anime> get libraryItems {
-    final source = libraryFilter == 'favorites' ? favorites : searchMatches;
+    if (libraryFilter == 'all' && query.trim().isNotEmpty) return searchMatches;
+    final source = libraryFilter == 'favorites' ? favorites : catalog.items;
     return source
         .where(
           (item) =>
@@ -247,6 +277,12 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     _emit();
     if (value == 3 && !browserVisible && !busy && _portal != null) {
       unawaited(syncAccount());
+    }
+    if (_usesOfficialSearch &&
+        query.trim().isNotEmpty &&
+        searchedQuery != query &&
+        !searching) {
+      unawaited(search());
     }
   }
 
@@ -275,12 +311,88 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> attach(OfficialPortal portal) async {
     _portal = portal;
+    if (searchService case final OfficialAnimeSearch search) {
+      search.useTransport(portal.fetchPublicCatalog);
+    }
     if (_pendingUri != null) {
       final uri = _pendingUri!;
       _pendingUri = null;
       await portal.load(uri);
     } else {
       await refreshCatalog();
+    }
+    unawaited(_refreshPosters());
+  }
+
+  void _rememberPosters(Iterable<Anime> series) {
+    for (final item in series) {
+      if (item.poster != null) _posterIndex[item.id] = item.poster!;
+    }
+    final merged = _mergePosters(catalog);
+    if (!identical(merged, catalog)) {
+      catalog = merged;
+      _emit();
+    }
+  }
+
+  Catalog _mergePosters(Catalog source) {
+    var changed = false;
+    final items = [
+      for (final item in source.items)
+        if (item.poster == null && _posterIndex.containsKey(item.id))
+          () {
+            changed = true;
+            return Anime.fromJson({
+              ...item.toJson(),
+              'poster': _posterIndex[item.id],
+            });
+          }()
+        else
+          item,
+    ];
+    return changed
+        ? Catalog(items: items, fetchedAt: source.fetchedAt)
+        : source;
+  }
+
+  Future<void> _refreshPosters() async {
+    if (_disposed ||
+        postersLoading ||
+        catalog.items.every((e) => e.poster != null)) {
+      return;
+    }
+    postersLoading = true;
+    try {
+      final recent = await searchService.recentSeries();
+      if (_disposed) return;
+      _rememberPosters(recent);
+      await cache.save(catalog);
+      final pending = catalog.items.where((e) => e.poster == null).toList();
+      var next = 0;
+      final found = <Anime>[];
+      Future<void> worker() async {
+        while (!_disposed && next < pending.length) {
+          final item = pending[next++];
+          try {
+            final matches = await searchService.search(
+              item.title,
+              useAccount: false,
+            );
+            found.addAll(matches.where((match) => match.id == item.id));
+          } catch (_) {
+            // Keep existing public artwork on a temporary metadata failure.
+          }
+        }
+      }
+
+      await Future.wait([for (var i = 0; i < 3; i++) worker()]);
+      if (_disposed) return;
+      _rememberPosters(found);
+      await cache.save(catalog);
+    } catch (_) {
+      // An unavailable artwork endpoint must not discard the catalog cache.
+    } finally {
+      postersLoading = false;
     }
   }
 
@@ -330,22 +442,32 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> search() async {
+    _searchDebounce?.cancel();
     if (query.trim().isEmpty) return;
-    searchedQuery = query;
-    await _load(
-      OfficialSite.search(query),
-      BrowserIntent.search,
-      visible: false,
-    );
-  }
-
-  Future<void> officialSearch() async {
-    browserTitle = t('officialSearch');
-    await _load(
-      OfficialSite.search(query),
-      BrowserIntent.browse,
-      visible: true,
-    );
+    final input = query;
+    final generation = ++_searchGeneration;
+    searching = true;
+    searchFailed = false;
+    _emit();
+    try {
+      final items = await searchService.search(input);
+      if (_disposed || generation != _searchGeneration || query != input) {
+        return;
+      }
+      searchResults = items;
+      searchedQuery = input;
+      _rememberPosters(items);
+    } catch (_) {
+      if (_disposed || generation != _searchGeneration || query != input) {
+        return;
+      }
+      searchResults = [];
+      searchFailed = true;
+    }
+    if (generation == _searchGeneration) {
+      searching = false;
+      _emit();
+    }
   }
 
   Future<void> connectAccount() async {
@@ -588,7 +710,10 @@ window.__bahaMediaSuspended = false; true;
     busy = false;
     switch (body['type']) {
       case 'catalog':
-        final updated = Catalog.fromJson(body);
+        for (final item in catalog.items) {
+          if (item.poster != null) _posterIndex[item.id] = item.poster!;
+        }
+        final updated = _mergePosters(Catalog.fromJson(body));
         catalog = updated;
         catalogSource = 'live';
         verificationRequired = false;
@@ -598,6 +723,7 @@ window.__bahaMediaSuspended = false; true;
         } catch (_) {
           notice = t('storageError');
         }
+        unawaited(_refreshPosters());
         if (operation.id == completed.id) {
           // Preserve a visible verification page until its user closes it.
           if (browserVisible) {
@@ -784,6 +910,9 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
   void dispose() {
     _disposed = true;
     _deadline?.cancel();
+    _searchDebounce?.cancel();
+    _searchGeneration++;
+    searchService.dispose();
     playback.dispose();
     super.dispose();
   }

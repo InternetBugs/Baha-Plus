@@ -53,6 +53,7 @@ class Anime {
     this.episodeLabel,
     this.updateDay,
     this.updateTime,
+    this.updateDate,
     this.views,
     this.year,
     this.sections = const [],
@@ -68,6 +69,7 @@ class Anime {
       episodeLabel: json['episodeLabel'] as String?,
       updateDay: json['updateDay'] as int?,
       updateTime: json['updateTime'] as String?,
+      updateDate: json['updateDate'] as String?,
       views: json['views'] as String?,
       year: json['year'] as String?,
       sections: (json['sections'] as List).cast<String>(),
@@ -77,7 +79,13 @@ class Anime {
   }
 
   final String id, title, cover;
-  final String? poster, latestVideoId, episodeLabel, updateTime, views, year;
+  final String? poster,
+      latestVideoId,
+      episodeLabel,
+      updateTime,
+      updateDate,
+      views,
+      year;
   final int? updateDay;
   final List<String> sections;
   String get artwork => poster ?? cover;
@@ -90,6 +98,7 @@ class Anime {
       (poster == null || OfficialSite.validImage(poster!)) &&
       (latestVideoId == null || OfficialSite.validId(latestVideoId!)) &&
       (updateDay == null || (updateDay! >= 0 && updateDay! <= 6)) &&
+      (updateDate == null || Catalog.validDate(updateDate!)) &&
       sections.every(const ['season', 'hot', 'new'].contains);
 
   Json toJson() => {
@@ -101,6 +110,7 @@ class Anime {
     if (episodeLabel != null) 'episodeLabel': episodeLabel,
     if (updateDay != null) 'updateDay': updateDay,
     if (updateTime != null) 'updateTime': updateTime,
+    if (updateDate != null) 'updateDate': updateDate,
     if (views != null) 'views': views,
     if (year != null) 'year': year,
     'sections': sections,
@@ -138,6 +148,11 @@ class Catalog {
         r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$',
       ).hasMatch(value) &&
       DateTime.tryParse(value) != null;
+
+  static bool validDate(String value) =>
+      RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value) &&
+      (DateTime.tryParse(value)?.toIso8601String().startsWith('${value}T') ??
+          false);
 }
 
 class Episode {

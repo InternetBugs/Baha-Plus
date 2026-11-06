@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -25,6 +26,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   final _progress = ValueNotifier<int>(0);
   final _webViewKey = GlobalKey(debugLabel: 'official-video-session');
   bool _desktop = false;
+  bool _publicDocumentReady = false;
   String? _nativeAgent;
   AppStore get store => widget.store;
 
@@ -82,6 +84,80 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   @override
   Future<dynamic> evaluate(String script) async =>
       _controller?.evaluateJavascript(source: script);
+
+  @override
+  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount}) async {
+    if (uri.scheme != 'https' ||
+        uri.host != 'api.gamer.com.tw' ||
+        uri.port != 443 ||
+        uri.userInfo.isNotEmpty ||
+        !const [
+          '/anime/v1/search.php',
+          '/anime/v1/anime_list.php',
+        ].contains(uri.path)) {
+      throw const FormatException('Invalid public catalog endpoint');
+    }
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    InAppWebViewController? controller;
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      controller = _controller;
+      final source = await controller?.getUrl();
+      if (_publicDocumentReady &&
+          source != null &&
+          OfficialSite.trustedOrigin(Uri.parse(source.toString()))) {
+        break;
+      }
+      controller = null;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted || controller == null) {
+      throw StateError('Official catalog connection is not ready');
+    }
+    final result = await controller
+        .callAsyncJavaScript(
+          arguments: {'url': uri.toString(), 'useAccount': useAccount},
+          functionBody: '''
+const endpoint = new URL(url);
+if (location.origin !== 'https://ani.gamer.com.tw' ||
+    endpoint.origin !== 'https://api.gamer.com.tw' ||
+    !['/anime/v1/search.php', '/anime/v1/anime_list.php'].includes(endpoint.pathname)) {
+  throw Error('Invalid public catalog request');
+}
+const abort = new AbortController();
+const timer = setTimeout(() => abort.abort(), 12000);
+try {
+  const response = await fetch(endpoint.href, {
+    credentials: useAccount ? 'include' : 'omit',
+    headers: {Accept: 'application/json'},
+    signal: abort.signal
+  });
+  if (!response.ok || new URL(response.url).origin !== endpoint.origin ||
+      new URL(response.url).pathname !== endpoint.pathname) throw Error('Catalog unavailable');
+  const text = await response.text();
+  if (new TextEncoder().encode(text).byteLength > 5000000) throw Error('Catalog too large');
+  const body = JSON.parse(text);
+  if (!Array.isArray(body?.data?.animeList)) throw Error('Invalid catalog response');
+  return {data: {
+    totalPage: body.data.totalPage,
+    animeList: body.data.animeList.map(item => ({
+      animeSn: item.animeSn, videoSn: item.videoSn, title: item.title,
+      cover: item.cover, totalEpisode: item.totalEpisode, dateInfo: item.dateInfo
+    }))
+  }};
+} finally { clearTimeout(timer); }
+''',
+        )
+        .timeout(const Duration(seconds: 15));
+    final source = await controller.getUrl();
+    if (!mounted ||
+        result?.error != null ||
+        source == null ||
+        !OfficialSite.trustedOrigin(Uri.parse(source.toString())) ||
+        result?.value is! Map) {
+      throw StateError('Official catalog request failed');
+    }
+    return jsonDecode(jsonEncode(result!.value)) as Json;
+  }
 
   Future<void> _updateNavigation() async {
     final controller = _controller;
@@ -220,13 +296,18 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         initialSettings: _settingsForMode(_desktop),
         onWebViewCreated: _created,
         onLoadStart: (controller, url) async {
+          _publicDocumentReady = false;
           _progress.value = 1;
           await _updateNavigation();
         },
-        onPageCommitVisible: (controller, url) => store.preparePlayerSurface(
-          url == null ? null : Uri.tryParse(url.toString()),
-        ),
+        onPageCommitVisible: (controller, url) async {
+          final uri = url == null ? null : Uri.tryParse(url.toString());
+          _publicDocumentReady = uri != null && OfficialSite.trustedOrigin(uri);
+          await store.preparePlayerSurface(uri);
+        },
         onLoadStop: (controller, url) async {
+          final uri = url == null ? null : Uri.tryParse(url.toString());
+          _publicDocumentReady = uri != null && OfficialSite.trustedOrigin(uri);
           _progress.value = 100;
           await _updateNavigation();
           await store.navigationFinished(
