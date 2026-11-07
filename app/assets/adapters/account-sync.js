@@ -117,6 +117,9 @@
           !Number.isInteger(data.totalPage) || data.totalPage < 0 || data.totalPage > 50) throw Error('History format changed');
       totalPage = data.totalPage;
       data.history.forEach(function(item) {
+        // Withdrawn titles remain in cloud history with empty title/artwork.
+        // They cannot form a playable card, but must not abort account sync.
+        if (item.isTakenDown === 1 || item.isTakenDown === true) return;
         var id = String(item.animeSn), videoId = String(item.videoSn);
         if (!/^\d{1,10}$/.test(id) || !/^\d{1,10}$/.test(videoId) ||
             typeof item.title !== 'string' || !item.title.trim() ||

@@ -27,6 +27,7 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _controlsVisible = true;
   String _controlState = '';
   Timer? _hideTimer;
+  final _videoSurfaceKey = GlobalKey(debugLabel: 'player-video-surface');
 
   @override
   void initState() {
@@ -53,6 +54,28 @@ class _PlayerPageState extends State<PlayerPage> {
       _hideTimer = Timer(const Duration(seconds: 3), () {
         if (mounted) setState(() => _controlsVisible = false);
       });
+    }
+  }
+
+  void _hideControls() {
+    _hideTimer?.cancel();
+    if (_controlsVisible && mounted) setState(() => _controlsVisible = false);
+  }
+
+  void _toggleControls() {
+    if (_controlsVisible) {
+      _hideControls();
+    } else {
+      _revealControls();
+    }
+  }
+
+  void _dismissOutsideVideo(PointerDownEvent event) {
+    final surface = _videoSurfaceKey.currentContext?.findRenderObject();
+    if (surface is! RenderBox || !surface.hasSize) return;
+    final bounds = Offset.zero & surface.size;
+    if (!bounds.contains(surface.globalToLocal(event.position))) {
+      _hideControls();
     }
   }
 
@@ -85,7 +108,11 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
-    builder: (context, child) => _page(context),
+    builder: (context, child) => Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _dismissOutsideVideo,
+      child: _page(context),
+    ),
   );
 
   Widget _page(BuildContext context) {
@@ -290,94 +317,96 @@ class _PlayerPageState extends State<PlayerPage> {
       ? store.t('episodeNumber').replaceAll('{n}', value)
       : value;
 
-  Widget _surface() => Listener(
-    onPointerDown: (_) => _revealControls(),
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        widget.video,
-        ValueListenableBuilder(
-          valueListenable: store.playback,
-          builder: (context, state, child) => Stack(
-            fit: StackFit.expand,
-            children: [
-              if (!state.surfaceReady && !store.browserError)
-                const ColoredBox(
-                  color: Colors.black,
-                  child: Center(
-                    child: CupertinoActivityIndicator(color: Colors.white),
-                  ),
+  Widget _surface() => Stack(
+    key: _videoSurfaceKey,
+    fit: StackFit.expand,
+    children: [
+      widget.video,
+      ValueListenableBuilder(
+        valueListenable: store.playback,
+        builder: (context, state, child) => Stack(
+          fit: StackFit.expand,
+          children: [
+            if (!state.surfaceReady && !store.browserError)
+              const ColoredBox(
+                color: Colors.black,
+                child: Center(
+                  child: CupertinoActivityIndicator(color: Colors.white),
                 ),
-              if (state.canControl)
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _revealControls,
-                ),
-              if (!store.playerFullscreen)
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Row(
-                    children: [
-                      if (!state.canOperate)
-                        _videoAction(
-                          CupertinoIcons.arrow_up_left_arrow_down_right,
-                          'fullScreen',
-                          () => store.setPlayerFullscreen(true),
-                        ),
-                      const SizedBox(width: 8),
-                      GlassIconButton(
-                        key: const ValueKey('player-danmaku-button'),
-                        size: 36,
-                        iconSize: 19,
-                        useOwnLayer: true,
-                        platformViewBackdrop: true,
-                        settings: mediaGlass.copyWith(
-                          backerColor: const Color(0x66000000),
-                        ),
-                        semanticLabel: store.t('danmakuSettings'),
-                        icon: const Icon(
-                          CupertinoIcons.text_bubble,
-                          color: Colors.white,
-                        ),
-                        onPressed: () => showDanmakuPanel(context, store),
-                      ),
-                      const SizedBox(width: 8),
+              ),
+            if (state.canControl)
+              GestureDetector(
+                key: const ValueKey('player-controls-toggle'),
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleControls,
+              ),
+            if (!store.playerFullscreen)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Row(
+                  children: [
+                    if (!state.canOperate)
                       _videoAction(
-                        CupertinoIcons.ellipsis,
-                        'playbackSettings',
-                        _settingsMenu,
+                        CupertinoIcons.arrow_up_left_arrow_down_right,
+                        'fullScreen',
+                        () => store.setPlayerFullscreen(true),
                       ),
-                    ],
-                  ),
+                    const SizedBox(width: 8),
+                    GlassIconButton(
+                      key: const ValueKey('player-danmaku-button'),
+                      size: 36,
+                      iconSize: 19,
+                      useOwnLayer: true,
+                      platformViewBackdrop: true,
+                      settings: mediaGlass.copyWith(
+                        backerColor: const Color(0x66000000),
+                      ),
+                      semanticLabel: store.t('danmakuSettings'),
+                      icon: const Icon(
+                        CupertinoIcons.text_bubble,
+                        color: Colors.white,
+                      ),
+                      onPressed: () => showDanmakuPanel(context, store),
+                    ),
+                    const SizedBox(width: 8),
+                    _videoAction(
+                      CupertinoIcons.ellipsis,
+                      'playbackSettings',
+                      _settingsMenu,
+                    ),
+                  ],
                 ),
-              if (state.canOperate)
-                Positioned(
-                  left: store.playerFullscreen ? 48 : 8,
-                  right: store.playerFullscreen ? 48 : 8,
-                  bottom: store.playerFullscreen
-                      ? MediaQuery.paddingOf(context).bottom + 18
-                      : 8,
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: IgnorePointer(
-                      ignoring: !_controlsVisible,
-                      child: AnimatedOpacity(
-                        opacity: _controlsVisible ? 1 : 0,
-                        duration: const Duration(milliseconds: 180),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 620),
+              ),
+            if (state.canOperate)
+              Positioned(
+                left: store.playerFullscreen ? 48 : 8,
+                right: store.playerFullscreen ? 48 : 8,
+                bottom: store.playerFullscreen
+                    ? MediaQuery.paddingOf(context).bottom + 18
+                    : 8,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: IgnorePointer(
+                    ignoring: !_controlsVisible,
+                    child: AnimatedOpacity(
+                      opacity: _controlsVisible ? 1 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 620),
+                        child: Listener(
+                          onPointerDown: (_) => _revealControls(),
                           child: _controls(),
                         ),
                       ),
                     ),
                   ),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
-      ],
-    ),
+      ),
+    ],
   );
 
   Widget _videoAction(IconData icon, String label, VoidCallback action) =>
@@ -465,7 +494,10 @@ class _PlayerPageState extends State<PlayerPage> {
                   activeColor: Colors.white,
                   inactiveColor: const Color(0x55ffffff),
                   onChanged: seekable
-                      ? (value) => setState(() => _scrub = value)
+                      ? (value) {
+                          _hideTimer?.cancel();
+                          setState(() => _scrub = value);
+                        }
                       : null,
                   onChangeEnd: (value) {
                     store.controlPlayer('seek', value);

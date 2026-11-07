@@ -244,6 +244,41 @@ test('malformed cloud history reports a sync error instead of an empty account',
   assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
 });
 
+test('withdrawn history placeholders do not discard cloud favorites or playable history', async () => {
+  for (const isTakenDown of [1, true]) {
+    const fixture = setup('<h1 class="theme-title">我的動畫</h1>', '/mygather.php', {
+      'https://ani.gamer.com.tw/mygather.php':
+        `<h1 class="theme-title">我的動畫</h1>${card('10')}`,
+      'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+        JSON.stringify({ data: { history: [
+          historyRecord(),
+          { ...historyRecord(11, 21), isTakenDown, title: '', cover: '' },
+          historyRecord(12, 22, -1),
+        ], totalPage: 1 } }),
+    });
+    fixture.context.window.User = { Login: { getUserid: () => 'fixture-user' } };
+    await runAccount(fixture);
+    const result = fixture.messages.at(-1);
+    assert.equal(result.type, 'account-synced');
+    assert.deepEqual(result.favorites.map((item: any) => item.id), ['10']);
+    assert.deepEqual(result.history.map((item: any) => item.videoId), ['20', '22']);
+    assert.equal(result.history[1].progress, 1);
+    assert.ok(!fixture.messages.some(message => message.type === 'account-error'));
+  }
+});
+
+test('invalid available history still fails validation instead of silently dropping account data', async () => {
+  const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [
+        { ...historyRecord(), isTakenDown: 0, title: '' },
+      ], totalPage: 1 } }),
+  });
+  await runAccount(fixture);
+  assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
+});
+
 test('an official empty history response is accepted without fabricating records', async () => {
   const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
     <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {

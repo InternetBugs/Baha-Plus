@@ -7,6 +7,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/core/models.dart';
+import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/player_page.dart';
@@ -716,6 +717,118 @@ void main() {
       await frames(tester);
       expect(portal.visited.last, OfficialSite.video('21'));
       expect(store.playerDetail!.episodes.length, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'video and page background taps dismiss controls, including paused and fullscreen playback',
+    (tester) async {
+      final store = await launch(tester);
+      final portal = FakePortal()
+        ..communityResponse = {
+          'ok': true,
+          'messageId': '123',
+          'total': 0,
+          'nextPage': 0,
+          'comments': <Json>[],
+        };
+      await store.attach(portal);
+      await store.play(
+        const Anime(
+          id: '10',
+          title: 'Test Anime',
+          cover: 'https://p2.bahamut.com.tw/10.jpg',
+          latestVideoId: '20',
+        ),
+      );
+      var officialTaps = 0;
+      Navigator.of(tester.element(find.byType(AppRoot))).push(
+        CupertinoPageRoute<void>(
+          builder: (_) => PlayerPage(
+            store: store,
+            video: GestureDetector(
+              onTap: () => officialTaps++,
+              child: const ColoredBox(
+                key: ValueKey('test-video-surface'),
+                color: Colors.black,
+              ),
+            ),
+          ),
+        ),
+      );
+      void playback({
+        PlaybackPhase phase = PlaybackPhase.content,
+        bool paused = true,
+      }) {
+        store.playback.value = PlaybackState(
+          phase: phase,
+          surfaceReady: true,
+          paused: paused,
+          buffering: false,
+          position: 37,
+          duration: 1200,
+        );
+      }
+
+      playback();
+      await frames(tester);
+      final controls = find.byKey(const ValueKey('video-glass-controls'));
+      final surface = find.byKey(const ValueKey('test-video-surface'));
+      expect(controls.hitTestable(), findsOneWidget);
+      var video = tester.getRect(surface);
+      final background = video.topLeft + const Offset(20, 40);
+
+      await tester.tapAt(background);
+      await frames(tester);
+      expect(controls.hitTestable(), findsNothing);
+      await tester.tapAt(background);
+      await frames(tester);
+      expect(controls.hitTestable(), findsOneWidget);
+      expect(officialTaps, 0);
+
+      await tester.tap(find.bySemanticsLabel(store.t('rewindTen')));
+      await frames(tester);
+      expect(portal.scripts.last, contains('"seek"'));
+      expect(controls.hitTestable(), findsOneWidget);
+      await tester.tapAt(video.bottomLeft + const Offset(10, 10));
+      await frames(tester);
+      expect(controls.hitTestable(), findsNothing);
+
+      playback(paused: false);
+      await frames(tester);
+      expect(controls.hitTestable(), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+      await frames(tester);
+      expect(controls.hitTestable(), findsNothing);
+      await tester.tapAt(background);
+      await frames(tester);
+      expect(controls.hitTestable(), findsOneWidget);
+
+      playback(phase: PlaybackPhase.age);
+      await frames(tester);
+      await tester.tapAt(background);
+      expect(officialTaps, 1);
+
+      playback();
+      store.setPlayerFullscreen(true);
+      await frames(tester);
+      video = tester.getRect(surface);
+      await tester.tapAt(video.center);
+      await frames(tester);
+      expect(controls.hitTestable(), findsNothing);
+      await tester.tapAt(video.center);
+      await frames(tester);
+      expect(controls.hitTestable(), findsOneWidget);
+      await tester.tap(
+        find.bySemanticsLabel(store.t('playbackSettings')).hitTestable(),
+      );
+      await frames(tester);
+      expect(find.byType(CupertinoActionSheet), findsOneWidget);
+      await tester.tapAt(const Offset(10, 100));
+      await frames(tester);
+      expect(find.byType(CupertinoActionSheet), findsNothing);
+      store.setPlayerFullscreen(false);
+      await frames(tester);
       expect(tester.takeException(), isNull);
     },
   );

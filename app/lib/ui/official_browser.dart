@@ -33,6 +33,10 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   AppStore get store => widget.store;
 
   InAppWebViewSettings _settingsForMode(bool desktop) => InAppWebViewSettings(
+    // Keep Android video and Flutter controls in the texture compositor.
+    // A scrolling hybrid view otherwise requires separate Android overlay
+    // surfaces for the controls drawn above the official player.
+    useHybridComposition: false,
     javaScriptEnabled: true,
     javaScriptCanOpenWindowsAutomatically: false,
     useShouldOverrideUrlLoading: true,
