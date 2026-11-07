@@ -10,14 +10,22 @@ TAG = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 ANDROID_MAX_VERSION_CODE = 2_100_000_000
 
 
-def choose_version(base_version: str, tags: list[str]) -> tuple[str, int]:
+def choose_version(base_version: str, tags: list[str], requested: str = "") -> tuple[str, int]:
     match = VERSION.fullmatch(base_version)
     if not match:
         raise ValueError("pubspec.yaml must contain a numeric major.minor.patch version")
     base = tuple(map(int, match.groups()))
     existing = [tuple(map(int, m.groups())) for tag in tags if (m := TAG.fullmatch(tag))]
     latest = max(existing, default=None)
-    if latest is not None and latest >= base:
+    if requested:
+        requested = requested.removeprefix("v")
+        requested_match = VERSION.fullmatch(requested)
+        if not requested_match:
+            raise ValueError("requested version must be major.minor.patch, optionally prefixed with v")
+        selected = tuple(map(int, requested_match.groups()))
+        if latest is not None and selected <= latest:
+            raise ValueError("requested version must be greater than every existing release tag")
+    elif latest is not None and latest >= base:
         major, minor, patch = latest
         if minor >= 1000 or patch >= 1000:
             raise ValueError("existing release version components must be below 1000")
@@ -49,7 +57,9 @@ def main() -> None:
         ["git", "ls-remote", "--refs", "--tags", "origin"], text=True
     )
     tags = [line.split("refs/tags/", 1)[1] for line in output.splitlines()]
-    version, build_number = choose_version(match.group(1), tags)
+    version, build_number = choose_version(
+        match.group(1), tags, os.environ.get("REQUESTED_VERSION", "").strip()
+    )
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as result:
         result.write(f"version={version}\ntag=v{version}\nbuild_number={build_number}\n")
     print(f"Selected v{version} (build {build_number})")

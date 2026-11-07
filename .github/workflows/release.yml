@@ -2,6 +2,11 @@ name: Manual release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（例如 0.4.0；留空则自动递增）"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -20,8 +25,12 @@ jobs:
       build_number: ${{ steps.version.outputs.build_number }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Select release version
         id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -30,6 +39,31 @@ jobs:
             exit 1
           fi
           python3 tools/release_version.py
+      - name: Translate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | [.created_at, .tag_name] | @tsv' \
+            | sort | tail -n 1 | cut -f 2-)
+          if [[ -n "$previous_tag" ]]; then
+            if ! git merge-base --is-ancestor "refs/tags/$previous_tag^{commit}" "$GITHUB_SHA"; then
+              echo "::error::The previous release tag is missing or is not an ancestor of this release."
+              exit 1
+            fi
+            commit_range="refs/tags/$previous_tag..$GITHUB_SHA"
+          else
+            commit_range="$GITHUB_SHA"
+          fi
+          python3 tools/release_notes.py "$commit_range" "$previous_tag" release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
 
   reserve_tag:
     name: Reserve release tag
@@ -147,6 +181,11 @@ jobs:
         with:
           path: release
           merge-multiple: true
+          pattern: "*-release"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release
       - name: Create tag and publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,39 +201,7 @@ jobs:
           fi
           cd release
           sha256sum BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa > SHA256SUMS.txt
-          previous_tag=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
-            --jq '.[] | select(.draft == false and .prerelease == false) | [.created_at, .tag_name] | @tsv' \
-            | sort | tail -n 1 | cut -f 2-)
-          if [[ -n "$previous_tag" ]]; then
-            if ! git merge-base --is-ancestor "refs/tags/$previous_tag^{commit}" "$GITHUB_SHA"; then
-              echo "::error::The previous release tag is missing or is not an ancestor of this release."
-              exit 1
-            fi
-            commit_range="refs/tags/$previous_tag..$GITHUB_SHA"
-          else
-            commit_range="$GITHUB_SHA"
-          fi
-          cat > release-notes.md <<'EOF'
-          ## 下载说明
-
-          - Android: signed release APK.
-          - iOS: unsigned IPA. It must be signed with a suitable Apple identity and provisioning profile before it can be installed; it has not been verified on a device.
-          - SHA256SUMS.txt contains the SHA-256 checksums of both files.
-
-          ## 更新内容
-
-          EOF
-          if [[ -n "$previous_tag" ]]; then
-            printf '以下为自 %s 以来的提交：\n\n' "$previous_tag" >> release-notes.md
-          else
-            printf '首次发布，以下为截至此版本的提交：\n\n' >> release-notes.md
-          fi
-          git log --no-merges --format='- %s (`%h`)' "$commit_range" >> release-notes.md
-          printf '\n' >> release-notes.md
-          args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md --generate-notes)
-          if [[ -n "$previous_tag" ]]; then
-            args+=(--notes-start-tag "$previous_tag")
-          fi
+          args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md)
           gh release create "$RELEASE_TAG" "${args[@]}" \
             BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa SHA256SUMS.txt
           gh release edit "$RELEASE_TAG" --draft=false

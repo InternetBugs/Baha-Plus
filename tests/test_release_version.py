@@ -23,6 +23,19 @@ class ReleaseVersionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             choose_version("2101.0.0", [])
 
+    def test_manual_version_and_optional_prefix(self):
+        self.assertEqual(choose_version("0.3.0", ["v0.3.2"], "v0.5.0"), ("0.5.0", 5000))
+
+    def test_manual_version_must_be_newer_than_all_tags(self):
+        for version in ("0.3.2", "0.2.9"):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                choose_version("0.3.0", ["v0.3.2"], version)
+
+    def test_invalid_manual_versions_are_rejected(self):
+        for version in ("1.2", "1.2.3-beta", "1.1000.0", "2101.0.0"):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                choose_version("0.3.0", [], version)
+
 
 if __name__ == "__main__":
     unittest.main()
