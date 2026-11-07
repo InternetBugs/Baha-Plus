@@ -46,6 +46,7 @@
 /* Begin PBXFileReference section */
 		BACAC0E10000000000000002 /* PlaybackCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackCache.swift; sourceTree = "<group>"; };
 		BACAC0E10000000000000004 /* hls-cache-playlist.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "../../assets/adapters/hls-cache-playlist.js"; sourceTree = "<group>"; };
+		BACAC0E10000000000000005 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RunnerTests.m; sourceTree = "<group>"; };
@@ -120,6 +121,7 @@
 			children = (
 				BACAC0E10000000000000002 /* PlaybackCache.swift */,
 				BACAC0E10000000000000004 /* hls-cache-playlist.js */,
+				BACAC0E10000000000000005 /* Runner-Bridging-Header.h */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -391,6 +393,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.bahaplus.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
@@ -571,6 +574,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.bahaplus.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -592,6 +596,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.bahaplus.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
