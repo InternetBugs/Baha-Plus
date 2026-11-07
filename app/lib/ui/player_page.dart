@@ -50,7 +50,9 @@ class _PlayerPageState extends State<PlayerPage> {
     _hideTimer?.cancel();
     if (!_controlsVisible && mounted) setState(() => _controlsVisible = true);
     final state = store.playback.value;
-    if (state.phase == PlaybackPhase.content && !state.paused) {
+    if (store.playerFullscreen &&
+        state.phase == PlaybackPhase.content &&
+        !state.paused) {
       _hideTimer = Timer(const Duration(seconds: 3), () {
         if (mounted) setState(() => _controlsVisible = false);
       });
@@ -82,6 +84,7 @@ class _PlayerPageState extends State<PlayerPage> {
   void _syncFullscreen() {
     if (_fullscreen == store.playerFullscreen) return;
     _fullscreen = store.playerFullscreen;
+    _revealControls();
     unawaited(_screenMode(_fullscreen));
   }
 
@@ -110,7 +113,7 @@ class _PlayerPageState extends State<PlayerPage> {
     listenable: store,
     builder: (context, child) => Listener(
       behavior: HitTestBehavior.translucent,
-      onPointerDown: _dismissOutsideVideo,
+      onPointerDown: store.playerFullscreen ? _dismissOutsideVideo : null,
       child: _page(context),
     ),
   );
@@ -147,6 +150,15 @@ class _PlayerPageState extends State<PlayerPage> {
             ClipRRect(
               borderRadius: BorderRadius.circular(26),
               child: AspectRatio(aspectRatio: 16 / 9, child: _surface()),
+            ),
+            ValueListenableBuilder(
+              valueListenable: store.playback,
+              builder: (context, state, child) => state.canOperate
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: _controls(fullscreen: false),
+                    )
+                  : const SizedBox.shrink(),
             ),
             _status(),
             const SizedBox(height: 28),
@@ -338,7 +350,9 @@ class _PlayerPageState extends State<PlayerPage> {
               GestureDetector(
                 key: const ValueKey('player-controls-toggle'),
                 behavior: HitTestBehavior.opaque,
-                onTap: _toggleControls,
+                onTap: store.playerFullscreen
+                    ? _toggleControls
+                    : _revealControls,
               ),
             if (!store.playerFullscreen)
               Positioned(
@@ -378,13 +392,11 @@ class _PlayerPageState extends State<PlayerPage> {
                   ],
                 ),
               ),
-            if (state.canOperate)
+            if (store.playerFullscreen && state.canOperate)
               Positioned(
-                left: store.playerFullscreen ? 48 : 8,
-                right: store.playerFullscreen ? 48 : 8,
-                bottom: store.playerFullscreen
-                    ? MediaQuery.paddingOf(context).bottom + 18
-                    : 8,
+                left: 48,
+                right: 48,
+                bottom: MediaQuery.paddingOf(context).bottom + 18,
                 child: Align(
                   alignment: Alignment.bottomCenter,
                   child: IgnorePointer(
@@ -396,7 +408,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         constraints: const BoxConstraints(maxWidth: 620),
                         child: Listener(
                           onPointerDown: (_) => _revealControls(),
-                          child: _controls(),
+                          child: _controls(fullscreen: true),
                         ),
                       ),
                     ),
@@ -463,36 +475,47 @@ class _PlayerPageState extends State<PlayerPage> {
     },
   );
 
-  Widget _controls() => ValueListenableBuilder(
+  Widget _controls({required bool fullscreen}) => ValueListenableBuilder(
     valueListenable: store.playback,
     builder: (context, state, child) {
       final seekable = state.canControl;
       final duration = state.duration;
       final position = (_scrub ?? state.position).clamp(0.0, duration);
-      const color = Colors.white;
+      final dark = Theme.of(context).brightness == Brightness.dark;
+      final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
+      final settings = fullscreen || dark
+          ? LiquidGlassSettings.ios27Dark
+          : LiquidGlassSettings.ios27Light;
       return GlassContainer(
         key: const ValueKey('video-glass-controls'),
         useOwnLayer: true,
-        platformViewBackdrop: true,
-        shape: const LiquidRoundedSuperellipse(borderRadius: 22),
-        settings: LiquidGlassSettings.ios27Dark.copyWith(
-          backerColor: const Color(0x88101014),
+        platformViewBackdrop: fullscreen,
+        shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
+        settings: settings.copyWith(
+          backerColor: fullscreen
+              ? const Color(0x88101014)
+              : dark
+              ? const Color(0x661c1c1e)
+              : const Color(0x66ffffff),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: EdgeInsets.symmetric(
+          horizontal: fullscreen ? 20 : 12,
+          vertical: fullscreen ? 14 : 8,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              height: 24,
+              height: fullscreen ? 32 : 24,
               child: Semantics(
                 label: store.t('playbackProgress'),
                 child: GlassSlider(
                   value: position,
                   max: duration > 0 ? duration : 1,
-                  thumbRadius: 6,
-                  trackHeight: 3,
-                  activeColor: Colors.white,
-                  inactiveColor: const Color(0x55ffffff),
+                  thumbRadius: fullscreen ? 8 : 6,
+                  trackHeight: fullscreen ? 4 : 3,
+                  activeColor: color,
+                  inactiveColor: color.withValues(alpha: .33),
                   onChanged: seekable
                       ? (value) {
                           _hideTimer?.cancel();
@@ -516,7 +539,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   state.paused ? 'resumePlayback' : 'pausePlayback',
                   () => store.controlPlayer(state.paused ? 'play' : 'pause'),
                   color,
-                  size: 23,
+                  size: fullscreen ? 30 : 23,
+                  minimumSize: fullscreen ? 52 : 36,
                 ),
                 _control(
                   CupertinoIcons.gobackward_10,
@@ -528,7 +552,8 @@ class _PlayerPageState extends State<PlayerPage> {
                         )
                       : null,
                   color,
-                  size: 21,
+                  size: fullscreen ? 27 : 21,
+                  minimumSize: fullscreen ? 52 : 36,
                 ),
                 _control(
                   CupertinoIcons.goforward_10,
@@ -540,17 +565,18 @@ class _PlayerPageState extends State<PlayerPage> {
                         )
                       : null,
                   color,
-                  size: 21,
+                  size: fullscreen ? 27 : 21,
+                  minimumSize: fullscreen ? 52 : 36,
                 ),
                 Expanded(
                   child: Text(
                     '${_time(position)} / ${_time(duration)}',
                     textAlign: TextAlign.center,
                     maxLines: 1,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontFeatures: [FontFeature.tabularFigures()],
+                    style: TextStyle(
+                      color: color,
+                      fontSize: fullscreen ? 13 : 10,
+                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                 ),
@@ -561,7 +587,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   state.muted ? 'unmutePlayback' : 'mutePlayback',
                   () => store.controlPlayer('mute'),
                   color,
-                  size: 20,
+                  size: fullscreen ? 26 : 20,
+                  minimumSize: fullscreen ? 52 : 36,
                 ),
                 _control(
                   store.playerFullscreen
@@ -570,7 +597,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   store.playerFullscreen ? 'exitFullScreen' : 'fullScreen',
                   () => store.setPlayerFullscreen(!store.playerFullscreen),
                   color,
-                  size: 18,
+                  size: fullscreen ? 25 : 18,
+                  minimumSize: fullscreen ? 52 : 36,
                 ),
               ],
             ),
@@ -586,11 +614,12 @@ class _PlayerPageState extends State<PlayerPage> {
     VoidCallback? action,
     Color color, {
     double size = 25,
+    double minimumSize = 36,
   }) => Semantics(
     label: store.t(label),
     button: true,
     child: CupertinoButton(
-      minimumSize: const Size(36, 36),
+      minimumSize: Size(minimumSize, minimumSize),
       padding: EdgeInsets.zero,
       onPressed: action,
       child: Icon(
@@ -662,14 +691,6 @@ class _PlayerPageState extends State<PlayerPage> {
               store.reloadBrowser();
             },
             child: Text(store.t('refresh')),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () async {
-              Navigator.pop(sheet);
-              await store.controlPlayer('pause');
-              await store.connectAccount();
-            },
-            child: Text(store.t('connectAccount')),
           ),
         ],
         cancelButton: CupertinoActionSheetAction(

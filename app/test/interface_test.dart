@@ -166,6 +166,7 @@ void main() {
     await frames(tester);
     expect(find.text(store.t('officialAccount')), findsOneWidget);
     expect(find.text(store.t('localProfile')), findsOneWidget);
+    expect(find.text(store.t('connectAccount')), findsOneWidget);
     expect(find.text(store.t('syncAccount')), findsNothing);
     expect(find.text(store.t('favorites')), findsOneWidget);
     expect(find.text(store.t('manageAccount')), findsNothing);
@@ -687,8 +688,11 @@ void main() {
       final controlBar = tester.getRect(
         find.byKey(const ValueKey('video-glass-controls')),
       );
-      expect(video.contains(controlBar.topLeft), isTrue);
-      expect(video.contains(controlBar.bottomRight), isTrue);
+      expect(controlBar.top, greaterThanOrEqualTo(video.bottom));
+      expect(
+        controlBar.bottom,
+        lessThan(tester.getTopLeft(find.text('Test Anime')).dy),
+      );
       await state('error');
       await frames(tester);
       expect(find.byKey(const ValueKey('video-glass-controls')), findsNothing);
@@ -702,6 +706,16 @@ void main() {
       expect(find.byKey(const ValueKey('test-video-surface')), findsOneWidget);
       final fullVideo = tester.getRect(
         find.byKey(const ValueKey('test-video-surface')),
+      );
+      final fullControlBar = tester.getRect(
+        find.byKey(const ValueKey('video-glass-controls')),
+      );
+      expect(fullVideo.contains(fullControlBar.topLeft), isTrue);
+      expect(fullVideo.contains(fullControlBar.bottomRight), isTrue);
+      expect(fullControlBar.height, greaterThan(controlBar.height));
+      expect(
+        tester.getSize(find.bySemanticsLabel(store.t('pausePlayback'))).height,
+        greaterThanOrEqualTo(52),
       );
       expect(
         fullVideo.contains(
@@ -721,7 +735,7 @@ void main() {
     },
   );
   testWidgets(
-    'video and page background taps dismiss controls, including paused and fullscreen playback',
+    'portrait controls stay visible while fullscreen controls can be dismissed',
     (tester) async {
       final store = await launch(tester);
       final portal = FakePortal()
@@ -773,36 +787,37 @@ void main() {
       playback();
       await frames(tester);
       final controls = find.byKey(const ValueKey('video-glass-controls'));
+      final rewind = find.bySemanticsLabel(store.t('rewindTen'));
       final surface = find.byKey(const ValueKey('test-video-surface'));
-      expect(controls.hitTestable(), findsOneWidget);
+      expect(rewind.hitTestable(), findsOneWidget);
       var video = tester.getRect(surface);
       final background = video.topLeft + const Offset(20, 40);
 
       await tester.tapAt(background);
       await frames(tester);
-      expect(controls.hitTestable(), findsNothing);
+      expect(rewind.hitTestable(), findsOneWidget);
       await tester.tapAt(background);
       await frames(tester);
-      expect(controls.hitTestable(), findsOneWidget);
+      expect(rewind.hitTestable(), findsOneWidget);
       expect(officialTaps, 0);
 
       await tester.tap(find.bySemanticsLabel(store.t('rewindTen')));
       await frames(tester);
       expect(portal.scripts.last, contains('"seek"'));
-      expect(controls.hitTestable(), findsOneWidget);
-      await tester.tapAt(video.bottomLeft + const Offset(10, 10));
+      expect(rewind.hitTestable(), findsOneWidget);
+      await tester.tapAt(Offset(5, video.bottom + 10));
       await frames(tester);
-      expect(controls.hitTestable(), findsNothing);
+      expect(rewind.hitTestable(), findsOneWidget);
 
       playback(paused: false);
       await frames(tester);
-      expect(controls.hitTestable(), findsOneWidget);
+      expect(rewind.hitTestable(), findsOneWidget);
       await tester.pump(const Duration(seconds: 3));
       await frames(tester);
-      expect(controls.hitTestable(), findsNothing);
+      expect(rewind.hitTestable(), findsOneWidget);
       await tester.tapAt(background);
       await frames(tester);
-      expect(controls.hitTestable(), findsOneWidget);
+      expect(rewind.hitTestable(), findsOneWidget);
 
       playback(phase: PlaybackPhase.age);
       await frames(tester);
@@ -824,6 +839,7 @@ void main() {
       );
       await frames(tester);
       expect(find.byType(CupertinoActionSheet), findsOneWidget);
+      expect(find.text(store.t('connectAccount')), findsNothing);
       await tester.tapAt(const Offset(10, 100));
       await frames(tester);
       expect(find.byType(CupertinoActionSheet), findsNothing);
