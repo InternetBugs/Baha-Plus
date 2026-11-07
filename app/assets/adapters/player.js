@@ -15,6 +15,10 @@
     Number(getComputedStyle(node).opacity) > 0;
   const post = body => bahaPostJSON(JSON.stringify({ ...body, id: expectedID, videoId: videoID }));
   const finite = value => Number.isFinite(value) ? Math.max(0, Math.min(172800, value)) : 0;
+  const nativeQuality = window.__bahaCreateNativeHlsQuality?.({
+    isCurrent: () => window.__bahaDocumentNonce === nonce,
+    onChange: () => tick()
+  });
   function qualityLevels(player) {
     const levels = player?.qualityLevels?.();
     return levels ? Array.from({ length: levels.length }, (_, i) => levels[i]) : [];
@@ -164,9 +168,12 @@
       node.inert = nativeControls;
     });
     const levels = qualityLevels(c.player).filter(l => Number.isInteger(l.height) && l.height >= 144 && l.height <= 4320);
-    const qualities = [...new Set(levels.map(l => l.height))].sort((a, b) => b - a);
+    const native = levels.length === 0 && !c.player?.tech?.(true)?.vhs && c.matches &&
+      c.phase === 'content' ? nativeQuality?.update(c.player, c.media) : null;
+    const qualities = native?.qualities ||
+      [...new Set(levels.map(l => l.height))].sort((a, b) => b - a);
     const enabled = [...new Set(levels.filter(l => l.enabled === true).map(l => l.height))];
-    const quality = requestedQuality > 0 && qualities.includes(requestedQuality) &&
+    const quality = native ? native.quality : requestedQuality > 0 && qualities.includes(requestedQuality) &&
       enabled.length === 1 && enabled[0] === requestedQuality ? requestedQuality :
       enabled.length === 1 && qualities.length > 1 ? enabled[0] : 0;
     const danmaku = c.root?.querySelector('.vjs-danmu');
@@ -197,9 +204,13 @@
       else if (action === 'mute') c.player.muted(!c.player.muted());
       else if (action === 'quality' && Number.isInteger(value)) {
         const levels = qualityLevels(c.player);
-        if (value !== 0 && !levels.some(l => l.height === value)) return false;
-        levels.forEach(level => { level.enabled = value === 0 || level.height === value; });
-        requestedQuality = value;
+        if (levels.length === 0 && !c.player?.tech?.(true)?.vhs) {
+          if (!nativeQuality || !await nativeQuality.select(value, c.player, c.media)) return false;
+        } else {
+          if (value !== 0 && !levels.some(l => l.height === value)) return false;
+          levels.forEach(level => { level.enabled = value === 0 || level.height === value; });
+          requestedQuality = value;
+        }
       }
       else if (action === 'danmaku' && (value === 0 || value === 1)) {
         const layer = c.root.querySelector('.vjs-danmu');
@@ -213,6 +224,7 @@
   }
   function dispose() {
     clearInterval(timer);
+    nativeQuality?.dispose();
     style?.remove();
     document.documentElement.classList.remove('baha-native-controls');
     document.querySelectorAll('#video-container .vjs-control-bar,#video-container .vjs-big-play-button').forEach(node => {

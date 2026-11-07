@@ -493,7 +493,7 @@ test('iOS HLS compatibility leaves other origins, other formats and audio unchan
   }
 });
 
-function playerFixture() {
+function playerFixture(nativeHls = false) {
   const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
     <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
     <div class="data-intro"><p>故事簡介</p><div class="link">作品資料</div></div>
@@ -531,10 +531,35 @@ function playerFixture() {
   fixture.context.getComputedStyle = (node: any) => ({ display: node.style?.display || 'block', visibility: 'visible', opacity: '1' });
   fixture.context.setInterval = (callback: () => void) => { tick = callback; return 1; };
   fixture.context.clearInterval = () => { stopped = true; };
+  if (nativeHls) {
+    levels.length = 0;
+    const master = 'https://bahamut.akamaized.net/series/master.m3u8';
+    (fixture.document.querySelector('#ani_video') as any).player.currentSource =
+      () => ({ src: master, type: 'application/x-mpegURL' });
+    fixture.context.fetch = async () => ({
+      ok: true, url: master, text: async () => `#EXTM3U
+#EXT-X-STREAM-INF:RESOLUTION=640x360
+360/index.m3u8
+#EXT-X-STREAM-INF:RESOLUTION=1280x720
+720/index.m3u8`
+    });
+    vm.runInContext(fs.readFileSync(folder + 'native-hls.js', 'utf8'), fixture.context);
+  }
   vm.runInContext(fs.readFileSync(folder + 'player.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
   return { ...fixture, core, controls, media, commands, levels, fault, tick: () => tick(), stopped: () => stopped,
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
+
+test('native HLS resolutions reach the Flutter bridge without enabling quality commands during ads', async () => {
+  const fixture = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(fixture.messages.at(-1).qualities), [720, 360]);
+  assert.equal(fixture.messages.at(-1).quality, 0);
+  fixture.core.state.playingVideo = false;
+  fixture.core.state.playingAd = true;
+  assert.equal(await fixture.bridge.command('ticket', 'quality', 720), false);
+  fixture.bridge.dispose();
+});
 
 test('native player projects real metadata and uses the official core to gate controls', async () => {
   const fixture = playerFixture();
