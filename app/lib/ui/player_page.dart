@@ -363,6 +363,16 @@ class _PlayerPageState extends State<PlayerPage> {
                 onTap: store.playerFullscreen
                     ? _toggleControls
                     : _revealControls,
+                onDoubleTap: store.playerFullscreen
+                    ? () {
+                        final playback = store.playback.value;
+                        if (!store.playerLocked && playback.canControl) {
+                          store.controlPlayer(
+                            playback.paused ? 'play' : 'pause',
+                          );
+                        }
+                      }
+                    : null,
               ),
             if (!store.playerFullscreen)
               Positioned(

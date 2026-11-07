@@ -817,6 +817,90 @@ void main() {
     },
   );
   testWidgets(
+    'double tap toggles playback only on unlocked fullscreen content',
+    (tester) async {
+      final store = await launch(tester);
+      final portal = FakePortal();
+      await store.attach(portal);
+      await store.play(
+        const Anime(
+          id: '10',
+          title: 'Test Anime',
+          cover: 'https://p2.bahamut.com.tw/10.jpg',
+          latestVideoId: '20',
+        ),
+      );
+      Navigator.of(tester.element(find.byType(AppRoot))).push(
+        CupertinoPageRoute<void>(
+          builder: (_) => PlayerPage(
+            store: store,
+            video: const ColoredBox(
+              key: ValueKey('test-video-surface'),
+              color: Colors.black,
+            ),
+          ),
+        ),
+      );
+
+      void playback({
+        PlaybackPhase phase = PlaybackPhase.content,
+        bool paused = false,
+      }) {
+        store.playback.value = PlaybackState(
+          phase: phase,
+          surfaceReady: true,
+          paused: paused,
+          duration: 1200,
+        );
+      }
+
+      Future<void> doubleTapVideo() async {
+        final center = tester.getCenter(
+          find.byKey(const ValueKey('test-video-surface')),
+        );
+        await tester.tapAt(center);
+        await tester.pump(const Duration(milliseconds: 80));
+        await tester.tapAt(center);
+        await frames(tester);
+      }
+
+      playback();
+      await frames(tester);
+      var before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before);
+
+      store.setPlayerFullscreen(true);
+      await frames(tester);
+      before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before + 1);
+      expect(portal.scripts.last, contains('"pause"'));
+
+      playback(paused: true);
+      await frames(tester);
+      before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before + 1);
+      expect(portal.scripts.last, contains('"play"'));
+
+      store.setPlayerLocked(true);
+      await frames(tester);
+      before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before);
+
+      store.setPlayerLocked(false);
+      playback(phase: PlaybackPhase.advertisement);
+      await frames(tester);
+      before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'portrait controls stay visible while fullscreen controls can be dismissed',
     (tester) async {
       final store = await launch(tester);
