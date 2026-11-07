@@ -20,7 +20,7 @@
   </p>
 </div>
 
-> Baha Plus 目前处于开发和体验阶段。Android 已有本地测试构建；iOS 版本尚未完成构建和设备验证。功能与使用体验可能随开发变化。
+> Baha Plus 目前处于开发和体验阶段，功能与使用体验可能随开发变化。
 
 ## 功能
 
@@ -51,29 +51,33 @@
 
 ## 界面预览
 
-以下为 Android 模拟器运行实际 App 的画面，封面与影片来自动画疯官方服务。
+以下为实机运行 App 的画面，封面与影片来自动画疯官方服务。
 
 <table>
   <tr>
-    <th>首页</th>
+    <th>探索</th>
     <th>片库</th>
+    <th>观看记录</th>
+    <th>搜索</th>
     <th>播放页</th>
   </tr>
   <tr>
-    <td><img src="assets/screenshots/home.png" width="260" alt="Baha Plus 首页"></td>
-    <td><img src="assets/screenshots/library.png" width="260" alt="Baha Plus 片库"></td>
-    <td><img src="assets/screenshots/player.png" width="260" alt="Baha Plus 播放页"></td>
+    <td><img src="assets/screenshots/explore-device.jpg" width="180" alt="Baha Plus 探索页面"></td>
+    <td><img src="assets/screenshots/library-device.jpg" width="180" alt="Baha Plus 片库"></td>
+    <td><img src="assets/screenshots/history-device.jpg" width="180" alt="Baha Plus 观看记录"></td>
+    <td><img src="assets/screenshots/search-device.jpg" width="180" alt="Baha Plus 搜索页面"></td>
+    <td><img src="assets/screenshots/player-device.jpg" width="180" alt="Baha Plus 播放页"></td>
   </tr>
 </table>
 
 ## 下载安装
 
-| 平台 | 状态 |
-| --- | --- |
-| Android | 已有本地测试构建，需要 Android 7.0（API 24）或更高版本。正式发布和签名流程尚未完成。 |
-| iOS | 正在开发，尚未在 macOS / Xcode 构建或在 iPhone 上验证，暂无可确认的安装包。 |
+请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本。
 
-可前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 查看是否已有可下载版本；若页面没有安装包，说明暂时无法通过 Releases 安装。想自行构建的用户可以参考 [开发与构建](docs/development.md)。
+- Android 需要 Android 7.0（API 24）或更高版本。
+- iOS 版本需要自行解决证书签名问题。
+
+想自行构建的用户可以参考 [开发与构建](docs/development.md)。
 
 ## 开始使用
 
@@ -98,9 +102,9 @@ Baha Plus 使用动画疯官方播放环境。影片的地区限制、会员资�
 
 应用读取官方账号的追番与观看记录，登录后也会自动更新账号资料和记录。观看记录的读取已在 Android 模拟器验证；追番增删和播放进度写回尚未完成全面验收，请暂时不要依赖这些操作已经成功同步。
 
-**iPhone 什么时候可以使用？**
+**iPhone 如何安装？**
 
-项目包含 iOS 工程，但尚未完成构建和真机验证，发布时间尚未确定。
+请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本，并自行解决证书签名问题。
 
 **遇到问题怎么办？**
 
