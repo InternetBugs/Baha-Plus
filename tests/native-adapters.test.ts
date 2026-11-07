@@ -10,10 +10,19 @@ function setup(html: string, pathname = '/mygather.php',
   const { window } = parseHTML(html);
   const messages: any[] = [];
   const requests: string[] = [];
+  const intervals = new Set<() => void>();
+  const adapterWindow = {
+    addEventListener: window.addEventListener.bind(window),
+    removeEventListener: window.removeEventListener.bind(window),
+    dispatchEvent: window.dispatchEvent.bind(window),
+    Event: window.Event,
+  };
   const context = vm.createContext({
-    document: window.document, MutationObserver: window.MutationObserver, DOMParser,
+    window: adapterWindow, document: window.document, MutationObserver: window.MutationObserver, DOMParser,
     location: new URL(`https://ani.gamer.com.tw${pathname}`), URL, Map, Set, JSON,
     AbortController, setTimeout: () => 0, clearTimeout: () => {},
+    setInterval: (callback: () => void) => { intervals.add(callback); return callback; },
+    clearInterval: (callback: () => void) => intervals.delete(callback),
     bahaPostJSON: (raw: string) => messages.push(JSON.parse(raw)),
     fetch: async (url: string) => {
       const resolved = new URL(url, 'https://ani.gamer.com.tw').href;
@@ -25,7 +34,12 @@ function setup(html: string, pathname = '/mygather.php',
       return { ok: true, url: responseURL, text: async () => body, json: async () => JSON.parse(body) };
     },
   });
-  return { context, document: window.document, messages, requests };
+  return { context, document: window.document, messages, requests, intervals };
+}
+function runAccount(fixture: ReturnType<typeof setup>, watch = false) {
+  return vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8')
+    .replaceAll('__BAHA_WATCH_ACCOUNT__', String(watch))
+    .replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context) as Promise<void>;
 }
 const card = (id: string, title = '測試動畫') => `
 <a class="theme-list-main" href="animeRef.php?sn=${id}">
@@ -184,19 +198,19 @@ test('native account adapter reads paginated cloud favorites and exact cloud vie
     'https://api.gamer.com.tw/anime/v3/history.php?page=1':
       JSON.stringify({ data: { history: [historyRecord()], totalPage: 1 } }),
   });
-  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  await runAccount(fixture);
   // The resource's async IIFE is followed by a true sentinel, as required by
   // WebView evaluateJavaScript. Let that IIFE finish before checking its output.
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(fixture.messages[0]?.type, 'account-synced');
-  assert.deepEqual(fixture.messages[0].profile, {
+  assert.equal(fixture.messages.at(-1)?.type, 'account-synced');
+  assert.deepEqual(fixture.messages.at(-1).profile, {
     id: 'fixture-user', displayName: '測試暱稱',
     avatar: 'https://avatar2.bahamut.com.tw/avataruserpic/f/i/fixture-user/fixture-user.png'
   });
-  assert.equal(fixture.messages[0].favorites.length, 2);
-  assert.equal(fixture.messages[0].history[0].videoId, '20');
-  assert.equal(fixture.messages[0].history[0].progress, 0.64);
-  assert.equal(fixture.messages[0].history[0].progressLabel, '16:00');
+  assert.equal(fixture.messages.at(-1).favorites.length, 2);
+  assert.equal(fixture.messages.at(-1).history[0].videoId, '20');
+  assert.equal(fixture.messages.at(-1).history[0].progress, 0.64);
+  assert.equal(fixture.messages.at(-1).history[0].progressLabel, '16:00');
   assert.equal(fixture.requests.length, 2);
 });
 
@@ -211,7 +225,7 @@ test('cloud history loads API pages instead of treating an inert HTML wrapper as
         historyRecord(), historyRecord(11, 21, -1), { ...historyRecord(12, 22), breakPoint: {} },
       ], totalPage: 2 } }),
   });
-  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  await runAccount(fixture);
   assert.equal(fixture.messages[0].type, 'account-synced');
   assert.equal(fixture.messages[0].history.length, 3);
   assert.equal(fixture.messages[0].history[1].progress, 1);
@@ -226,7 +240,7 @@ test('malformed cloud history reports a sync error instead of an empty account',
     <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
     'https://api.gamer.com.tw/anime/v3/history.php?page=1': JSON.stringify({ error: { code: 401 } }),
   });
-  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  await runAccount(fixture);
   assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
 });
 
@@ -236,7 +250,7 @@ test('an official empty history response is accepted without fabricating records
     'https://api.gamer.com.tw/anime/v3/history.php?page=1':
       JSON.stringify({ data: { history: [], totalPage: 0 } }),
   });
-  await vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8').replace(/\}\)\(\); true;\s*$/, '})();'), fixture.context);
+  await runAccount(fixture);
   assert.equal(fixture.messages[0].type, 'account-synced');
   assert.deepEqual(fixture.messages[0].history, []);
 });
@@ -247,18 +261,125 @@ test('account profile never pairs one user identity with another user history', 
     <a class="user-info"><div class="avatar"><img src="https://attacker.test/avatar.png"></div>
       <p class="user-name">Other account</p><span class="user-id">other-user</span></a>
     <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php');
-  vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8'), fixture.context);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
+  await runAccount(fixture);
+  assert.equal(fixture.messages.at(-1).type, 'account-error');
+  assert.ok(!fixture.messages.some(message => message.type === 'account-synced'));
   assert.equal(fixture.requests.length, 0);
 });
 
 test('guest accounts produce no synthetic collection or viewing history', async () => {
-  const fixture = setup('<h1>請先登入</h1>');
-  vm.runInContext(fs.readFileSync(folder + 'account-sync.js', 'utf8'), fixture.context);
-  await new Promise(resolve => setImmediate(resolve));
+  const fixture = setup('<a class="user-info" href="https://user.gamer.com.tw/login.php">請先登入</a>');
+  await runAccount(fixture);
   assert.deepEqual(fixture.messages, [{ type: 'account-guest' }]);
   assert.equal(fixture.requests.length, 0);
+});
+
+test('official identity survives a stale guest menu and does not require a history user link', async () => {
+  for (const historyLink of ['', '<a href="viewList.php?u=guest">觀看紀錄</a>']) {
+    const fixture = setup(`<h1 class="theme-title">我的動畫</h1>${historyLink}${card('99')}`, '/mygather.php', {
+      'https://ani.gamer.com.tw/mygather.php': `<h1 class="theme-title">我的動畫</h1>${card('10')}`,
+      'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+        JSON.stringify({ data: { history: [historyRecord()], totalPage: 1 } }),
+    });
+    fixture.context.window.User = { Login: {
+      getUserid: () => 'fixture-user',
+      getUser: () => ({ userid: 'fixture-user', nickname: '測試暱稱',
+        avatarUrl: { big: 'https://avatar2.bahamut.com.tw/fixture-user.png' } }),
+    } };
+    await runAccount(fixture);
+    assert.equal(fixture.messages[0].type, 'account-authenticated');
+    assert.equal(fixture.messages[0].profile.displayName, '測試暱稱');
+    assert.equal(fixture.messages.at(-1).type, 'account-synced');
+    assert.equal(fixture.messages.at(-1).history[0].videoId, '20');
+    assert.deepEqual(fixture.messages.at(-1).favorites.map((item: any) => item.id), ['10']);
+    assert.ok(!fixture.messages.some(message => message.type === 'account-guest'));
+  }
+});
+
+test('a failed history sync still reports the identified account and never fabricates a logout', async () => {
+  const fixture = setup('<h1 class="theme-title">我的動畫</h1>', '/mygather.php', {
+    'https://ani.gamer.com.tw/mygather.php': '<h1 class="theme-title">我的動畫</h1>',
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1': '{"error":{"code":401}}',
+  });
+  fixture.context.window.User = { Login: { getUserid: () => 'fixture-user' } };
+  await runAccount(fixture);
+  assert.deepEqual(fixture.messages.map(message => message.type),
+    ['account-authenticated', 'account-error']);
+  assert.equal(fixture.messages[0].profile.id, 'fixture-user');
+});
+
+test('unrecognized or partially loaded documents report an error without clearing the account', async () => {
+  const fixture = setup('<h1>暫時無法提供服務</h1>');
+  await runAccount(fixture);
+  assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('visible login watches official identity changes and cleans up after syncing', async () => {
+  const fixture = setup('<h1 class="theme-title">我的動畫</h1>', '/mygather.php', {
+    'https://ani.gamer.com.tw/mygather.php': '<h1 class="theme-title">我的動畫</h1>',
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [], totalPage: 0 } }),
+  });
+  let id = '';
+  fixture.context.window.User = { Login: { getUserid: () => id } };
+  await runAccount(fixture, true);
+  assert.deepEqual(fixture.messages, [{ type: 'account-guest' }]);
+  assert.equal(fixture.intervals.size, 1);
+  id = 'fixture-user';
+  for (const tick of fixture.intervals) tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(fixture.messages.map(message => message.type),
+    ['account-guest', 'account-authenticated', 'account-synced']);
+  assert.equal(fixture.intervals.size, 0);
+});
+
+test('login completion only triggers from the official child frame and pending identity is polled', async () => {
+  const fixture = setup('<h1 class="theme-title">我的動畫</h1><iframe></iframe>', '/mygather.php', {
+    'https://ani.gamer.com.tw/mygather.php': '<h1 class="theme-title">我的動畫</h1>',
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [], totalPage: 0 } }),
+  });
+  let id = '';
+  fixture.context.window.User = { Login: { getUserid: () => id } };
+  const frame = fixture.document.querySelector('iframe') as any;
+  frame.contentWindow = {};
+  await runAccount(fixture, true);
+  id = 'fixture-user';
+  function message(origin: string, source: any) {
+    const event = new fixture.context.window.Event('message');
+    Object.assign(event, { origin, source, data: 'LoginFinish' });
+    fixture.context.window.dispatchEvent(event);
+  }
+  message('https://attacker.test', frame.contentWindow);
+  message('https://user.gamer.com.tw', {});
+  assert.equal(fixture.requests.length, 0);
+  message('https://user.gamer.com.tw', frame.contentWindow);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.messages.at(-1).type, 'account-synced');
+});
+
+test('old login watchers and pending account reads cannot publish into a newer operation', async () => {
+  const fixture = setup('<h1 class="theme-title">我的動畫</h1>');
+  let id = '';
+  fixture.context.window.User = { Login: { getUserid: () => id } };
+  fixture.context.window.__bahaDocumentNonce = 'old';
+  await runAccount(fixture, true);
+  fixture.context.window.__bahaDocumentNonce = 'new';
+  id = 'fixture-user';
+  for (const tick of fixture.intervals) tick();
+  assert.equal(fixture.intervals.size, 0);
+  assert.deepEqual(fixture.messages, [{ type: 'account-guest' }]);
+
+  let finish: (value: any) => void = () => {};
+  fixture.context.fetch = () => new Promise(resolve => { finish = resolve; });
+  const pending = runAccount(fixture);
+  assert.equal(fixture.messages.at(-1)?.type, 'account-authenticated');
+  id = 'other-user';
+  finish({ ok: true, url: 'https://ani.gamer.com.tw/mygather.php',
+    text: async () => '<h1 class="theme-title">我的動畫</h1>' });
+  await pending;
+  assert.ok(!fixture.messages.some(message => message.type === 'account-synced'));
 });
 
 function playerFixture() {
@@ -496,7 +617,22 @@ test('offline comment rejects guest, account mismatch, changed board, server fai
   assert.equal((await fixture.run('comment-send', args)).code, 'busy');
   assert.equal(fixture.context.window.__bahaCommunityLocks.has('comment:123'), true);
   fixture.document.querySelector('.btn-logout')!.remove();
+  fixture.identity.id = '';
   assert.equal((await fixture.run('comment-send', args)).code, 'login');
+});
+
+test('community uses current official identity while the menu is stale and rejects a stale logged-in menu', async () => {
+  const fixture = communityFixture({
+    'https://api.gamer.com.tw/ajax/common/topBar.php?type=light_0': '<ul></ul>',
+    'https://api.gamer.com.tw/ajax/common/topBar.php?type=light_1': '<ul></ul>',
+  });
+  fixture.document.querySelector('.btn-logout')!.remove();
+  assert.equal((await fixture.run('notifications', { owner: 'reader' })).ok, true);
+  const staleMenu = fixture.document.createElement('a');
+  staleMenu.className = 'btn-logout';
+  fixture.document.body.append(staleMenu);
+  fixture.identity.id = '';
+  assert.equal((await fixture.run('notifications', { owner: 'reader' })).code, 'login');
 });
 
 test('offline comment drops a pending submission when the account or document changes before writing', async () => {
@@ -682,6 +818,22 @@ test('favorite uses the official search card without opening a video page', asyn
   assert.deepEqual(fixture.messages, [{ type: 'favorite-complete', id: '10', saved: true }]);
   assert.equal(fixture.document.querySelector('video'), null);
   assert.equal(fixture.requests.length, 0);
+});
+
+test('favorite checks the current official identity instead of a stale login menu', async () => {
+  for (const id of ['reader', '']) {
+    const fixture = setup(`${id ? '' : '<a class="btn-logout">登出</a>'}
+      <button onclick="animefun.toggleGather(500, 10, x)"></button>`);
+    fixture.context.window.User = { Login: { getUserid: () => id } };
+    let clicks = 0;
+    const button = fixture.document.querySelector('button')!;
+    button.addEventListener('click', () => { clicks++; button.classList.add('ordered'); });
+    vm.runInContext(fs.readFileSync(folder + 'favorite-action.js', 'utf8')
+      .replaceAll('%ANIME_ID%', '10').replace('__BAHA_DESIRED__', 'true'), fixture.context);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.messages.at(-1)?.type, id ? 'favorite-complete' : 'account-guest');
+    assert.equal(clicks, id ? 1 : 0);
+  }
 });
 
 test('Flutter resources contain both locales, a valid test fixture and no account snapshots', () => {

@@ -107,6 +107,19 @@ class AppStore extends ChangeNotifier {
     } catch (_) {
       // A damaged device preference falls back to readable defaults.
     }
+    final account = await AccountCache(disk).load();
+    if (account != null) {
+      store.accountProfile = account['profile'] == null
+          ? null
+          : AccountProfile.fromJson(account['profile'] as Json);
+      store.favorites = (account['favorites'] as List)
+          .map((item) => Anime.fromJson(item as Json))
+          .toList();
+      store.history = (account['history'] as List)
+          .map((item) => WatchEntry.fromJson(item as Json))
+          .toList();
+      store.accountSynced = true;
+    }
     return store;
   }
 
@@ -161,6 +174,7 @@ class AppStore extends ChangeNotifier {
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
+  Future<void> _accountCacheWrite = Future<void>.value();
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
@@ -727,6 +741,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     favorites = [];
     history = [];
     accountSynced = false;
+    unawaited(_saveAccountSnapshot(null));
     browserTitle = t('officialAccount');
     await _load(
       OfficialSite.home.resolve('mygather.php'),
@@ -838,7 +853,9 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     busy = true;
     _armDeadline();
     _emit();
-    await _runScript('account-sync');
+    await _runScript('account-sync', {
+      '__BAHA_WATCH_ACCOUNT__': browserVisible ? 'true' : 'false',
+    });
   }
 
   Future<void> retryFavorite() async {
@@ -865,6 +882,17 @@ window.__bahaDanmakuPreferences = ${jsonEncode(danmakuSettings.toJson())};
 ${_applicationActive ? '' : _suspendMedia} true;
 ''');
     await _runScript('player', {'%ANIME_ID%': playingAnime!.id});
+  }
+
+  void navigationStarted() {
+    if (operation.intent == BrowserIntent.accountRefresh &&
+        _accountSyncDocument == operation.id) {
+      _begin(BrowserIntent.accountRefresh);
+      _accountSyncDocument = null;
+      busy = true;
+      _armDeadline();
+      _emit();
+    }
   }
 
   Future<void> navigationFinished(Uri? uri) async {
@@ -941,6 +969,23 @@ window.__bahaMediaSuspended = false; true;
       isMainFrame: isMainFrame,
     );
     if (body == null) return;
+    if (body['type'] == 'account-authenticated') {
+      final profile = AccountProfile.fromJson(body['profile'] as Json);
+      if (accountProfile?.id.toLowerCase() != profile.id.toLowerCase()) {
+        _resetNotifications();
+        favorites = [];
+        history = [];
+        accountSynced = false;
+        unawaited(_saveAccountSnapshot(null));
+      }
+      accountProfile = profile;
+      accountNeedsRefresh = true;
+      browserVisible = false;
+      busy = true;
+      _armDeadline();
+      _emit();
+      return;
+    }
     if (body['type'] == 'player-state' || body['type'] == 'player-detail') {
       if (operation.videoId == null) {
         playingVideoId = body['videoId'] as String;
@@ -1017,6 +1062,13 @@ window.__bahaMediaSuspended = false; true;
         accountNeedsRefresh = false;
         browserVisible = false;
         _begin(BrowserIntent.idle);
+        unawaited(
+          _saveAccountSnapshot({
+            'profile': body['profile'],
+            'favorites': body['favorites'],
+            'history': body['history'],
+          }),
+        );
         if (catalog.items.isEmpty) await refreshCatalog();
       case 'account-guest':
         _resetNotifications();
@@ -1025,6 +1077,7 @@ window.__bahaMediaSuspended = false; true;
         history = [];
         accountSynced = false;
         accountNeedsRefresh = false;
+        unawaited(_saveAccountSnapshot(null));
         if (browserVisible) {
           notice = t('accountHint');
         } else {
@@ -1046,6 +1099,17 @@ window.__bahaMediaSuspended = false; true;
         if (browserVisible) notice = t('officialVerificationHint');
     }
     _emit();
+  }
+
+  Future<void> _saveAccountSnapshot(Json? snapshot) {
+    _accountCacheWrite = _accountCacheWrite.then((_) async {
+      try {
+        await AccountCache(storage).save(snapshot);
+      } catch (_) {
+        // A cache failure must not interrupt the official session.
+      }
+    });
+    return _accountCacheWrite;
   }
 
   Future<void> _load(

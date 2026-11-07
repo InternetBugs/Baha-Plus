@@ -90,7 +90,9 @@ class BrowserRequest {
           }
         case BrowserIntent.account:
         case BrowserIntent.accountRefresh:
-          if (type == 'account-synced') {
+          if (type == 'account-authenticated') {
+            AccountProfile.fromJson(body['profile'] as Json);
+          } else if (type == 'account-synced') {
             if (body['profile'] != null) {
               AccountProfile.fromJson(body['profile'] as Json);
             }

@@ -1,7 +1,12 @@
 
   (function() {
     if (location.origin !== 'https://ani.gamer.com.tw') return;
-    if (!document.querySelector('.btn-logout')) {
+    var login = window.User?.Login;
+    var owner = typeof login?.getUserid === 'function' ? login.getUserid() : null;
+    var loggedIn = typeof login?.getUserid === 'function'
+      ? typeof owner === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(owner) && owner.toLowerCase() !== 'guest'
+      : !!document.querySelector('.btn-logout');
+    if (!loggedIn) {
       bahaPostJSON(JSON.stringify({type:'account-guest'})); return;
     }
     var pattern = new RegExp('toggleGather\\(\\d+,\\s*%ANIME_ID%\\s*,');

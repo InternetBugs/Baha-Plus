@@ -10,8 +10,12 @@
   const id = value => /^\d{1,20}$/.test(String(value ?? ''));
   const videoId = value => /^\d{1,10}$/.test(String(value ?? ''));
   const fail = code => { throw Object.assign(new Error(code), { code }); };
-  const owner = () => window.User?.Login?.getUserid?.() ||
-    document.querySelector('a.user-info .user-id')?.textContent.trim() || '';
+  const owner = () => {
+    const login = window.User?.Login;
+    const value = typeof login?.getUserid === 'function' ? login.getUserid() :
+      document.querySelector('a.user-info .user-id')?.textContent.trim() || '';
+    return /^[A-Za-z0-9_-]{1,64}$/.test(value) && value.toLowerCase() !== 'guest' ? value : '';
+  };
   const initialOwner = owner().toLowerCase();
   const live = () => {
     if (location.origin !== origin || location.href !== documentURL ||
@@ -20,7 +24,8 @@
   };
   const login = () => {
     live();
-    if (!initialOwner || !document.querySelector('.btn-logout') ||
+    if (!initialOwner ||
+        (typeof window.User?.Login?.getUserid !== 'function' && !document.querySelector('.btn-logout')) ||
         (args.owner && args.owner.toLowerCase() !== initialOwner)) fail('login');
   };
   const allowed = new Set([

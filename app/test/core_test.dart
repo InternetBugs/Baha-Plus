@@ -281,6 +281,163 @@ void main() {
   );
 
   test(
+    'login reload replaces the old sync request and starts sync in the new document',
+    () async {
+      final store = await _createStore();
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      await store.connectAccount();
+      final account = OfficialSite.home.resolve('mygather.php');
+      await store.navigationFinished(account);
+      final oldRequest = store.operation.id;
+      await store.receive(
+        jsonEncode({'type': 'account-guest', 'requestId': oldRequest}),
+        origin: OfficialSite.home,
+        source: account,
+        isMainFrame: true,
+      );
+      expect(store.busy, isFalse);
+      store.navigationStarted();
+      final newRequest = store.operation.id;
+      expect(newRequest, isNot(oldRequest));
+      expect(store.busy, isTrue);
+      await store.receive(
+        jsonEncode({'type': 'account-guest', 'requestId': oldRequest}),
+        origin: OfficialSite.home,
+        source: account,
+        isMainFrame: true,
+      );
+      expect(store.busy, isTrue);
+      final before = portal.scripts.length;
+      await store.navigationFinished(account);
+      expect(portal.scripts.length, before + 1);
+      expect(portal.scripts.last, contains('const watch = true'));
+      expect(portal.scripts.last, isNot(contains('__BAHA_WATCH_ACCOUNT__')));
+      expect(store.operation.id, isNot(newRequest));
+    },
+  );
+
+  test(
+    'identified login survives a failed data sync and clears another account snapshot',
+    () async {
+      final disk = MemoryStorage();
+      final store = await _createStore(storage: disk);
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      store.updateNavigation(OfficialSite.home, canGoBack: false);
+      Future<void> send(Json body) => store.receive(
+        jsonEncode({...body, 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      await store.syncAccount();
+      await send({
+        'type': 'account-synced',
+        'profile': {'id': 'old-user', 'displayName': '舊帳號'},
+        'favorites': [catalog.items.first.toJson()],
+        'history': [],
+      });
+      await store.syncAccount();
+      final request = store.operation.id;
+      store.browserVisible = true;
+      await send({
+        'type': 'account-authenticated',
+        'profile': {'id': 'new-user', 'displayName': '新帳號'},
+      });
+      expect(store.operation.id, request);
+      expect(store.busy, isTrue);
+      expect(store.browserVisible, isFalse);
+      expect(store.accountProfile?.id, 'new-user');
+      expect(store.favorites, isEmpty);
+      expect(store.history, isEmpty);
+      expect(store.accountSynced, isFalse);
+      await send({'type': 'account-error'});
+      expect(store.busy, isFalse);
+      expect(store.accountProfile?.id, 'new-user');
+      expect(store.accountNeedsRefresh, isTrue);
+      expect(store.notice, store.t('accountSyncError'));
+      await Future<void>.delayed(Duration.zero);
+      expect(await AccountCache(disk).load(), isNull);
+
+      await store.syncAccount();
+      await send({'type': 'account-guest'});
+      expect(store.accountProfile, isNull);
+      expect(store.accountNeedsRefresh, isFalse);
+    },
+  );
+
+  test(
+    'same account keeps its last synced data when refresh fails after login identification',
+    () async {
+      final store = await _createStore();
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      await store.attach(FakePortal());
+      store.updateNavigation(OfficialSite.home, canGoBack: false);
+      Future<void> send(Json body) => store.receive(
+        jsonEncode({...body, 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      const profile = {'id': 'fixture-user', 'displayName': '測試暱稱'};
+      await store.syncAccount();
+      await send({
+        'type': 'account-synced',
+        'profile': profile,
+        'favorites': [catalog.items.first.toJson()],
+        'history': [],
+      });
+      await store.syncAccount();
+      await send({'type': 'account-authenticated', 'profile': profile});
+      await send({'type': 'account-error'});
+      expect(store.accountProfile?.id, 'fixture-user');
+      expect(store.accountSynced, isTrue);
+      expect(store.favorites.single.id, catalog.items.first.id);
+      expect(store.accountNeedsRefresh, isTrue);
+    },
+  );
+
+  test(
+    'account identity events require a current trusted account request and valid profile',
+    () {
+      final request = BrowserRequest(intent: BrowserIntent.accountRefresh);
+      final body = {
+        'type': 'account-authenticated',
+        'requestId': request.id,
+        'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
+      };
+      Json? accept(Json value, {Uri? origin}) => request.accept(
+        jsonEncode(value),
+        origin: origin ?? OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      expect(accept(body), isNotNull);
+      expect(accept({...body, 'requestId': 'expired'}), isNull);
+      expect(accept({...body, 'profile': null}), isNull);
+      expect(
+        accept(body, origin: Uri.parse('https://user.gamer.com.tw/')),
+        isNull,
+      );
+      expect(
+        BrowserRequest(intent: BrowserIntent.browse, id: request.id).accept(
+          jsonEncode(body),
+          origin: OfficialSite.home,
+          source: OfficialSite.home,
+          isMainFrame: true,
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test(
     'account data updates automatically on history entry and foreground without duplicate requests',
     () async {
       final store = await _createStore(storage: MemoryStorage());
@@ -380,7 +537,8 @@ void main() {
         'history': [],
       });
       expect(store.accountProfile?.id, 'fixture-user');
-      expect(disk.values, isEmpty);
+      await Future<void>.delayed(Duration.zero);
+      expect(disk.values[AccountCache.key], isNotEmpty);
       await store.syncAccount();
       await send({'type': 'account-guest'});
       expect(store.accountProfile, isNull);
@@ -394,6 +552,71 @@ void main() {
       });
       await store.connectAccount();
       expect(store.accountProfile, isNull);
+    },
+  );
+
+  test(
+    'account snapshot restores on restart and clears after official logout',
+    () async {
+      final disk = MemoryStorage();
+      final store = await _createStore(storage: disk);
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      await store.attach(FakePortal());
+      store.updateNavigation(OfficialSite.home, canGoBack: false);
+      await store.syncAccount();
+      await store.receive(
+        jsonEncode({
+          'type': 'account-synced',
+          'requestId': store.operation.id,
+          'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
+          'favorites': [catalog.items.first.toJson()],
+          'history': [
+            {
+              'anime': catalog.items.first.toJson(),
+              'videoId': '20',
+              'episodeLabel': '第一集',
+              'progress': 0.5,
+            },
+          ],
+        }),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      await Future<void>.delayed(Duration.zero);
+      final restored = await _createStore(storage: disk);
+      addTearDown(restored.dispose);
+      expect(restored.accountProfile?.id, 'fixture-user');
+      expect(restored.accountSynced, isTrue);
+      expect(restored.favorites.single.id, catalog.items.first.id);
+      expect(restored.history.single.progress, 0.5);
+
+      restored.catalog = catalog;
+      await restored.attach(FakePortal());
+      restored.updateNavigation(OfficialSite.home, canGoBack: false);
+      await restored.syncAccount();
+      await restored.receive(
+        jsonEncode({
+          'type': 'account-guest',
+          'requestId': restored.operation.id,
+        }),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      await Future<void>.delayed(Duration.zero);
+      final afterLogout = await _createStore(storage: disk);
+      addTearDown(afterLogout.dispose);
+      expect(afterLogout.accountProfile, isNull);
+      expect(afterLogout.accountSynced, isFalse);
+      expect(afterLogout.favorites, isEmpty);
+      expect(afterLogout.history, isEmpty);
+
+      disk.values[AccountCache.key] = '{"favorites":"invalid"}';
+      final damaged = await _createStore(storage: disk);
+      addTearDown(damaged.dispose);
+      expect(damaged.accountSynced, isFalse);
     },
   );
 

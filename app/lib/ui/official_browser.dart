@@ -347,6 +347,7 @@ try {
           _documentGeneration++;
           _publicDocumentReady = false;
           _progress.value = 1;
+          store.navigationStarted();
           await _updateNavigation();
         },
         onPageCommitVisible: (controller, url) async {
