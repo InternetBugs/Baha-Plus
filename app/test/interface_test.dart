@@ -960,6 +960,51 @@ void main() {
       await tester.tapAt(const Offset(10, 100));
       await frames(tester);
       expect(find.byType(CupertinoActionSheet), findsNothing);
+
+      playback(paused: true);
+      await frames(tester);
+      final lockPosition = tester.getCenter(
+        find.byKey(const ValueKey('player-lock')),
+      );
+      expect(lockPosition.dx, lessThan(video.center.dx));
+      expect(lockPosition.dy, closeTo(video.center.dy, 1));
+      await tester.tap(find.byKey(const ValueKey('player-lock')));
+      await frames(tester);
+      expect(store.playerLocked, isTrue);
+      expect(controls, findsNothing);
+      expect(exitFullscreen, findsNothing);
+      expect(settings, findsNothing);
+      final unlock = find.byKey(const ValueKey('player-unlock'));
+      expect(unlock.hitTestable(), findsOneWidget);
+      expect(tester.getCenter(unlock), lockPosition);
+      final scriptsBeforeLockedTap = portal.scripts.length;
+      await tester.tapAt(video.center);
+      await frames(tester);
+      expect(unlock.hitTestable(), findsNothing);
+      expect(portal.scripts.length, scriptsBeforeLockedTap);
+      expect(officialTaps, 1);
+      await store.dismissBrowser();
+      expect(store.playerFullscreen, isTrue);
+      await tester.tapAt(video.center);
+      await frames(tester);
+      expect(unlock.hitTestable(), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+      await frames(tester);
+      expect(unlock.hitTestable(), findsNothing);
+      await tester.tapAt(video.center);
+      await frames(tester);
+      await tester.tap(unlock);
+      await frames(tester);
+      expect(store.playerLocked, isFalse);
+      expect(controls.hitTestable(), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('player-lock')));
+      await frames(tester);
+      playback(phase: PlaybackPhase.age);
+      await frames(tester);
+      expect(store.playerLocked, isFalse);
+      await tester.tapAt(video.center);
+      expect(officialTaps, 2);
       store.setPlayerFullscreen(false);
       await frames(tester);
       expect(tester.takeException(), isNull);

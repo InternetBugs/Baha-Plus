@@ -160,6 +160,7 @@ class AppStore extends ChangeNotifier {
   AnimeDetail? playerDetail;
   String? playingVideoId;
   bool playerFullscreen = false;
+  bool playerLocked = false;
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
   bool detailLoading = false, detailFailed = false;
   bool browserVisible = false, browserError = false, busy = false;
@@ -436,11 +437,19 @@ class AppStore extends ChangeNotifier {
   void setPlayerFullscreen(bool value) {
     if (playerFullscreen == value) return;
     playerFullscreen = value;
+    if (!value) playerLocked = false;
+    _emit();
+  }
+
+  void setPlayerLocked(bool value) {
+    if (playerLocked == value) return;
+    playerLocked = value;
     _emit();
   }
 
   Future<void> dismissBrowser() async {
     if (showsPlayer && playerFullscreen) {
+      if (playerLocked) return;
       setPlayerFullscreen(false);
     } else {
       await closeBrowser();
@@ -801,6 +810,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
         operation.intent == BrowserIntent.accountRefresh;
     browserVisible = false;
     playerFullscreen = false;
+    playerLocked = false;
     busy = false;
     _begin(BrowserIntent.idle);
     final closing = operation.id;
@@ -1126,6 +1136,7 @@ window.__bahaMediaSuspended = false; true;
     _begin(intent);
     if (intent != BrowserIntent.play) {
       playerFullscreen = false;
+      playerLocked = false;
       try {
         await _portal?.evaluate(
           '$_suspendMedia window.__bahaPlayerBridge?.dispose(); true;',

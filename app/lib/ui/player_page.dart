@@ -40,6 +40,11 @@ class _PlayerPageState extends State<PlayerPage> {
 
   void _playbackChanged() {
     final state = store.playback.value;
+    if (store.playerLocked &&
+        state.phase != PlaybackPhase.content &&
+        state.phase != PlaybackPhase.loading) {
+      store.setPlayerLocked(false);
+    }
     final key = '${state.phase.name}:${state.paused}';
     if (key == _controlState) return;
     _controlState = key;
@@ -51,8 +56,8 @@ class _PlayerPageState extends State<PlayerPage> {
     if (!_controlsVisible && mounted) setState(() => _controlsVisible = true);
     final state = store.playback.value;
     if (store.playerFullscreen &&
-        state.phase == PlaybackPhase.content &&
-        !state.paused) {
+        (store.playerLocked ||
+            (state.phase == PlaybackPhase.content && !state.paused))) {
       _hideTimer = Timer(const Duration(seconds: 3), () {
         if (mounted) setState(() => _controlsVisible = false);
       });
@@ -70,6 +75,11 @@ class _PlayerPageState extends State<PlayerPage> {
     } else {
       _revealControls();
     }
+  }
+
+  void _setLocked(bool locked) {
+    store.setPlayerLocked(locked);
+    _revealControls();
   }
 
   void _dismissOutsideVideo(PointerDownEvent event) {
@@ -377,7 +387,9 @@ class _PlayerPageState extends State<PlayerPage> {
                   ],
                 ),
               ),
-            if (store.playerFullscreen && state.canOperate)
+            if (store.playerFullscreen &&
+                state.canOperate &&
+                !store.playerLocked)
               Positioned(
                 left: 48,
                 right: 48,
@@ -760,67 +772,118 @@ class _PlayerPageState extends State<PlayerPage> {
     child: Stack(
       fit: StackFit.expand,
       children: [
-        _surface(),
-        Positioned(
-          top: MediaQuery.paddingOf(context).top + 14,
-          left: 20,
-          right: 20,
-          child: IgnorePointer(
-            ignoring: !_controlsVisible,
-            child: AnimatedOpacity(
-              opacity: _controlsVisible ? 1 : 0,
-              duration: const Duration(milliseconds: 180),
-              child: Listener(
-                onPointerDown: (_) => _revealControls(),
-                child: Row(
-                  children: [
-                    GlassIconButton(
-                      key: const ValueKey('player-fullscreen-close'),
-                      useOwnLayer: true,
-                      platformViewBackdrop: true,
-                      settings: mediaGlass.copyWith(
-                        backerColor: const Color(0x66000000),
-                      ),
-                      semanticLabel: store.t('exitFullScreen'),
-                      onPressed: () => store.setPlayerFullscreen(false),
-                      icon: const Icon(
-                        CupertinoIcons.xmark,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Text(
-                        store.playingAnime!.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+        ExcludeSemantics(excluding: store.playerLocked, child: _surface()),
+        if (!store.playerLocked)
+          Positioned(
+            top: MediaQuery.paddingOf(context).top + 14,
+            left: 20,
+            right: 20,
+            child: IgnorePointer(
+              ignoring: !_controlsVisible,
+              child: AnimatedOpacity(
+                opacity: _controlsVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 180),
+                child: Listener(
+                  onPointerDown: (_) => _revealControls(),
+                  child: Row(
+                    children: [
+                      GlassIconButton(
+                        key: const ValueKey('player-fullscreen-close'),
+                        useOwnLayer: true,
+                        platformViewBackdrop: true,
+                        settings: mediaGlass.copyWith(
+                          backerColor: const Color(0x66000000),
+                        ),
+                        semanticLabel: store.t('exitFullScreen'),
+                        onPressed: () => store.setPlayerFullscreen(false),
+                        icon: const Icon(
+                          CupertinoIcons.xmark,
                           color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                          shadows: [Shadow(blurRadius: 8)],
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    ..._danmakuActions(),
-                    const SizedBox(width: 12),
-                    GlassIconButton(
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Text(
+                          store.playingAnime!.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 16,
+                            shadows: [Shadow(blurRadius: 8)],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      ..._danmakuActions(),
+                      const SizedBox(width: 12),
+                      GlassIconButton(
+                        useOwnLayer: true,
+                        platformViewBackdrop: true,
+                        settings: mediaGlass.copyWith(
+                          backerColor: const Color(0x66000000),
+                        ),
+                        semanticLabel: store.t('playbackSettings'),
+                        onPressed: _settingsMenu,
+                        icon: const Icon(
+                          CupertinoIcons.ellipsis,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        if (store.playerLocked)
+          Positioned.fill(
+            child: GestureDetector(
+              key: const ValueKey('player-locked-surface'),
+              behavior: HitTestBehavior.opaque,
+              onTap: _toggleControls,
+            ),
+          ),
+        Positioned(
+          left: MediaQuery.paddingOf(context).left + 20,
+          top: 0,
+          bottom: 0,
+          child: Center(
+            child: ValueListenableBuilder(
+              valueListenable: store.playback,
+              builder: (context, state, child) {
+                if (!store.playerLocked && !state.canControl) {
+                  return const SizedBox.shrink();
+                }
+                return IgnorePointer(
+                  ignoring: !_controlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: GlassIconButton(
+                      key: ValueKey(
+                        store.playerLocked ? 'player-unlock' : 'player-lock',
+                      ),
                       useOwnLayer: true,
                       platformViewBackdrop: true,
                       settings: mediaGlass.copyWith(
                         backerColor: const Color(0x66000000),
                       ),
-                      semanticLabel: store.t('playbackSettings'),
-                      onPressed: _settingsMenu,
-                      icon: const Icon(
-                        CupertinoIcons.ellipsis,
+                      semanticLabel: store.t(
+                        store.playerLocked ? 'unlockPlayer' : 'lockPlayer',
+                      ),
+                      onPressed: () => _setLocked(!store.playerLocked),
+                      icon: Icon(
+                        store.playerLocked
+                            ? CupertinoIcons.lock_fill
+                            : CupertinoIcons.lock_open,
                         color: Colors.white,
                       ),
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             ),
           ),
         ),

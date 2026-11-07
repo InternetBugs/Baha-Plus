@@ -138,6 +138,8 @@
   "showMore": "展開",
   "showLess": "收合",
   "playbackSettings": "播放設定",
+  "lockPlayer": "鎖定播放器",
+  "unlockPlayer": "解鎖播放器",
   "videoQuality": "畫質",
   "automaticQuality": "自動",
   "hideDanmaku": "關閉彈幕",
