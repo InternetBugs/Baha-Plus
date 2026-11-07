@@ -71,10 +71,14 @@ class AppStore extends ChangeNotifier {
       'favorite-action',
       'player',
       'media-compat',
+      'native-hls',
       'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
+    // Install the native HLS helper and player bridge in the same document
+    // evaluation, after the lifecycle pause guard has been initialized.
+    scripts['player'] = '${scripts['native-hls']}\n${scripts['player']}';
     String? language, appearance, danmaku;
     try {
       language = await disk.read('baha.device.language');
