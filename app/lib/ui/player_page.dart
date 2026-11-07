@@ -689,9 +689,26 @@ class _PlayerPageState extends State<PlayerPage> {
     ),
   );
 
-  void _speed(double current) => showCupertinoModalPopup<void>(
-    context: context,
-    builder: (sheet) => CupertinoActionSheet(
+  Future<T?> _showMenu<T>(WidgetBuilder builder) async {
+    final route = _PlayerMenuRoute<T>(
+      builder: builder,
+      barrierLabel: CupertinoLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: CupertinoDynamicColor.resolve(
+        kCupertinoModalBarrierColor,
+        context,
+      ),
+    );
+    final result = await Navigator.of(
+      context,
+      rootNavigator: true,
+    ).push<T>(route);
+    // Finish removing the old sheet and its barrier before opening a submenu.
+    await route.completed;
+    return result;
+  }
+
+  void _speed(double current) => _showMenu<void>(
+    (sheet) => CupertinoActionSheet(
       title: Text(store.t('playbackSpeed')),
       actions: [
         for (final rate in [.5, .75, 1.0, 1.25, 1.5, 1.75, 2.0])
@@ -711,44 +728,31 @@ class _PlayerPageState extends State<PlayerPage> {
     ),
   );
 
-  void _settingsMenu() {
+  Future<void> _settingsMenu() async {
     final state = store.playback.value;
-    showCupertinoModalPopup<void>(
-      context: context,
-      builder: (sheet) => CupertinoActionSheet(
+    final action = await _showMenu<_PlayerMenuAction>(
+      (sheet) => CupertinoActionSheet(
         title: Text(store.t('playbackSettings')),
         actions: [
           if (state.canControl && state.qualities.isNotEmpty)
             CupertinoActionSheetAction(
-              onPressed: () {
-                Navigator.pop(sheet);
-                _qualityMenu();
-              },
+              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.quality),
               child: Text(
                 '${store.t('videoQuality')} · ${state.quality == 0 ? store.t('automaticQuality') : '${state.quality}p'}',
               ),
             ),
           if (state.canControl)
             CupertinoActionSheetAction(
-              onPressed: () {
-                Navigator.pop(sheet);
-                _speed(state.rate);
-              },
+              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.speed),
               child: Text(store.t('playbackSpeed')),
             ),
           if (state.canControl && state.hasDanmaku)
             CupertinoActionSheetAction(
-              onPressed: () {
-                Navigator.pop(sheet);
-                showDanmakuPanel(context, store);
-              },
+              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.danmaku),
               child: Text(store.t('danmakuSettings')),
             ),
           CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.pop(sheet);
-              store.reloadBrowser();
-            },
+            onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.refresh),
             child: Text(store.t('refresh')),
           ),
         ],
@@ -758,13 +762,25 @@ class _PlayerPageState extends State<PlayerPage> {
         ),
       ),
     );
+    if (!mounted) return;
+    switch (action) {
+      case _PlayerMenuAction.quality:
+        _qualityMenu();
+      case _PlayerMenuAction.speed:
+        _speed(state.rate);
+      case _PlayerMenuAction.danmaku:
+        showDanmakuPanel(context, store);
+      case _PlayerMenuAction.refresh:
+        unawaited(store.reloadBrowser());
+      case null:
+        break;
+    }
   }
 
   void _qualityMenu() {
     final state = store.playback.value;
-    showCupertinoModalPopup<void>(
-      context: context,
-      builder: (sheet) => CupertinoActionSheet(
+    _showMenu<void>(
+      (sheet) => CupertinoActionSheet(
         title: Text(store.t('videoQuality')),
         actions: [
           for (final height in [0, ...state.qualities])
@@ -916,4 +932,45 @@ class _PlayerPageState extends State<PlayerPage> {
     final minutes = value ~/ 60;
     return '${minutes.toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
   }
+}
+
+enum _PlayerMenuAction { quality, speed, danmaku, refresh }
+
+/// Keep the sheet and its barrier on one bounded animation. The default
+/// Cupertino popup spring retains its barrier while the spring settles,
+/// even after the sheet has already moved out of view.
+class _PlayerMenuRoute<T> extends RawDialogRoute<T> {
+  _PlayerMenuRoute({
+    required WidgetBuilder builder,
+    required super.barrierColor,
+    required super.barrierLabel,
+  }) : super(
+         transitionDuration: const Duration(milliseconds: 250),
+         pageBuilder: (context, animation, secondaryAnimation) =>
+             CupertinoUserInterfaceLevel(
+               data: CupertinoUserInterfaceLevelData.elevated,
+               child: Builder(builder: builder),
+             ),
+         transitionBuilder: (context, animation, secondaryAnimation, child) =>
+             Align(
+               alignment: Alignment.bottomCenter,
+               child: SlideTransition(
+                 position: animation
+                     .drive(CurveTween(curve: Curves.easeOutCubic))
+                     .drive(
+                       Tween<Offset>(
+                         begin: const Offset(0, 1),
+                         end: Offset.zero,
+                       ),
+                     ),
+                 child: child,
+               ),
+             ),
+       );
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 180);
+
+  @override
+  Curve get barrierCurve => Curves.linear;
 }

@@ -816,6 +816,94 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('player menus remove their barrier promptly when dismissed', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    final portal = FakePortal();
+    await store.attach(portal);
+    await store.play(
+      const Anime(
+        id: '10',
+        title: 'Test Anime',
+        cover: 'https://p2.bahamut.com.tw/10.jpg',
+        latestVideoId: '20',
+      ),
+    );
+    store.playback.value = const PlaybackState(
+      phase: PlaybackPhase.content,
+      surfaceReady: true,
+      paused: true,
+      duration: 1200,
+      qualities: [720, 360],
+    );
+    Navigator.of(tester.element(find.byType(AppRoot))).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => PlayerPage(
+          store: store,
+          video: const ColoredBox(color: Colors.black),
+        ),
+      ),
+    );
+    await frames(tester);
+
+    Future<void> expectDismissed() async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(find.byType(CupertinoActionSheet), findsNothing);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is ModalBarrier && widget.dismissible ||
+              widget is AnimatedModalBarrier && widget.dismissible,
+          description: 'dismissible popup barrier',
+        ),
+        findsNothing,
+      );
+      final commands = portal.scripts.length;
+      await tester.tap(find.bySemanticsLabel(store.t('rewindTen')));
+      expect(portal.scripts.length, commands + 1);
+      expect(portal.scripts.last, contains('"seek"'));
+    }
+
+    Future<void> openSettings() async {
+      await tester.tap(find.bySemanticsLabel(store.t('playbackSettings')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+    }
+
+    await openSettings();
+    await tester.tapAt(const Offset(10, 100));
+    await expectDismissed();
+
+    await openSettings();
+    await tester.tap(find.text(store.t('playbackSpeed')));
+    await frames(tester);
+    expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    await tester.tap(find.text(store.t('close')).last);
+    await expectDismissed();
+
+    await openSettings();
+    await tester.tap(find.textContaining(store.t('videoQuality')));
+    await frames(tester);
+    expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    await tester.tap(find.text('360p'));
+    expect(portal.scripts.last, contains('"quality",360.0'));
+    await expectDismissed();
+
+    await openSettings();
+    await tester.binding.handlePopRoute();
+    await expectDismissed();
+
+    await tester.tap(find.bySemanticsLabel(store.t('playbackSettings')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.binding.handlePopRoute();
+    await expectDismissed();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'double tap toggles playback only on unlocked fullscreen content',
     (tester) async {
