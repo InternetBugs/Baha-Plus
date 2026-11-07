@@ -70,6 +70,7 @@ class AppStore extends ChangeNotifier {
       'account-sync',
       'favorite-action',
       'player',
+      'stop-playback',
       'media-compat',
       'native-hls',
       'community',
@@ -804,6 +805,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> closeBrowser() async {
     final document = operation.id;
+    final releaseSystemMedia = browserIsPlayer;
     final refreshAccount =
         accountNeedsRefresh ||
         operation.intent == BrowserIntent.account ||
@@ -814,16 +816,14 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     busy = false;
     _begin(BrowserIntent.idle);
     final closing = operation.id;
+    playback.value = const PlaybackState();
     _emit();
-    try {
-      await _portal?.evaluate('''
-if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
-  $_suspendMedia
-} true;
-''');
-    } catch (_) {
-      // A cancelled document may already have been destroyed by WebKit.
-    }
+    await _releasePlayback(
+      document: document,
+      expected: closing,
+      releaseSystemMedia: releaseSystemMedia,
+    );
+    if (_disposed || operation.id != closing) return;
     if (refreshAccount) {
       await Future<void>.delayed(const Duration(seconds: 1));
       if (operation.id == closing && !browserVisible) await syncAccount();
@@ -916,6 +916,16 @@ ${_applicationActive ? '' : _suspendMedia} true;
       busy = false;
       _emit();
       return;
+    }
+    // An in-flight player navigation can finish after exit and even after
+    // account sync has replaced the operation. Tear down that hidden document
+    // before its account/catalog adapter can leave media running.
+    if (!browserVisible &&
+        operation.intent != BrowserIntent.play &&
+        OfficialSite.desktopPlayer(uri)) {
+      final expected = operation.id;
+      await _releasePlayback(expected: expected, releaseSystemMedia: true);
+      if (_disposed || operation.id != expected) return;
     }
     switch (operation.intent) {
       case BrowserIntent.catalog:
@@ -1133,15 +1143,19 @@ window.__bahaMediaSuspended = false; true;
     required bool visible,
   }) async {
     if (!OfficialSite.allowedNavigation(uri)) return;
+    final document = operation.id;
+    final releaseSystemMedia = browserIsPlayer;
     _begin(intent);
+    final expected = operation.id;
     if (intent != BrowserIntent.play) {
       playerFullscreen = false;
       playerLocked = false;
-      try {
-        await _portal?.evaluate(
-          '$_suspendMedia window.__bahaPlayerBridge?.dispose(); true;',
-        );
-      } catch (_) {}
+      await _releasePlayback(
+        document: document,
+        expected: expected,
+        releaseSystemMedia: releaseSystemMedia,
+      );
+      if (_disposed || operation.id != expected) return;
     }
     browserVisible = visible;
     browserError = false;
@@ -1226,6 +1240,42 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
       }
     } catch (_) {
       if (operation.id == expected) navigationFailed();
+    }
+  }
+
+  static const _systemMedia = MethodChannel(
+    'app.bahaplus.mobile/media_session',
+  );
+
+  Future<void> _releasePlayback({
+    String? document,
+    required String expected,
+    required bool releaseSystemMedia,
+  }) async {
+    try {
+      await _portal?.evaluate('''
+${document == null ? '' : 'if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {'}
+$_suspendMedia
+${scripts['stop-playback']}
+${document == null ? '' : '}'}
+true;
+''');
+    } catch (_) {
+      // WebKit can destroy a cancelled document before JavaScript executes.
+      // Still release the app's system session if this exit is current.
+    }
+    if (_disposed ||
+        operation.id != expected ||
+        !releaseSystemMedia ||
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
+    try {
+      await _systemMedia.invokeMethod<void>('releasePlayback');
+    } on PlatformException catch (error) {
+      debugPrint('Unable to release system media session: ${error.code}');
+    } on MissingPluginException {
+      // A host without the iOS channel can still unload the web media.
     }
   }
 

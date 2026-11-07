@@ -550,6 +550,83 @@ function playerFixture(nativeHls = false) {
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
 
+test('exiting playback unloads every media source and clears the web system session', () => {
+  const fixture = playerFixture();
+  const events: string[] = [];
+  fixture.media.setAttribute('src', 'https://bahamut.akamaized.net/master.m3u8');
+  fixture.media.setAttribute('autoplay', '');
+  fixture.media.innerHTML = '<source src="https://bahamut.akamaized.net/fallback.m3u8">';
+  fixture.media.srcObject = { stream: true };
+  fixture.media.pause = () => { fixture.media.paused = true; events.push('video-pause'); };
+  fixture.media.load = () => {
+    assert.equal(fixture.media.hasAttribute('src'), false);
+    assert.equal(fixture.media.querySelector('source').hasAttribute('src'), false);
+    assert.equal(fixture.media.srcObject, null);
+    events.push('video-unload');
+  };
+  const audio = fixture.document.createElement('audio') as any;
+  audio.setAttribute('src', 'https://bahamut.akamaized.net/audio.m3u8');
+  audio.pause = () => events.push('audio-pause');
+  audio.load = () => {
+    assert.equal(audio.hasAttribute('src'), false);
+    events.push('audio-unload');
+  };
+  fixture.document.body.appendChild(audio);
+  (fixture.document.querySelector('#ani_video') as any).player.dispose =
+    () => events.push('player-dispose');
+  const handlers = new Map<string, unknown>();
+  const session = {
+    metadata: { title: 'Test Anime' } as object | null,
+    playbackState: 'playing',
+    setPositionState: () => events.push('position-clear'),
+    setActionHandler: (action: string, handler: unknown) => handlers.set(action, handler),
+  };
+  fixture.context.navigator = { mediaSession: session };
+  vm.runInContext(fs.readFileSync(folder + 'stop-playback.js', 'utf8'), fixture.context);
+  assert.equal(fixture.stopped(), true);
+  assert.equal(fixture.context.window.__bahaPlayerBridge, undefined);
+  assert.equal(fixture.media.paused, true);
+  assert.equal(fixture.media.hasAttribute('autoplay'), false);
+  assert.equal(session.metadata, null);
+  assert.equal(session.playbackState, 'none');
+  assert.ok(events.indexOf('player-dispose') > events.indexOf('video-unload'));
+  assert.ok(events.includes('audio-unload'));
+  assert.ok(events.includes('position-clear'));
+  assert.deepEqual(Array.from(handlers.keys()), [
+    'play', 'pause', 'stop', 'seekbackward', 'seekforward', 'seekto',
+    'previoustrack', 'nexttrack', 'skipad',
+  ]);
+  assert.ok(Array.from(handlers.values()).every(handler => handler === null));
+});
+
+test('unsupported media session APIs and disposed players do not interrupt exit cleanup', () => {
+  const fixture = playerFixture();
+  let unloaded = 0, removedHandlers = 0;
+  fixture.media.pause = () => { throw Error('Already detached'); };
+  fixture.media.load = () => { unloaded++; };
+  fixture.context.window.__bahaPlayerBridge.dispose = () => { throw Error('Disposed'); };
+  const session = {
+    metadata: { title: 'Test Anime' } as object | null,
+    setPositionState: () => { throw Error('Unsupported'); },
+    setActionHandler: (action: string) => {
+      if (action === 'stop') throw Error('Unsupported');
+      removedHandlers++;
+    },
+  };
+  Object.defineProperty(session, 'playbackState', {
+    set: () => { throw Error('Unsupported'); },
+  });
+  fixture.context.navigator = { mediaSession: session };
+  const stop = fs.readFileSync(folder + 'stop-playback.js', 'utf8');
+  assert.doesNotThrow(() => vm.runInContext(stop, fixture.context));
+  assert.equal(unloaded, 1);
+  assert.equal(session.metadata, null);
+  assert.equal(removedHandlers, 8);
+  fixture.context.navigator = {};
+  assert.doesNotThrow(() => vm.runInContext(stop, fixture.context));
+  assert.equal(unloaded, 2);
+});
+
 test('native HLS resolutions reach the Flutter bridge without enabling quality commands during ads', async () => {
   const fixture = playerFixture(true);
   await new Promise(resolve => setImmediate(resolve));
