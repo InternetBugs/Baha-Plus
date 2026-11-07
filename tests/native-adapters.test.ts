@@ -417,6 +417,82 @@ test('old login watchers and pending account reads cannot publish into a newer o
   assert.ok(!fixture.messages.some(message => message.type === 'account-synced'));
 });
 
+function mediaCompatibilityFixture(origin = 'https://ani.gamer.com.tw') {
+  class Media {
+    tagName = 'VIDEO';
+    attributes = new Map<string, string>();
+    requests: { cors: string | null; inline: boolean; src: string }[] = [];
+    getAttribute(name: string) { return this.attributes.get(name) ?? null; }
+    setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+    removeAttribute(name: string) { this.attributes.delete(name); }
+    querySelector() { return null; }
+    get src() { return this.getAttribute('src') || ''; }
+    set src(value: string) {
+      this.requests.push({
+        cors: this.getAttribute('crossorigin'),
+        inline: this.attributes.has('playsinline'),
+        src: value,
+      });
+      this.setAttribute('src', value);
+    }
+    load() {
+      this.requests.push({
+        cors: this.getAttribute('crossorigin'),
+        inline: this.attributes.has('playsinline'),
+        src: this.src,
+      });
+    }
+  }
+  const context = vm.createContext({
+    window: {}, location: new URL(`${origin}/animeVideo.php?sn=20`),
+    HTMLMediaElement: Media, URL, WeakMap, Reflect,
+    document: { querySelectorAll: () => [] },
+    MutationObserver: class { observe() {} },
+  });
+  vm.runInContext(fs.readFileSync(folder + 'media-compat.js', 'utf8'), context);
+  return {Media, context};
+}
+
+test('iOS HLS compatibility sets CORS before the first source request and restores ad attributes', () => {
+  const {Media} = mediaCompatibilityFixture();
+  const video = new Media();
+  video.src = 'https://bahamut.akamaized.net/show/master.m3u8?signature=fixture';
+  assert.deepEqual(video.requests[0], {
+    cors: 'anonymous', inline: true,
+    src: 'https://bahamut.akamaized.net/show/master.m3u8?signature=fixture',
+  });
+  video.src = 'https://ads.example.test/preroll.mp4';
+  assert.equal(video.requests[1].cors, null);
+  assert.equal(video.requests[1].inline, false);
+  video.src = 'https://bahamut.akamaized.net/next/master.m3u8';
+  assert.equal(video.requests[2].cors, 'anonymous');
+});
+
+test('iOS HLS compatibility also covers load and preserves an original CORS setting', () => {
+  const {Media} = mediaCompatibilityFixture();
+  const video = new Media();
+  video.setAttribute('crossorigin', 'use-credentials');
+  video.setAttribute('src', 'https://bahamut.akamaized.net/show/master.m3u8');
+  video.load();
+  assert.equal(video.requests[0].cors, 'anonymous');
+  video.src = 'https://ads.example.test/preroll.mp4';
+  assert.equal(video.requests[1].cors, 'use-credentials');
+});
+
+test('iOS HLS compatibility leaves other origins, other formats and audio unchanged', () => {
+  for (const origin of ['https://ani.gamer.com.tw', 'https://user.gamer.com.tw']) {
+    const {Media} = mediaCompatibilityFixture(origin);
+    const video = new Media();
+    const hls = 'https://bahamut.akamaized.net/show/master.m3u8';
+    video.src = origin.includes('user.') ? hls : 'https://bahamut.akamaized.net/ad.mp4';
+    assert.equal(video.requests[0].cors, null);
+    const audio = new Media();
+    audio.tagName = 'AUDIO';
+    audio.src = hls;
+    assert.equal(audio.requests[0].cors, null);
+  }
+});
+
 function playerFixture() {
   const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
     <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
@@ -425,7 +501,7 @@ function playerFixture() {
       <div class="score-overall-people">894人評價</div></div>
     <script>var acgReview = new Bahamut.AcgReview('#acg_review', 894, {"1":23,"2":15,"3":42,"4":81,"5":733}, 60657, 4);</script>
     <div class="season"><a href="?sn=20">1</a><a href="?sn=21">2</a></div>
-    <div id="video-container"><video-js id="ani_video"><video></video><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
+    <div id="video-container"><video-js id="ani_video"><video></video><button class="vjs-big-play-button">播放</button><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
     </body></html>`, '/animeVideo.php?sn=20');
   const media = fixture.document.querySelector('video') as any;
   const core = { state: { playingVideo: true, playingAd: false, videoSn: 20 } };
@@ -525,6 +601,24 @@ test('native player preserves age confirmation and rejects stale or suspended co
   assert.equal(fixture.stopped(), true);
   assert.equal(fixture.document.querySelector('#baha-player-layout'), null);
   assert.deepEqual(fixture.commands, []);
+});
+
+test('official play button stays usable until native controls can operate', () => {
+  const fixture = playerFixture();
+  const button = fixture.document.querySelector('.vjs-big-play-button') as any;
+  assert.equal(button.inert, true);
+  fixture.media.duration = 0;
+  fixture.tick();
+  assert.equal(fixture.document.documentElement.classList.contains('baha-native-controls'), false);
+  assert.equal(button.inert, false);
+  assert.equal(button.getAttribute('aria-hidden'), 'false');
+  fixture.media.duration = 1200;
+  fixture.core.state.playingVideo = false;
+  fixture.tick();
+  assert.equal(button.inert, false);
+  fixture.core.state.playingVideo = true;
+  fixture.tick();
+  assert.equal(button.inert, true);
 });
 
 test('single available quality distinguishes an explicit selection from automatic mode', async () => {

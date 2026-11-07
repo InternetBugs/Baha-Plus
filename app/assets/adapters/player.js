@@ -154,7 +154,10 @@
     const position = Math.min(duration, finite(c.media?.currentTime));
     let buffered = 0;
     try { if (c.media?.buffered.length) buffered = Math.min(duration, finite(c.media.buffered.end(c.media.buffered.length - 1))); } catch (_) {}
-    const nativeControls = c.matches && !!c.root;
+    // Preserve official prompts until there is a timeline native controls can
+    // actually operate. This also keeps the official error UI accessible.
+    const nativeControls = c.matches && !!c.root && duration > 0 &&
+      ['content', 'advertisement'].includes(c.phase);
     document.documentElement.classList.toggle('baha-native-controls', nativeControls);
     c.root?.querySelectorAll('.vjs-control-bar,.vjs-big-play-button').forEach(node => {
       node.setAttribute('aria-hidden', String(nativeControls));

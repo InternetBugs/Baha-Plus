@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
@@ -121,7 +122,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       jsonEncode({'action': action, 'args': arguments}),
     );
     final result = await controller
-        .callAsyncJavaScript(functionBody: 'return await $body;')
+        // WebKit bridges numeric object properties as doubles. Serialize in
+        // JavaScript so integer IDs and counts keep their type in Dart.
+        .callAsyncJavaScript(
+          functionBody: 'return JSON.stringify(await $body);',
+        )
         .timeout(const Duration(seconds: 30));
     final current = await controller.getUrl();
     if (!mounted ||
@@ -131,10 +136,10 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         current?.toString() != source) {
       throw const CommunityException('stale');
     }
-    if (result?.error != null || result?.value is! Map) {
+    if (result?.error != null || result?.value is! String) {
       throw const CommunityException('network');
     }
-    return jsonDecode(jsonEncode(result!.value)) as Json;
+    return jsonDecode(result!.value as String) as Json;
   }
 
   @override
@@ -189,13 +194,13 @@ try {
   if (new TextEncoder().encode(text).byteLength > 5000000) throw Error('Catalog too large');
   const body = JSON.parse(text);
   if (!Array.isArray(body?.data?.animeList)) throw Error('Invalid catalog response');
-  return {data: {
+  return JSON.stringify({data: {
     totalPage: body.data.totalPage,
     animeList: body.data.animeList.map(item => ({
       animeSn: item.animeSn, videoSn: item.videoSn, title: item.title,
       cover: item.cover, totalEpisode: item.totalEpisode, dateInfo: item.dateInfo
     }))
-  }};
+  }});
 } finally { clearTimeout(timer); }
 ''',
         )
@@ -205,10 +210,10 @@ try {
         result?.error != null ||
         source == null ||
         !OfficialSite.trustedOrigin(Uri.parse(source.toString())) ||
-        result?.value is! Map) {
+        result?.value is! String) {
       throw StateError('Official catalog request failed');
     }
-    return jsonDecode(jsonEncode(result!.value)) as Json;
+    return jsonDecode(result!.value as String) as Json;
   }
 
   Future<void> _updateNavigation() async {
@@ -346,6 +351,14 @@ try {
       InAppWebView(
         key: _webViewKey,
         initialSettings: _settingsForMode(_desktop),
+        initialUserScripts: UnmodifiableListView([
+          if (Platform.isIOS)
+            UserScript(
+              source: store.scripts['media-compat']!,
+              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              forMainFrameOnly: true,
+            ),
+        ]),
         onWebViewCreated: _created,
         onLoadStart: (controller, url) async {
           _documentGeneration++;
