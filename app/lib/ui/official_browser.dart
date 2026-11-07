@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
@@ -483,6 +484,14 @@ try {
       InAppWebView(
         key: _webViewKey,
         initialSettings: _settingsForMode(_desktop),
+        initialUserScripts: UnmodifiableListView([
+          if (Platform.isIOS)
+            UserScript(
+              source: store.scripts['media-compat']!,
+              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              forMainFrameOnly: true,
+            ),
+        ]),
         onWebViewCreated: _created,
         onLoadStart: (controller, url) async {
           _documentGeneration++;

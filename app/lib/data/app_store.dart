@@ -70,6 +70,7 @@ class AppStore extends ChangeNotifier {
       'account-sync',
       'favorite-action',
       'player',
+      'media-compat',
       'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');

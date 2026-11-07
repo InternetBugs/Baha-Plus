@@ -261,6 +261,82 @@ test('guest accounts produce no synthetic collection or viewing history', async 
   assert.equal(fixture.requests.length, 0);
 });
 
+function mediaCompatibilityFixture(origin = 'https://ani.gamer.com.tw') {
+  class Media {
+    tagName = 'VIDEO';
+    attributes = new Map<string, string>();
+    requests: { cors: string | null; inline: boolean; src: string }[] = [];
+    getAttribute(name: string) { return this.attributes.get(name) ?? null; }
+    setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+    removeAttribute(name: string) { this.attributes.delete(name); }
+    querySelector() { return null; }
+    get src() { return this.getAttribute('src') || ''; }
+    set src(value: string) {
+      this.requests.push({
+        cors: this.getAttribute('crossorigin'),
+        inline: this.attributes.has('playsinline'),
+        src: value,
+      });
+      this.setAttribute('src', value);
+    }
+    load() {
+      this.requests.push({
+        cors: this.getAttribute('crossorigin'),
+        inline: this.attributes.has('playsinline'),
+        src: this.src,
+      });
+    }
+  }
+  const context = vm.createContext({
+    window: {}, location: new URL(`${origin}/animeVideo.php?sn=20`),
+    HTMLMediaElement: Media, URL, WeakMap, Reflect,
+    document: { querySelectorAll: () => [] },
+    MutationObserver: class { observe() {} },
+  });
+  vm.runInContext(fs.readFileSync(folder + 'media-compat.js', 'utf8'), context);
+  return {Media, context};
+}
+
+test('iOS HLS compatibility sets CORS before the first source request and restores ad attributes', () => {
+  const {Media} = mediaCompatibilityFixture();
+  const video = new Media();
+  video.src = 'https://bahamut.akamaized.net/show/master.m3u8?signature=fixture';
+  assert.deepEqual(video.requests[0], {
+    cors: 'anonymous', inline: true,
+    src: 'https://bahamut.akamaized.net/show/master.m3u8?signature=fixture',
+  });
+  video.src = 'https://ads.example.test/preroll.mp4';
+  assert.equal(video.requests[1].cors, null);
+  assert.equal(video.requests[1].inline, false);
+  video.src = 'https://bahamut.akamaized.net/next/master.m3u8';
+  assert.equal(video.requests[2].cors, 'anonymous');
+});
+
+test('iOS HLS compatibility also covers load and preserves an original CORS setting', () => {
+  const {Media} = mediaCompatibilityFixture();
+  const video = new Media();
+  video.setAttribute('crossorigin', 'use-credentials');
+  video.setAttribute('src', 'https://bahamut.akamaized.net/show/master.m3u8');
+  video.load();
+  assert.equal(video.requests[0].cors, 'anonymous');
+  video.src = 'https://ads.example.test/preroll.mp4';
+  assert.equal(video.requests[1].cors, 'use-credentials');
+});
+
+test('iOS HLS compatibility leaves other origins, other formats and audio unchanged', () => {
+  for (const origin of ['https://ani.gamer.com.tw', 'https://user.gamer.com.tw']) {
+    const {Media} = mediaCompatibilityFixture(origin);
+    const video = new Media();
+    const hls = 'https://bahamut.akamaized.net/show/master.m3u8';
+    video.src = origin.includes('user.') ? hls : 'https://bahamut.akamaized.net/ad.mp4';
+    assert.equal(video.requests[0].cors, null);
+    const audio = new Media();
+    audio.tagName = 'AUDIO';
+    audio.src = hls;
+    assert.equal(audio.requests[0].cors, null);
+  }
+});
+
 function playerFixture() {
   const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
     <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
