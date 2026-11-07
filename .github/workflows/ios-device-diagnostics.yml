@@ -10,6 +10,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 2ffaa43aa0aef9de78cdb1bf2faecffaf4ec1154
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.9"
@@ -21,14 +23,24 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile
-          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name 0.3.0 --build-number 7
+          # Allow inspection in this acceptance artifact only. Production
+          # sources keep their normal kDebugMode inspection setting.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("lib/ui/official_browser.dart")
+          text = path.read_text()
+          needle = "isInspectable: kDebugMode,"
+          assert text.count(needle) == 1
+          path.write_text(text.replace(needle, "isInspectable: true,"))
+          PY
+          flutter build ios --release --no-codesign --build-name 0.3.0 --build-number 8
           mkdir -p diagnostic/Payload
           cp -R build/ios/iphoneos/Runner.app diagnostic/Payload/
           cd diagnostic
-          ditto -c -k --sequesterRsrc --keepParent Payload BahaPlus-iOS-diagnostics-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload BahaPlus-iOS-quality-unsigned.ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: ios-device-diagnostics
-          path: app/diagnostic/BahaPlus-iOS-diagnostics-unsigned.ipa
+          name: ios-quality-acceptance
+          path: app/diagnostic/BahaPlus-iOS-quality-unsigned.ipa
           if-no-files-found: error
           retention-days: 3
