@@ -4,12 +4,14 @@ import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/browser_presentation.dart';
 import '../core/community.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
+import '../data/official_search.dart';
 import 'player_page.dart';
 
 /// One persistent native WebView owns the official login and player session.
@@ -142,7 +144,24 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     if (result?.error != null || result?.value is! Map) {
       throw const CommunityException('network');
     }
-    return jsonDecode(jsonEncode(result!.value)) as Json;
+    final decoded = jsonDecode(jsonEncode(result!.value)) as Json;
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS') &&
+        action == 'comments' &&
+        decoded['ok'] == true) {
+      debugPrint(
+        '[BAHA_DIAG] comment number types total=${decoded['total'].runtimeType} '
+        'nextPage=${decoded['nextPage'].runtimeType}',
+      );
+      try {
+        final parsed = CommentPage.fromJson(decoded);
+        debugPrint(
+          '[BAHA_DIAG] comment parser ok rows=${parsed.comments.length}',
+        );
+      } catch (error) {
+        debugPrint('[BAHA_DIAG] comment parser failed: $error');
+      }
+    }
+    return decoded;
   }
 
   @override
@@ -222,7 +241,56 @@ try {
         result?.value is! Map) {
       throw StateError('Official catalog request failed');
     }
-    return jsonDecode(jsonEncode(result!.value)) as Json;
+    final decoded = jsonDecode(jsonEncode(result!.value)) as Json;
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+      try {
+        final parsed = OfficialAnimeSearch.parseResponse(decoded);
+        debugPrint('[BAHA_DIAG] catalog parser ok rows=${parsed.length}');
+      } catch (error) {
+        final rows = (decoded['data'] as Map?)?['animeList'] as List?;
+        final first = rows?.firstOrNull as Map?;
+        debugPrint(
+          '[BAHA_DIAG] catalog parser failed: $error '
+          'animeSnType=${first?['animeSn'].runtimeType} '
+          'videoSnType=${first?['videoSn'].runtimeType}',
+        );
+      }
+    }
+    return decoded;
+  }
+
+  Future<void> _diagnoseMedia() async {
+    if (!const bool.fromEnvironment('BAHA_DIAGNOSTICS')) return;
+    final controller = _controller;
+    if (controller == null) return;
+    final uri = await controller.getUrl();
+    if (uri == null || !OfficialSite.trustedOrigin(Uri.parse(uri.toString()))) {
+      return;
+    }
+    final numbers = await controller.callAsyncJavaScript(
+      functionBody: 'return {integer: 1, zero: 0, negative: -1};',
+    );
+    final values = numbers?.value;
+    if (values is Map) {
+      debugPrint(
+        '[BAHA_DIAG] numeric bridge integer=${values['integer'].runtimeType} '
+        'zero=${values['zero'].runtimeType} '
+        'json=${jsonEncode(values)}',
+      );
+    }
+    final src = await controller.evaluateJavascript(
+      source:
+          "document.querySelector('#video-container video')?.currentSrc || '';",
+    );
+    if (src is! String || src.isEmpty) return;
+    try {
+      final result = await const MethodChannel('baha.diagnostics')
+          .invokeMethod<Object?>('inspectHls', {'url': src})
+          .timeout(const Duration(seconds: 25));
+      debugPrint('[BAHA_DIAG] native HLS ${jsonEncode(result)}');
+    } catch (error) {
+      debugPrint('[BAHA_DIAG] native HLS probe failed: ${error.runtimeType}');
+    }
   }
 
   Future<void> _updateNavigation() async {
@@ -280,6 +348,22 @@ try {
         },
       ),
     );
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+      await controller.addWebMessageListener(
+        WebMessageListener(
+          jsObjectName: 'bahaDiagnostics',
+          allowedOriginRules: {'https://ani.gamer.com.tw'},
+          onPostMessage: (message, origin, mainFrame, reply) async {
+            if (mainFrame &&
+                message?.data == 'inspect' &&
+                origin != null &&
+                OfficialSite.trustedOrigin(Uri.parse(origin.toString()))) {
+              await _diagnoseMedia();
+            }
+          },
+        ),
+      );
+    }
     await store.attach(this);
   }
 
