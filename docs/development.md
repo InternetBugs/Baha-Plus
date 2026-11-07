@@ -98,9 +98,10 @@ Android 日常开发、打包、模拟器验证均在本地完成。GitHub Actio
 
 ### 手动发布
 
-1. 将计划发布的代码合并到 `main`，并更新 `app/pubspec.yaml` 的 `version`，例如 `0.3.0+4`。每次发布都要使用新的版本号；Android 更新还需要递增 `+` 后的构建号。
-2. 在 GitHub **Actions → Manual release → Run workflow** 选择 `main`，输入与版本一致、尚不存在的标签（例如 `v0.3.0`），需要时勾选 prerelease，然后手动运行。操作者需有运行工作流和发布 Release 的仓库权限。
-3. 工作流验证标签，分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后才创建标签和 Release。先创建草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
+1. 确认计划发布的代码已经合并到 `main`。
+2. 在 GitHub **Actions → Manual release → Run workflow** 选择 `main`，点击运行。无需填写版本号或修改项目文件。操作者需有运行工作流和发布 Release 的仓库权限。
+3. 工作流以 `app/pubspec.yaml` 的版本作为起点，并根据已有的 `v主版本.次版本.修订号` 标签自动选择下一个版本（例如从 `v0.3.0` 到 `v0.3.1`）。APK 和 IPA 使用相同版本，Android 构建号随版本递增。这个步骤不修改仓库文件。
+4. 工作流分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后才创建标签和 Release。先创建草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
 
 iOS IPA 需要使用合适的 Apple 证书和描述文件另行签名后才能安装；它不是可直接安装的已签名包，也不代表已完成 iPhone 真机验收。工作流不会上传 App Store 或 TestFlight。
 
