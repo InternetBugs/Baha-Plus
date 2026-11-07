@@ -1,0 +1,168 @@
+name: Manual release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag matching app/pubspec.yaml (for example v0.3.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark this release as a prerelease"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate branch, version and tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Run this workflow from the main branch."
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag must have the form v1.2.3."
+            exit 1
+          fi
+          version=$(sed -nE 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)\+[0-9]+[[:space:]]*$/\1/p' app/pubspec.yaml)
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag must match the version in app/pubspec.yaml, including its build number."
+            exit 1
+          fi
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo "::error::Tag already exists; choose a new version."
+            exit 1
+          elif [[ "$status" -ne 2 ]]; then
+            echo "::error::Could not check whether the tag exists."
+            exit "$status"
+          fi
+
+  android:
+    name: Build signed Android APK
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.9"
+          channel: stable
+          cache: true
+      - name: Build signed APK
+        working-directory: app
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/baha-plus-release.jks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required Android signing secret: $name"
+              exit 1
+            fi
+          done
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          flutter pub get --enforce-lockfile
+          flutter build apk --release
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk release/BahaPlus-Android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: app/release/BahaPlus-Android.apk
+          if-no-files-found: error
+
+  ios:
+    name: Build unsigned iOS IPA
+    needs: validate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.9"
+          channel: stable
+          cache: true
+      - name: Build and package unsigned iOS app
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          flutter build ios --release --no-codesign
+          test -d build/ios/iphoneos/Runner.app
+          mkdir -p release/Payload
+          cp -R build/ios/iphoneos/Runner.app release/Payload/
+          cd release
+          ditto -c -k --sequesterRsrc --keepParent Payload BahaPlus-iOS-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-release
+          path: app/release/BahaPlus-iOS-unsigned.ipa
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create tag and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa > SHA256SUMS.txt
+          cat > release-notes.md <<'EOF'
+          - Android: signed release APK.
+          - iOS: unsigned IPA. It must be signed with a suitable Apple identity and provisioning profile before it can be installed; it has not been verified on a device.
+          - SHA256SUMS.txt contains the SHA-256 checksums of both files.
+          EOF
+          # Creating the ref first fails if another run created the tag in the meantime.
+          gh api "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
+          args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${args[@]}" \
+            BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa SHA256SUMS.txt
+          gh release edit "$RELEASE_TAG" --draft=false

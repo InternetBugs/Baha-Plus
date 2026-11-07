@@ -72,7 +72,39 @@ flutter test integration_test/catalog_smoke_test.dart -d emulator-5554 --no-unin
 
 ## iOS 与发布
 
-Android 日常开发、打包、模拟器验证均在本地完成。当前不自动运行任何 GitHub Actions。功能验收完成后再配置并执行正式发布流程，调试包不代表正式签名版本。
+Android 日常开发、打包、模拟器验证均在本地完成。GitHub Actions 的 **Manual release** 只支持手动触发：推送代码、创建标签或 Release 均不会启动构建或发版。不要触发该工作流，直到维护者明确决定发布。
+
+### 首次配置 Android 签名
+
+正式 APK 使用专用签名密钥。安全保存 keystore 和密码；以后的版本必须使用相同密钥，用户才能直接更新已安装的正式版本。现有本地体验包使用开发签名，与正式签名不同，通常需要卸载后才能安装正式包，卸载可能清除本地应用数据。
+
+1. 使用 Java 的 `keytool` 创建 Android 上传密钥（或使用已有的正式签名密钥），妥善备份 keystore。
+2. 将 keystore 文件编码为单行 Base64。例如在 PowerShell 中运行：
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\安全位置\baha-plus-release.jks')) | Set-Clipboard
+   ```
+
+3. 在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加以下 repository secrets：
+
+   | Secret | 内容 |
+   | --- | --- |
+   | `ANDROID_KEYSTORE_BASE64` | keystore 文件的 Base64 内容 |
+   | `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 |
+   | `ANDROID_KEY_ALIAS` | 签名密钥别名 |
+   | `ANDROID_KEY_PASSWORD` | 签名密钥密码 |
+
+不要把 keystore、密码或 Base64 内容提交到仓库。发布工作流缺少任何一项时会失败，不会退回使用开发签名。
+
+### 手动发布
+
+1. 将计划发布的代码合并到 `main`，并更新 `app/pubspec.yaml` 的 `version`，例如 `0.3.0+4`。每次发布都要使用新的版本号；Android 更新还需要递增 `+` 后的构建号。
+2. 在 GitHub **Actions → Manual release → Run workflow** 选择 `main`，输入与版本一致、尚不存在的标签（例如 `v0.3.0`），需要时勾选 prerelease，然后手动运行。操作者需有运行工作流和发布 Release 的仓库权限。
+3. 工作流验证标签，分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后才创建标签和 Release。先创建草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
+
+iOS IPA 需要使用合适的 Apple 证书和描述文件另行签名后才能安装；它不是可直接安装的已签名包，也不代表已完成 iPhone 真机验收。工作流不会上传 App Store 或 TestFlight。
+
+如果最终发布步骤失败，可能留下已创建的标签或 Release 草稿；请先在 GitHub 检查并处理这些残留，再决定如何重试。构建本身和最终发布都只发生在手动运行工作流后。
 
 iOS 共用同一 Flutter 前端和玻璃组件。构建 iOS 仍需 macOS、Xcode 和签名环境；Windows 可以维护工程和运行 Dart 测试，不能在本机生成可安装的 iPhone 包。在 Mac 上：
 
