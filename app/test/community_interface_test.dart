@@ -156,7 +156,7 @@ void main() {
   );
 
   testWidgets(
-    'a short synopsis stays inline and the board appears below it in detail',
+    'detail shows the series rating without loading an episode board',
     (tester) async {
       final (store, portal) = await setup(tester);
       portal.communityResponse = commentPageJson();
@@ -188,15 +188,14 @@ void main() {
       expect(find.byKey(const ValueKey('open-full-synopsis')), findsNothing);
       expect(
         tester.getTopLeft(find.byKey(const ValueKey('synopsis-section'))).dy,
-        lessThan(
-          tester
-              .getTopLeft(
-                find.byKey(const ValueKey('compact-comments-preview')),
-              )
-              .dy,
-        ),
+        lessThan(tester.getTopLeft(find.text(store.t('ratingTitle'))).dy),
       );
       expect(find.text('4.7'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('compact-comments-preview')),
+        findsNothing,
+      );
+      expect(portal.communityRequests, isEmpty);
       expect(tester.takeException(), isNull);
     },
   );
@@ -272,7 +271,7 @@ void main() {
   );
 
   testWidgets(
-    'detail preview shows official rating and one truncated comment before expanding',
+    'player preview shows official rating and a comment before expanding',
     (tester) async {
       final (store, portal) = await setup(tester);
       portal.communityResponse = commentPageJson();
@@ -303,110 +302,44 @@ void main() {
     },
   );
 
-  testWidgets('each episode keeps its own board, draft and reply target', (
+  testWidgets('board follows the current episode without an episode selector', (
     tester,
   ) async {
     final (store, portal) = await setup(tester);
-    const episodes = [
-      Episode(id: '20', label: '1'),
-      Episode(id: '21', label: '2'),
-    ];
-    portal.communityHandler = (action, args) async {
-      if (action == 'comment-send') return {'ok': true, 'id': '99'};
-      if (action == 'replies') {
-        return {
-          'ok': true,
-          'comments': [commentJson('99')],
-        };
-      }
-      final second = args['videoId'] == '21';
-      return {
-        ...commentPageJson(id: second ? '2' : '1'),
-        'messageId': second ? '124' : '123',
-      };
-    };
+    portal.communityHandler = (action, args) async =>
+        commentPageJson(id: args['videoId'] == '20' ? '1' : '2');
+    var videoId = '20';
+    late StateSetter update;
     await mount(
       tester,
-      CommentsPage(
-        store: store,
-        videoId: '20',
-        title: '測試動畫',
-        episodes: episodes,
+      StatefulBuilder(
+        builder: (context, setState) {
+          update = setState;
+          return CompactCommentsPreview(
+            store: store,
+            videoId: videoId,
+            title: '測試動畫',
+            episodes: const [
+              Episode(id: '20', label: '1'),
+              Episode(id: '21', label: '2'),
+            ],
+          );
+        },
       ),
     );
-    await tester.enterText(find.byType(TextField), '第一集的草稿');
-    await tester.tap(find.byKey(const ValueKey('board-episode-selector')));
+    expect(find.byKey(const ValueKey('preview-comment-1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('board-episode-selector')), findsNothing);
+    update(() => videoId = '21');
     await frames(tester);
-    await tester.tap(find.byKey(const ValueKey('board-select-21')));
-    await frames(tester);
-    expect(find.byKey(const ValueKey('comment-1')), findsNothing);
-    expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
-    expect(find.text('第一集的草稿'), findsNothing);
+    expect(find.byKey(const ValueKey('preview-comment-1')), findsNothing);
+    expect(find.byKey(const ValueKey('preview-comment-2')), findsOneWidget);
     expect(portal.communityRequests.last['videoId'], '21');
-    await tester.enterText(find.byType(TextField), '第二集的留言');
+    await tester.tap(find.byKey(const ValueKey('open-full-comments')));
     await frames(tester);
-    await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
-    await frames(tester);
-    final root = portal.communityRequests.lastWhere(
-      (r) => r['action'] == 'comment-send',
-    );
-    expect(root['videoId'], '21');
-    expect(root['messageId'], '124');
-    expect(root.containsKey('commentId'), isFalse);
-    await tester.tap(find.byKey(const ValueKey('board-episode-selector')));
-    await frames(tester);
-    await tester.tap(find.byKey(const ValueKey('board-select-20')));
-    await frames(tester);
-    expect(find.text('第一集的草稿'), findsOneWidget);
-    await tester.tap(find.byIcon(CupertinoIcons.arrowshape_turn_up_left).first);
-    await frames(tester);
-    await tester.enterText(find.byType(TextField), '回覆第一集留言');
-    await frames(tester);
-    await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
-    await frames(tester);
-    final reply = portal.communityRequests.lastWhere(
-      (r) => r['action'] == 'comment-send',
-    );
-    expect(reply['videoId'], '20');
-    expect(reply['messageId'], '123');
-    expect(reply['commentId'], '1');
-    expect(portal.communityRequests.last['action'], 'replies');
-    expect(find.byKey(const ValueKey('comment-99')), findsOneWidget);
+    expect(portal.communityRequests.last['videoId'], '21');
+    expect(find.byKey(const ValueKey('board-episode-selector')), findsNothing);
     expect(tester.takeException(), isNull);
   });
-
-  testWidgets(
-    'inline episode selection changes the request and never mixes boards',
-    (tester) async {
-      final (store, portal) = await setup(tester);
-      portal.communityHandler = (action, args) async =>
-          commentPageJson(id: args['videoId'] == '20' ? '1' : '2');
-      await mount(
-        tester,
-        CompactCommentsPreview(
-          store: store,
-          videoId: '20',
-          title: '測試動畫',
-          episodes: const [
-            Episode(id: '20', label: '1'),
-            Episode(id: '21', label: '2'),
-          ],
-        ),
-      );
-      expect(find.byKey(const ValueKey('preview-comment-1')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('board-episode-selector')));
-      await frames(tester);
-      await tester.tap(find.byKey(const ValueKey('board-select-21')));
-      await frames(tester);
-      expect(find.byKey(const ValueKey('preview-comment-1')), findsNothing);
-      expect(find.byKey(const ValueKey('preview-comment-2')), findsOneWidget);
-      expect(portal.communityRequests.last['videoId'], '21');
-      await tester.tap(find.byKey(const ValueKey('open-full-comments')));
-      await frames(tester);
-      expect(portal.communityRequests.last['videoId'], '21');
-      expect(tester.takeException(), isNull);
-    },
-  );
 
   testWidgets(
     'avatar and attachment bytes decode in the preview and the attachment viewer',
@@ -490,8 +423,11 @@ void main() {
       );
       final list = find.byKey(const ValueKey('inline-comments-20'));
       final openAll = find.byKey(const ValueKey('open-full-comments'));
-      expect(tester.getSize(list).height, 330);
-      expect(tester.widget<ListView>(list).scrollDirection, Axis.horizontal);
+      expect(tester.getSize(list).height, lessThan(330));
+      expect(
+        tester.widget<SingleChildScrollView>(list).scrollDirection,
+        Axis.horizontal,
+      );
       expect(
         find.byKey(const ValueKey('preview-comment-8')).hitTestable(),
         findsOneWidget,
@@ -528,6 +464,33 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('preview cards fit short and long comments', (tester) async {
+    final (store, portal) = await setup(tester);
+    final longText = List.filled(12, '這是一段比較長的留言內容。').join();
+    portal.communityResponse = {
+      ...commentPageJson(),
+      'comments': [
+        {...commentJson('1'), 'text': '短留言'},
+        {...commentJson('2'), 'text': longText},
+      ],
+    };
+    await mount(
+      tester,
+      SingleChildScrollView(
+        child: CompactCommentsPreview(
+          store: store,
+          videoId: '20',
+          title: '測試動畫',
+        ),
+      ),
+    );
+    final short = find.byKey(const ValueKey('preview-comment-1'));
+    final long = find.byKey(const ValueKey('preview-comment-2'));
+    expect(tester.getSize(short).height, lessThan(tester.getSize(long).height));
+    expect(tester.widget<Text>(find.text(longText)).maxLines, isNull);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'notification center shows subscribed updates and supports read filtering',

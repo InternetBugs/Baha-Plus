@@ -4,7 +4,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
-import 'comments_preview.dart';
+import 'community_widgets.dart';
 import 'synopsis_section.dart';
 
 class DetailPage extends StatelessWidget {
@@ -212,16 +212,11 @@ class DetailPage extends StatelessWidget {
                   description: detail.description,
                 ),
               ],
-              if (anime.latestVideoId != null ||
-                  detail.episodes.isNotEmpty) ...[
+              if (detail.rating != null) ...[
                 const SizedBox(height: 28),
-                CompactCommentsPreview(
-                  store: store,
-                  videoId: anime.latestVideoId ?? detail.episodes.last.id,
-                  title: anime.title,
-                  rating: detail.rating,
-                  episodes: detail.episodes,
-                ),
+                SectionHeading(store.t('ratingTitle')),
+                const SizedBox(height: 10),
+                RatingSummaryCard(rating: detail.rating!),
               ],
               if (detail.metadata.isNotEmpty) ...[
                 const SizedBox(height: 28),

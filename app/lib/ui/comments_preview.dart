@@ -50,15 +50,6 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
     }
   }
 
-  void _selectEpisode(Episode episode) {
-    if (episode.id == _videoId) return;
-    if (_scroll.hasClients) _scroll.jumpTo(0);
-    setState(() {
-      _videoId = episode.id;
-      _comments = widget.store.loadComments(_videoId);
-    });
-  }
-
   void _open() => openComments(
     context,
     widget.store,
@@ -114,14 +105,6 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
             RatingSummaryCard(rating: widget.rating!),
           ],
           const SizedBox(height: 16),
-          BoardEpisodePicker(
-            store: widget.store,
-            videoId: _videoId,
-            episodes: widget.episodes,
-            label: widget.episodeLabel,
-            onSelected: _selectEpisode,
-          ),
-          const SizedBox(height: 12),
           if (snapshot.connectionState == ConnectionState.waiting)
             const Padding(
               padding: EdgeInsets.all(20),
@@ -148,25 +131,24 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
             _comment(context, comments.single),
             _openAll(),
           ] else ...[
-            SizedBox(
-              height: MediaQuery.textScalerOf(
-                context,
-              ).scale(330).clamp(330, 510),
-              child: LayoutBuilder(
-                builder: (context, constraints) => ListView.builder(
-                  key: ValueKey('inline-comments-$_videoId'),
-                  controller: _scroll,
-                  scrollDirection: Axis.horizontal,
-                  primary: false,
-                  padding: EdgeInsets.zero,
-                  itemCount: comments.length,
-                  itemBuilder: (context, index) => SizedBox(
-                    width: constraints.maxWidth * .9,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: _comment(context, comments[index]),
-                    ),
-                  ),
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                key: ValueKey('inline-comments-$_videoId'),
+                controller: _scroll,
+                scrollDirection: Axis.horizontal,
+                primary: false,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final comment in comments)
+                      SizedBox(
+                        width: constraints.maxWidth * .9,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: _comment(context, comment),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -263,8 +245,6 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
                         comment.folded
                             ? widget.store.t('foldedComment')
                             : comment.text,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: secondary(context),
                           height: 1.55,

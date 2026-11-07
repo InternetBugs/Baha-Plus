@@ -349,13 +349,14 @@ class _CommentsPageState extends State<CommentsPage> {
           RatingSummaryCard(rating: widget.rating!),
         ],
         const SizedBox(height: 18),
-        BoardEpisodePicker(
-          store: store,
-          videoId: _videoId,
-          episodes: widget.episodes,
-          label: widget.episodeLabel,
-          enabled: !_sending,
-          onSelected: (episode) => _changeEpisode(episode.id),
+        Text(
+          boardEpisodeLabel(
+            store,
+            _videoId,
+            widget.episodes,
+            label: widget.episodeLabel,
+          ),
+          style: TextStyle(fontSize: 13, color: secondary(context)),
         ),
         const SizedBox(height: 16),
         Wrap(
