@@ -118,7 +118,6 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                 ),
                 children: [
                   if (!widget.composerOnly) ...[
-                    // The preview is also the content behind the floating glass tools.
                     ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: SizedBox(
@@ -136,44 +135,16 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                                 ),
                               ),
                             ),
-                            if (settings.enabled)
-                              Center(
-                                child: Opacity(
-                                  opacity: settings.opacity,
-                                  child: Text(
-                                    store.t('danmakuPreview'),
-                                    style: TextStyle(
-                                      fontSize: 22 * settings.scale,
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                      shadows: const [Shadow(blurRadius: 3)],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            Positioned(
-                              right: 12,
-                              bottom: 12,
-                              child: GlassButton.custom(
-                                useOwnLayer: true,
-                                settings: mediaGlass,
-                                shape: const LiquidRoundedRectangle(
-                                  borderRadius: 20,
-                                ),
-                                width: 130,
-                                height: 38,
-                                onTap: () => store.setDanmakuSettings(
-                                  settings.copyWith(enabled: !settings.enabled),
-                                ),
+                            Center(
+                              child: Opacity(
+                                opacity: settings.opacity,
                                 child: Text(
-                                  store.t(
-                                    settings.enabled
-                                        ? 'hideDanmaku'
-                                        : 'showDanmaku',
-                                  ),
-                                  style: const TextStyle(
+                                  store.t('danmakuPreview'),
+                                  style: TextStyle(
+                                    fontSize: 22 * settings.scale,
                                     color: Colors.white,
-                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    shadows: const [Shadow(blurRadius: 3)],
                                   ),
                                 ),
                               ),
