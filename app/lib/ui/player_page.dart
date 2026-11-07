@@ -514,8 +514,11 @@ class _PlayerPageState extends State<PlayerPage> {
         key: const ValueKey('video-glass-controls'),
         useOwnLayer: true,
         platformViewBackdrop: fullscreen,
+        // The inline bar sits on the page's solid background, not the video.
+        quality: fullscreen ? null : GlassQuality.minimal,
         shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
         settings: settings.copyWith(
+          blur: fullscreen ? settings.blur : 0,
           backerColor: fullscreen
               ? const Color(0x88101014)
               : dark

@@ -83,6 +83,8 @@ class _AppRootState extends State<AppRoot>
     horizontalMargin: 0,
     bottomMargin: 0,
     showDragIndicator: false,
+    // The full-height account page already paints an opaque background.
+    maintainContentGlass: false,
     expandedColor: const Color(0xfff2f2f7),
     expandedDarkColor: const Color(0xff111113),
     builder: (_) => AccountPage(store: store, onNotifications: _notifications),
@@ -153,13 +155,19 @@ class _AppRootState extends State<AppRoot>
       }
       final nativeLayer = Positioned.fill(
         key: const ValueKey('native-layer'),
-        child: ExcludeSemantics(
-          excluding: store.browserVisible,
-          child: IgnorePointer(
-            ignoring: store.browserVisible,
-            child: ColoredBox(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              child: _native(context),
+        // Keep tab state, but stop painting and animating its glass while the
+        // full-screen browser or player covers it.
+        child: Visibility(
+          visible: !widget.mountPortal || !store.browserVisible,
+          maintainState: true,
+          child: ExcludeSemantics(
+            excluding: store.browserVisible,
+            child: IgnorePointer(
+              ignoring: store.browserVisible,
+              child: ColoredBox(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                child: _native(context),
+              ),
             ),
           ),
         ),
