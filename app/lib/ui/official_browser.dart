@@ -58,7 +58,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     builtInZoomControls: true,
     displayZoomControls: false,
     safeBrowsingEnabled: true,
-    isInspectable: kDebugMode,
+    isInspectable: kDebugMode || const bool.fromEnvironment('BAHA_DIAGNOSTICS'),
   );
 
   Future<void> _configureMode(Uri uri) async {
@@ -126,6 +126,18 @@ class _OfficialBrowserState extends State<OfficialBrowser>
             store.operation.id != operation) ||
         current?.toString() != source) {
       throw const CommunityException('stale');
+    }
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+      debugPrint(
+        '[BAHA_DIAG] community action=$action '
+        'error=${result?.error} valueType=${result?.value.runtimeType}',
+      );
+      if (result?.value is Map) {
+        final response = result!.value as Map;
+        debugPrint(
+          '[BAHA_DIAG] community ok=${response['ok']} code=${response['code']}',
+        );
+      }
     }
     if (result?.error != null || result?.value is! Map) {
       throw const CommunityException('network');
@@ -197,6 +209,12 @@ try {
         )
         .timeout(const Duration(seconds: 15));
     final source = await controller.getUrl();
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+      debugPrint(
+        '[BAHA_DIAG] catalog path=${uri.path} '
+        'error=${result?.error} valueType=${result?.value.runtimeType}',
+      );
+    }
     if (!mounted ||
         result?.error != null ||
         source == null ||
@@ -396,6 +414,13 @@ try {
           if (request.isForMainFrame != true ||
               error.description.contains('ERR_ABORTED')) {
             return;
+          }
+          if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+            final uri = Uri.tryParse(request.url.toString());
+            debugPrint(
+              '[BAHA_DIAG] navigation error host=${uri?.host} '
+              'path=${uri?.path} type=${error.type} description=${error.description}',
+            );
           }
           store.navigationFailed();
         },

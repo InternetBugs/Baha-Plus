@@ -1,0 +1,34 @@
+name: iOS device diagnostics
+on:
+  push:
+    branches: [codex/ios-device-diagnostics]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.9"
+          channel: stable
+          cache: true
+      - name: Build unsigned diagnostic IPA
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name 0.3.0 --build-number 4
+          mkdir -p diagnostic/Payload
+          cp -R build/ios/iphoneos/Runner.app diagnostic/Payload/
+          cd diagnostic
+          ditto -c -k --sequesterRsrc --keepParent Payload BahaPlus-iOS-diagnostics-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-device-diagnostics
+          path: app/diagnostic/BahaPlus-iOS-diagnostics-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 3

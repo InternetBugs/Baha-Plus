@@ -23,7 +23,11 @@ class Artwork extends StatelessWidget {
   final double? width, height;
   @override
   Widget build(BuildContext context) => url == null
-      ? SizedBox(width: width, height: height, child: _placeholder(context))
+      ? SizedBox(
+          width: width,
+          height: height,
+          child: _placeholder(context, diagnostic: '图片地址为空'),
+        )
       : LayoutBuilder(
           builder: (context, constraints) {
             final displayWidth =
@@ -41,15 +45,27 @@ class Artwork extends StatelessWidget {
               fit: BoxFit.cover,
               fadeInDuration: const Duration(milliseconds: 180),
               placeholder: (context, url) => _placeholder(context),
-              errorWidget: (context, url, error) => _placeholder(context),
+              errorWidget: (context, url, error) {
+                if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+                  final host = Uri.tryParse(url)?.host;
+                  debugPrint('[BAHA_DIAG] artwork host=$host error=$error');
+                }
+                return _placeholder(
+                  context,
+                  diagnostic: '图片加载失败: ${error.runtimeType}',
+                );
+              },
             );
           },
         );
 
-  Widget _placeholder(BuildContext context) => ColoredBox(
+  Widget _placeholder(BuildContext context, {String? diagnostic}) => ColoredBox(
     color: secondary(context).withValues(alpha: .08),
     child: Center(
-      child: Icon(CupertinoIcons.film, color: secondary(context), size: 32),
+      child:
+          const bool.fromEnvironment('BAHA_DIAGNOSTICS') && diagnostic != null
+          ? Text(diagnostic, textAlign: TextAlign.center)
+          : Icon(CupertinoIcons.film, color: secondary(context), size: 32),
     ),
   );
 }
