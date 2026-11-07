@@ -100,14 +100,14 @@ Android 日常开发、打包、模拟器验证均在本地完成。GitHub Actio
 
 1. 确认计划发布的代码已经合并到 `main`。
 2. 在 GitHub **Actions → Manual release → Run workflow** 选择 `main`，点击运行。无需填写版本号或修改项目文件。操作者需有运行工作流和发布 Release 的仓库权限。
-3. 工作流以 `app/pubspec.yaml` 的版本作为起点，并根据已有的 `v主版本.次版本.修订号` 标签自动选择下一个版本（例如从 `v0.3.0` 到 `v0.3.1`）。APK 和 IPA 使用相同版本，Android 构建号随版本递增。这个步骤不修改仓库文件。
-4. 工作流分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后才创建标签和 Release。先创建草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
+3. 工作流以 `app/pubspec.yaml` 的版本作为起点，并根据已有的 `v主版本.次版本.修订号` 标签自动选择下一个版本（例如从 `v0.3.0` 到 `v0.3.1`）。它在构建前为所选提交创建标签，以避免构建期间工作流变更导致 GitHub 拒绝创建标签。APK 和 IPA 使用相同版本，Android 构建号随版本递增；不会修改仓库文件。
+4. 工作流分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后，核对标签是否仍指向所构建的提交，再创建 Release 草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
 
 发布说明会自动列出自上一个正式 Release 以来的提交，并附上 GitHub 自动生成的合并请求说明。首次发布会列出截至该版本的全部非合并提交；这些内容基于提交标题和合并请求，并非 AI 生成的文字摘要。
 
 iOS IPA 需要使用合适的 Apple 证书和描述文件另行签名后才能安装；它不是可直接安装的已签名包，也不代表已完成 iPhone 真机验收。工作流不会上传 App Store 或 TestFlight。
 
-如果最终发布步骤失败，可能留下已创建的标签或 Release 草稿；请先在 GitHub 检查并处理这些残留，再决定如何重试。构建本身和最终发布都只发生在手动运行工作流后。
+如果构建或发布失败，可能留下已创建的标签或 Release 草稿；下次手动运行会选择下一个未占用版本。请先在 GitHub 检查并处理这些残留，再决定如何重试。构建本身和最终发布都只发生在手动运行工作流后。如果主分支恰好在创建标签前发生变化，该次运行会停止，应从当前 `main` 手动启动一次新运行。
 
 iOS 共用同一 Flutter 前端和玻璃组件。构建 iOS 仍需 macOS、Xcode 和签名环境；Windows 可以维护工程和运行 Dart 测试，不能在本机生成可安装的 iPhone 包。在 Mac 上：
 

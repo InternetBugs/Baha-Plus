@@ -31,9 +31,33 @@ jobs:
           fi
           python3 tools/release_version.py
 
+  reserve_tag:
+    name: Reserve release tag
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag for the selected commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_sha=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::main changed before the tag was created. Start a new manual release from the current main."
+            exit 1
+          fi
+          # Reserving the tag while this commit is still the branch head also
+          # keeps it releasable if workflow files change while builds are running.
+          gh api "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
+
   android:
     name: Build signed Android APK
-    needs: validate
+    needs: [validate, reserve_tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +103,7 @@ jobs:
 
   ios:
     name: Build unsigned iOS IPA
-    needs: validate
+    needs: [validate, reserve_tag]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +135,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [validate, android, ios]
+    needs: [validate, reserve_tag, android, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -131,6 +155,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::The release tag no longer points to the commit that was built."
+            exit 1
+          fi
           cd release
           sha256sum BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa > SHA256SUMS.txt
           previous_tag=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
@@ -162,8 +191,6 @@ jobs:
           fi
           git log --no-merges --format='- %s (`%h`)' "$commit_range" >> release-notes.md
           printf '\n' >> release-notes.md
-          # Creating the ref first fails if another run created the tag in the meantime.
-          gh api "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
           args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md --generate-notes)
           if [[ -n "$previous_tag" ]]; then
             args+=(--notes-start-tag "$previous_tag")
