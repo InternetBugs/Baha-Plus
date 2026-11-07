@@ -80,11 +80,12 @@ class AppStore extends ChangeNotifier {
     // Install the native HLS helper and player bridge in the same document
     // evaluation, after the lifecycle pause guard has been initialized.
     scripts['player'] = '${scripts['native-hls']}\n${scripts['player']}';
-    String? language, appearance, danmaku;
+    String? language, appearance, danmaku, quality;
     try {
       language = await disk.read('baha.device.language');
       appearance = await disk.read('baha.device.appearance');
       danmaku = await disk.read('baha.device.danmaku');
+      quality = await disk.read('baha.device.quality');
     } catch (_) {
       // Missing device preferences must not prevent startup.
     }
@@ -104,6 +105,12 @@ class AppStore extends ChangeNotifier {
           : 'system',
       catalog: await CatalogCache(disk).load() ?? const Catalog(),
     );
+    final preferredQuality = int.tryParse(quality ?? '');
+    if (preferredQuality != null &&
+        (preferredQuality == 0 ||
+            (preferredQuality >= 144 && preferredQuality <= 4320))) {
+      store._preferredQuality = preferredQuality;
+    }
     try {
       if (danmaku != null) {
         store.danmakuSettings = DanmakuSettings.fromJson(
@@ -182,6 +189,9 @@ class AppStore extends ChangeNotifier {
   final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
   Future<void> _accountCacheWrite = Future<void>.value();
+  int _preferredQuality = 0;
+  String? _qualityRestoredDocument;
+  Future<void> _qualityPreferenceWrite = Future<void>.value();
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
@@ -475,6 +485,9 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       // A navigation can replace the document while the application is hidden.
       // Its next commit receives the current lifecycle state below.
     }
+    if (active && operation.id == document) {
+      await _restorePreferredQuality();
+    }
   }
 
   Future<void> controlPlayer(String action, [double? value]) async {
@@ -498,10 +511,63 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       return;
     }
     if (value != null && !value.isFinite) return;
+    Future<void>? preferenceWrite;
+    if (action == 'quality') {
+      if (value == null ||
+          value != value.roundToDouble() ||
+          (value != 0 && !playback.value.qualities.contains(value.toInt()))) {
+        return;
+      }
+      _preferredQuality = value.toInt();
+      _qualityRestoredDocument = operation.id;
+      final saved = _preferredQuality.toString();
+      preferenceWrite = _qualityPreferenceWrite = _qualityPreferenceWrite.then(
+        (_) => _savePreference('baha.device.quality', saved),
+      );
+    }
+    try {
+      await _sendPlayerCommand(action, value);
+    } finally {
+      if (preferenceWrite != null) await preferenceWrite;
+    }
+  }
+
+  Future<void> _sendPlayerCommand(String action, double? value) async {
     await _portal?.evaluate(
       'window.__bahaPlayerBridge?.command(${jsonEncode(operation.id)},'
       '${jsonEncode(action)},${jsonEncode(value)}); true;',
     );
+  }
+
+  Future<void> _restorePreferredQuality() async {
+    final state = playback.value;
+    if (_disposed ||
+        !_applicationActive ||
+        _portal == null ||
+        !browserVisible ||
+        !showsPlayer ||
+        !state.canControl ||
+        state.qualities.isEmpty ||
+        (_preferredQuality != 0 &&
+            !state.qualities.contains(_preferredQuality)) ||
+        _qualityRestoredDocument == operation.id) {
+      return;
+    }
+    final document = operation.id;
+    final quality = _preferredQuality;
+    // Claim this document before evaluating: native HLS switches can publish
+    // more state while their asynchronous source change is still in progress.
+    _qualityRestoredDocument = document;
+    if (state.quality == quality) return;
+    try {
+      await _sendPlayerCommand('quality', quality.toDouble());
+    } catch (_) {
+      if (_qualityRestoredDocument == document && _preferredQuality == quality) {
+        _qualityRestoredDocument = null;
+      }
+      // Keep playback available if navigation interrupted the bridge. A later
+      // state update can retry without changing the saved device preference.
+    }
   }
 
   List<Anime> get seasonal =>
@@ -1023,6 +1089,7 @@ window.__bahaMediaSuspended = false; true;
       }
       if (body['type'] == 'player-state') {
         playback.value = PlaybackState.fromJson(body);
+        await _restorePreferredQuality();
       } else {
         playerDetail = AnimeDetail.fromJson(body['detail'] as Json);
         _emit();
