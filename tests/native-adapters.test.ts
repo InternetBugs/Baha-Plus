@@ -269,7 +269,7 @@ function playerFixture() {
       <div class="score-overall-people">894人評價</div></div>
     <script>var acgReview = new Bahamut.AcgReview('#acg_review', 894, {"1":23,"2":15,"3":42,"4":81,"5":733}, 60657, 4);</script>
     <div class="season"><a href="?sn=20">1</a><a href="?sn=21">2</a></div>
-    <div id="video-container"><video-js id="ani_video"><video></video><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
+    <div id="video-container"><video-js id="ani_video"><video></video><button class="vjs-big-play-button">播放</button><div class="official-ad-controls"></div><div class="vjs-danmu"></div></video-js></div>
     </body></html>`, '/animeVideo.php?sn=20');
   const media = fixture.document.querySelector('video') as any;
   const core = { state: { playingVideo: true, playingAd: false, videoSn: 20 } };
@@ -369,6 +369,24 @@ test('native player preserves age confirmation and rejects stale or suspended co
   assert.equal(fixture.stopped(), true);
   assert.equal(fixture.document.querySelector('#baha-player-layout'), null);
   assert.deepEqual(fixture.commands, []);
+});
+
+test('official play button stays usable until native controls can operate', () => {
+  const fixture = playerFixture();
+  const button = fixture.document.querySelector('.vjs-big-play-button') as any;
+  assert.equal(button.inert, true);
+  fixture.media.duration = 0;
+  fixture.tick();
+  assert.equal(fixture.document.documentElement.classList.contains('baha-native-controls'), false);
+  assert.equal(button.inert, false);
+  assert.equal(button.getAttribute('aria-hidden'), 'false');
+  fixture.media.duration = 1200;
+  fixture.core.state.playingVideo = false;
+  fixture.tick();
+  assert.equal(button.inert, false);
+  fixture.core.state.playingVideo = true;
+  fixture.tick();
+  assert.equal(button.inert, true);
 });
 
 test('single available quality distinguishes an explicit selection from automatic mode', async () => {

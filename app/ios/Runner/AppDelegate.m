@@ -16,6 +16,80 @@ static NSDictionary *BahaDiagnosticError(NSError *error, NSUInteger depth) {
   return result;
 }
 
+@interface BahaMediaProbe : NSObject
+@property(nonatomic, strong) AVPlayer *player;
+@property(nonatomic, strong) AVPlayerItem *item;
+@property(nonatomic, strong) NSTimer *timer;
+@property(nonatomic, copy) FlutterResult callback;
+@property(nonatomic) BOOL observing;
+@property(nonatomic) BOOL prerollStarted;
+@property(nonatomic) BOOL finished;
+- (void)beginWithURL:(NSURL *)url callback:(FlutterResult)callback;
+- (void)finish:(NSString *)reason;
+@end
+
+@implementation BahaMediaProbe
+- (void)beginWithURL:(NSURL *)url callback:(FlutterResult)callback {
+  self.callback = callback;
+  self.item = [AVPlayerItem playerItemWithURL:url];
+  [self.item addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionNew context:NULL];
+  self.observing = YES;
+  self.player = [AVPlayer playerWithPlayerItem:self.item];
+  self.player.muted = YES;
+  self.timer = [NSTimer scheduledTimerWithTimeInterval:20 repeats:NO block:^(NSTimer *timer) {
+    [self finish:@"timeout"];
+  }];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                       change:(NSDictionary *)change context:(void *)context {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.finished) return;
+    if (self.item.status == AVPlayerItemStatusFailed) {
+      [self finish:@"failed"];
+    } else if (self.item.status == AVPlayerItemStatusReadyToPlay && !self.prerollStarted) {
+      self.prerollStarted = YES;
+      // Buffer/decode without starting audible or visible playback.
+      [self.player prerollAtRate:1 completionHandler:^(BOOL ready) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [self finish:ready ? @"ready" : @"preroll_failed"];
+        });
+      }];
+    }
+  });
+}
+
+- (void)finish:(NSString *)reason {
+  if (self.finished) return;
+  self.finished = YES;
+  NSMutableArray *events = [NSMutableArray array];
+  for (AVPlayerItemErrorLogEvent *event in self.item.errorLog.events) {
+    [events addObject:@{@"domain": event.errorDomain ?: @"",
+                        @"code": @(event.errorStatusCode)}];
+    if (events.count >= 5) break;
+  }
+  NSDictionary *value = @{
+    @"reason": reason,
+    @"itemStatus": @(self.item.status),
+    @"playerStatus": @(self.player.status),
+    @"error": BahaDiagnosticError(self.item.error ?: self.player.error, 0),
+    @"events": events
+  };
+  if (self.observing) {
+    [self.item removeObserver:self forKeyPath:@"status"];
+    self.observing = NO;
+  }
+  [self.timer invalidate];
+  self.timer = nil;
+  [self.player cancelPendingPrerolls];
+  [self.player pause];
+  self.callback(value);
+  self.callback = nil;
+  self.player = nil;
+  self.item = nil;
+}
+@end
+
 @implementation AppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
@@ -43,17 +117,8 @@ static NSDictionary *BahaDiagnosticError(NSError *error, NSUInteger depth) {
       result([FlutterError errorWithCode:@"invalid_source" message:@"Invalid diagnostic source" details:nil]);
       return;
     }
-    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
-    [asset loadValuesAsynchronouslyForKeys:@[@"playable"] completionHandler:^{
-      NSError *error = nil;
-      AVKeyValueStatus status = [asset statusOfValueForKey:@"playable" error:&error];
-      NSDictionary *value = @{
-        @"status": @(status),
-        @"playable": @(status == AVKeyValueStatusLoaded && asset.playable),
-        @"error": BahaDiagnosticError(error, 0)
-      };
-      dispatch_async(dispatch_get_main_queue(), ^{ result(value); });
-    }];
+    BahaMediaProbe *probe = [[BahaMediaProbe alloc] init];
+    [probe beginWithURL:url callback:result];
   }];
 }
 @end

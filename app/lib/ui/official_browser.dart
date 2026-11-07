@@ -31,6 +31,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   bool _desktop = false;
   bool _publicDocumentReady = false;
   String? _nativeAgent;
+  String? _diagnosticAgent;
   int _documentGeneration = 0;
   AppStore get store => widget.store;
 
@@ -41,11 +42,13 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     mediaPlaybackRequiresUserGesture: false,
     allowsInlineMediaPlayback: true,
     allowsPictureInPictureMediaPlayback: false,
-    userAgent: Platform.isAndroid && _nativeAgent != null
-        ? desktop
-              ? desktopChromiumUserAgent(_nativeAgent!)
-              : _nativeAgent
-        : null,
+    userAgent:
+        _diagnosticAgent ??
+        (Platform.isAndroid && _nativeAgent != null
+            ? desktop
+                  ? desktopChromiumUserAgent(_nativeAgent!)
+                  : _nativeAgent
+            : null),
     preferredContentMode: desktop
         ? UserPreferredContentMode.DESKTOP
         : UserPreferredContentMode.MOBILE,
@@ -119,7 +122,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       jsonEncode({'action': action, 'args': arguments}),
     );
     final result = await controller
-        .callAsyncJavaScript(functionBody: 'return await $body;')
+        // WebKit converts JavaScript numbers in object results to doubles.
+        // Serializing in the page preserves integer IDs/counts for Dart.
+        .callAsyncJavaScript(
+          functionBody: 'return JSON.stringify(await $body);',
+        )
         .timeout(const Duration(seconds: 30));
     final current = await controller.getUrl();
     if (!mounted ||
@@ -134,17 +141,16 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         '[BAHA_DIAG] community action=$action '
         'error=${result?.error} valueType=${result?.value.runtimeType}',
       );
-      if (result?.value is Map) {
-        final response = result!.value as Map;
-        debugPrint(
-          '[BAHA_DIAG] community ok=${response['ok']} code=${response['code']}',
-        );
-      }
     }
-    if (result?.error != null || result?.value is! Map) {
+    if (result?.error != null || result?.value is! String) {
       throw const CommunityException('network');
     }
-    final decoded = jsonDecode(jsonEncode(result!.value)) as Json;
+    final decoded = jsonDecode(result!.value as String) as Json;
+    if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+      debugPrint(
+        '[BAHA_DIAG] community ok=${decoded['ok']} code=${decoded['code']}',
+      );
+    }
     if (const bool.fromEnvironment('BAHA_DIAGNOSTICS') &&
         action == 'comments' &&
         decoded['ok'] == true) {
@@ -216,13 +222,13 @@ try {
   if (new TextEncoder().encode(text).byteLength > 5000000) throw Error('Catalog too large');
   const body = JSON.parse(text);
   if (!Array.isArray(body?.data?.animeList)) throw Error('Invalid catalog response');
-  return {data: {
+  return JSON.stringify({data: {
     totalPage: body.data.totalPage,
     animeList: body.data.animeList.map(item => ({
       animeSn: item.animeSn, videoSn: item.videoSn, title: item.title,
       cover: item.cover, totalEpisode: item.totalEpisode, dateInfo: item.dateInfo
     }))
-  }};
+  }});
 } finally { clearTimeout(timer); }
 ''',
         )
@@ -238,10 +244,10 @@ try {
         result?.error != null ||
         source == null ||
         !OfficialSite.trustedOrigin(Uri.parse(source.toString())) ||
-        result?.value is! Map) {
+        result?.value is! String) {
       throw StateError('Official catalog request failed');
     }
-    final decoded = jsonDecode(jsonEncode(result!.value)) as Json;
+    final decoded = jsonDecode(result!.value as String) as Json;
     if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
       try {
         final parsed = OfficialAnimeSearch.parseResponse(decoded);
@@ -291,6 +297,33 @@ try {
     } catch (error) {
       debugPrint('[BAHA_DIAG] native HLS probe failed: ${error.runtimeType}');
     }
+  }
+
+  Future<void> _diagnoseAgent(bool safari) async {
+    if (!const bool.fromEnvironment('BAHA_DIAGNOSTICS')) return;
+    final controller = _controller;
+    if (controller == null || !Platform.isIOS) return;
+    if (safari) {
+      final current = await controller.evaluateJavascript(
+        source: 'navigator.userAgent',
+      );
+      if (current is! String) return;
+      final engine = RegExp(
+        r'AppleWebKit/([\d.]+)',
+      ).firstMatch(current)?.group(1);
+      final version = RegExp(
+        r'(\d+\.\d+)',
+      ).firstMatch(Platform.operatingSystemVersion)?.group(1);
+      if (engine == null || version == null) return;
+      _diagnosticAgent =
+          '${current.replaceAll(RegExp(r' Version/\S+| Safari/\S+'), '')} '
+          'Version/$version Safari/$engine';
+    } else {
+      _diagnosticAgent = null;
+    }
+    await controller.setSettings(settings: _settingsForMode(_desktop));
+    debugPrint('[BAHA_DIAG] Safari user-agent experiment enabled=$safari');
+    await controller.reload();
   }
 
   Future<void> _updateNavigation() async {
@@ -355,10 +388,16 @@ try {
           allowedOriginRules: {'https://ani.gamer.com.tw'},
           onPostMessage: (message, origin, mainFrame, reply) async {
             if (mainFrame &&
-                message?.data == 'inspect' &&
                 origin != null &&
                 OfficialSite.trustedOrigin(Uri.parse(origin.toString()))) {
-              await _diagnoseMedia();
+              switch (message?.data) {
+                case 'inspect':
+                  await _diagnoseMedia();
+                case 'safari-agent':
+                  await _diagnoseAgent(true);
+                case 'default-agent':
+                  await _diagnoseAgent(false);
+              }
             }
           },
         ),

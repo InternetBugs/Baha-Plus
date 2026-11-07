@@ -53,6 +53,38 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('home uses episode artwork while a poster is unavailable', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    store.catalog = const Catalog(
+      items: [
+        Anime(
+          id: '1',
+          title: 'Seasonal Show',
+          cover: 'https://p2.bahamut.com.tw/episode.jpg',
+          latestVideoId: '101',
+          sections: ['season'],
+          updateDate: '2026-11-06',
+        ),
+      ],
+    );
+    store.selectTab(0);
+    await frames(tester);
+    final artwork = tester.widgetList<Artwork>(
+      find.descendant(
+        of: find.byKey(const ValueKey('featured-1')),
+        matching: find.byType(Artwork),
+      ),
+    );
+    expect(artwork, isNotEmpty);
+    expect(
+      artwork.every((item) => item.url == store.catalog.items.first.cover),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('search, language and appearance use the real shared interface', (
     tester,
   ) async {

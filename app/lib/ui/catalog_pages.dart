@@ -139,7 +139,7 @@ class HomeContent extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Artwork(anime.poster),
+            Artwork(anime.artwork),
             const ColoredBox(color: Color(0x22000000)),
             const DecoratedBox(
               decoration: BoxDecoration(
@@ -191,7 +191,7 @@ class HomeContent extends StatelessWidget {
                     children: [
                       ClipRRect(
                         borderRadius: BorderRadius.circular(11),
-                        child: Artwork(anime.poster, width: 48, height: 48),
+                        child: Artwork(anime.artwork, width: 48, height: 48),
                       ),
                       const SizedBox(width: 12),
                       Expanded(

@@ -21,7 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile
-          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name 0.3.0 --build-number 5
+          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name 0.3.0 --build-number 6
           mkdir -p diagnostic/Payload
           cp -R build/ios/iphoneos/Runner.app diagnostic/Payload/
           cd diagnostic
