@@ -367,22 +367,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         () => store.setPlayerFullscreen(true),
                       ),
                     const SizedBox(width: 8),
-                    GlassIconButton(
-                      key: const ValueKey('player-danmaku-button'),
-                      size: 36,
-                      iconSize: 19,
-                      useOwnLayer: true,
-                      platformViewBackdrop: true,
-                      settings: mediaGlass.copyWith(
-                        backerColor: const Color(0x66000000),
-                      ),
-                      semanticLabel: store.t('danmakuSettings'),
-                      icon: const Icon(
-                        CupertinoIcons.text_bubble,
-                        color: Colors.white,
-                      ),
-                      onPressed: () => showDanmakuPanel(context, store),
-                    ),
+                    ..._danmakuActions(),
                     const SizedBox(width: 8),
                     _videoAction(
                       CupertinoIcons.ellipsis,
@@ -420,6 +405,44 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
     ],
   );
+
+  List<Widget> _danmakuActions() {
+    final enabled = store.danmakuSettings.enabled;
+    return [
+      if (enabled) ...[
+        GlassIconButton(
+          key: const ValueKey('player-danmaku-send'),
+          size: 36,
+          iconSize: 19,
+          useOwnLayer: true,
+          platformViewBackdrop: true,
+          settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
+          semanticLabel: store.t('sendDanmaku'),
+          icon: const Icon(CupertinoIcons.paperplane, color: Colors.white),
+          onPressed: () => showDanmakuComposer(context, store),
+        ),
+        const SizedBox(width: 8),
+      ],
+      GlassIconButton(
+        key: const ValueKey('player-danmaku-button'),
+        size: 36,
+        iconSize: 19,
+        useOwnLayer: true,
+        platformViewBackdrop: true,
+        settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
+        semanticLabel: store.t(enabled ? 'hideDanmaku' : 'showDanmaku'),
+        icon: Icon(
+          enabled
+              ? CupertinoIcons.text_bubble_fill
+              : CupertinoIcons.text_bubble,
+          color: enabled ? Colors.white : Colors.white54,
+        ),
+        onPressed: () => store.setDanmakuSettings(
+          store.danmakuSettings.copyWith(enabled: !enabled),
+        ),
+      ),
+    ];
+  }
 
   Widget _videoAction(IconData icon, String label, VoidCallback action) =>
       GlassIconButton(
@@ -765,20 +788,7 @@ class _PlayerPageState extends State<PlayerPage> {
                 ),
               ),
               const SizedBox(width: 16),
-              GlassIconButton(
-                key: const ValueKey('player-danmaku-button'),
-                useOwnLayer: true,
-                platformViewBackdrop: true,
-                settings: mediaGlass.copyWith(
-                  backerColor: const Color(0x66000000),
-                ),
-                semanticLabel: store.t('danmakuSettings'),
-                onPressed: () => showDanmakuPanel(context, store),
-                icon: const Icon(
-                  CupertinoIcons.text_bubble,
-                  color: Colors.white,
-                ),
-              ),
+              ..._danmakuActions(),
               const SizedBox(width: 12),
               GlassIconButton(
                 useOwnLayer: true,

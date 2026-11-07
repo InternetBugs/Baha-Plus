@@ -653,6 +653,36 @@ void main() {
         find.byKey(const ValueKey('player-danmaku-button')),
       );
       expect(video.contains(danmakuButton.center), isTrue);
+      expect(
+        video.contains(
+          tester.getCenter(find.byKey(const ValueKey('player-danmaku-send'))),
+        ),
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-send')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('danmaku-composer')), findsOneWidget);
+      expect(find.byKey(const ValueKey('community-input-60')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('community-input-60')),
+        '測試彈幕',
+      );
+      await frames(tester);
+      await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
+      await frames(tester);
+      expect(portal.communityRequests.last['text'], '測試彈幕');
+      expect(portal.communityRequests.last['videoId'], '20');
+      expect(find.text('測試彈幕'), findsNothing);
+      await tester.tap(find.bySemanticsLabel(store.t('close')).last);
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-button')));
+      await frames(tester);
+      expect(store.danmakuSettings.enabled, isFalse);
+      expect(find.byKey(const ValueKey('player-danmaku-send')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-button')));
+      await frames(tester);
+      expect(store.danmakuSettings.enabled, isTrue);
+      expect(find.byKey(const ValueKey('player-danmaku-send')), findsOneWidget);
       expect(find.text(store.t('danmaku')), findsNothing);
       expect(
         tester.getTopLeft(find.byKey(const ValueKey('synopsis-section'))).dy,
@@ -723,6 +753,26 @@ void main() {
         ),
         isTrue,
       );
+      tester.view.physicalSize = const Size(850, 400);
+      await frames(tester);
+      expect(find.byKey(const ValueKey('player-danmaku-send')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-button')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('player-danmaku-send')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-button')));
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('player-danmaku-send')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('danmaku-composer')), findsOneWidget);
+      tester.view.viewInsets = const FakeViewPadding(bottom: 180);
+      await frames(tester);
+      expect(find.byKey(const ValueKey('community-input-60')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      tester.view.resetViewInsets();
+      await frames(tester);
+      await tester.tap(find.bySemanticsLabel(store.t('close')).last);
+      tester.view.physicalSize = const Size(400, 850);
+      await frames(tester);
       await store.dismissBrowser();
       await frames(tester);
       expect(store.playerFullscreen, isFalse);

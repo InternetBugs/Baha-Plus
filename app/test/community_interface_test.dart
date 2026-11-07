@@ -572,6 +572,11 @@ void main() {
       portal.communityResponse = {'ok': false, 'code': 'rejected'};
       await mount(tester, DanmakuPanel(store: store), scale: 1.8);
       expect(find.byType(GlassSlider), findsNWidgets(2));
+      await mount(
+        tester,
+        DanmakuPanel(store: store, composerOnly: true),
+        scale: 1.8,
+      );
       await tester.enterText(find.byType(TextField), '離線草稿');
       expect(find.text('離線草稿'), findsOneWidget);
       expect(tester.takeException(), isNull);

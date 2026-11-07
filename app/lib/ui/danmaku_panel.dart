@@ -20,9 +20,29 @@ void showDanmakuPanel(BuildContext context, AppStore store) {
   );
 }
 
+void showDanmakuComposer(BuildContext context, AppStore store) {
+  showDialog<void>(
+    context: context,
+    builder: (context) => Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 560),
+        child: DanmakuPanel(store: store, composerOnly: true),
+      ),
+    ),
+  );
+}
+
 class DanmakuPanel extends StatefulWidget {
-  const DanmakuPanel({required this.store, super.key});
+  const DanmakuPanel({
+    required this.store,
+    this.composerOnly = false,
+    super.key,
+  });
   final AppStore store;
+  final bool composerOnly;
   @override
   State<DanmakuPanel> createState() => _DanmakuPanelState();
 }
@@ -67,13 +87,19 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     builder: (context, _) {
       final settings = store.danmakuSettings;
       final canSend =
-          store.playback.value.canControl && store.playingVideoId == _videoId;
+          store.danmakuSettings.enabled &&
+          store.playback.value.canControl &&
+          store.playingVideoId == _videoId;
       return GlassScaffold(
-        key: const ValueKey('danmaku-panel'),
+        key: ValueKey(
+          widget.composerOnly ? 'danmaku-composer' : 'danmaku-panel',
+        ),
         extendBody: false,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: GlassAppBar(
-          title: Text(store.t('danmaku')),
+          title: Text(
+            store.t(widget.composerOnly ? 'sendDanmaku' : 'danmakuSettings'),
+          ),
           actions: [
             GlassIconButton(
               semanticLabel: store.t('close'),
@@ -91,214 +117,220 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                   vertical: 16,
                 ),
                 children: [
-                  // The preview is also the content behind the floating glass tools.
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(24),
-                    child: SizedBox(
-                      height: 118,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          const DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xff183d5a), Color(0xff394c74)],
-                              ),
-                            ),
-                          ),
-                          if (settings.enabled)
-                            Center(
-                              child: Opacity(
-                                opacity: settings.opacity,
-                                child: Text(
-                                  store.t('danmakuPreview'),
-                                  style: TextStyle(
-                                    fontSize: 22 * settings.scale,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                    shadows: const [Shadow(blurRadius: 3)],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          Positioned(
-                            right: 12,
-                            bottom: 12,
-                            child: GlassButton.custom(
-                              useOwnLayer: true,
-                              settings: mediaGlass,
-                              shape: const LiquidRoundedRectangle(
-                                borderRadius: 20,
-                              ),
-                              width: 130,
-                              height: 38,
-                              onTap: () => store.setDanmakuSettings(
-                                settings.copyWith(enabled: !settings.enabled),
-                              ),
-                              child: Text(
-                                store.t(
-                                  settings.enabled
-                                      ? 'hideDanmaku'
-                                      : 'showDanmaku',
-                                ),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  _slider(
-                    'danmakuOpacity',
-                    settings.opacity,
-                    .1,
-                    1,
-                    (value) => store.setDanmakuSettings(
-                      settings.copyWith(opacity: value),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _slider(
-                    'danmakuSize',
-                    settings.scale,
-                    .5,
-                    1.5,
-                    (value) => store.setDanmakuSettings(
-                      settings.copyWith(scale: value),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    store.t('danmakuModes'),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _choice(
-                        'danmakuRolling',
-                        settings.rolling,
-                        () => store.setDanmakuSettings(
-                          settings.copyWith(rolling: !settings.rolling),
-                        ),
-                      ),
-                      _choice(
-                        'danmakuTop',
-                        settings.top,
-                        () => store.setDanmakuSettings(
-                          settings.copyWith(top: !settings.top),
-                        ),
-                      ),
-                      _choice(
-                        'danmakuBottom',
-                        settings.bottom,
-                        () => store.setDanmakuSettings(
-                          settings.copyWith(bottom: !settings.bottom),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 28),
-                  Text(
-                    store.t('sendDanmaku'),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    store.t('danmakuLimit'),
-                    style: TextStyle(
-                      color: secondary(context),
-                      fontSize: 12,
-                      height: 1.6,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (var position = 0; position < 3; position++)
-                        _choice(
-                          [
-                            'danmakuRolling',
-                            'danmakuTop',
-                            'danmakuBottom',
-                          ][position],
-                          _position == position,
-                          () => setState(() => _position = position),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (var size = 0; size < 3; size++)
-                        _choice(
-                          ['smallText', 'standardText', 'largeText'][size],
-                          _size == size,
-                          () => setState(() => _size = size),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 14,
-                    runSpacing: 10,
-                    children: [
-                      for (final color in [
-                        '#FFFFFF',
-                        '#FFD166',
-                        '#74D9FF',
-                        '#FF9FBA',
-                        '#9DE0AD',
-                      ])
-                        Semantics(
-                          label: store
-                              .t('danmakuColor')
-                              .replaceAll('{color}', color),
-                          selected: _color == color,
-                          button: true,
-                          child: GestureDetector(
-                            onTap: () => setState(() => _color = color),
-                            child: Container(
-                              width: 40,
-                              height: 40,
+                  if (!widget.composerOnly) ...[
+                    // The preview is also the content behind the floating glass tools.
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: SizedBox(
+                        height: 118,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            const DecoratedBox(
                               decoration: BoxDecoration(
-                                color: Color(
-                                  int.parse(
-                                    color.replaceFirst('#', 'ff'),
-                                    radix: 16,
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xff183d5a),
+                                    Color(0xff394c74),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (settings.enabled)
+                              Center(
+                                child: Opacity(
+                                  opacity: settings.opacity,
+                                  child: Text(
+                                    store.t('danmakuPreview'),
+                                    style: TextStyle(
+                                      fontSize: 22 * settings.scale,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                      shadows: const [Shadow(blurRadius: 3)],
+                                    ),
                                   ),
                                 ),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: _color == color
-                                      ? brandBlue
-                                      : Colors.black12,
-                                  width: _color == color ? 3 : 1,
+                              ),
+                            Positioned(
+                              right: 12,
+                              bottom: 12,
+                              child: GlassButton.custom(
+                                useOwnLayer: true,
+                                settings: mediaGlass,
+                                shape: const LiquidRoundedRectangle(
+                                  borderRadius: 20,
+                                ),
+                                width: 130,
+                                height: 38,
+                                onTap: () => store.setDanmakuSettings(
+                                  settings.copyWith(enabled: !settings.enabled),
+                                ),
+                                child: Text(
+                                  store.t(
+                                    settings.enabled
+                                        ? 'hideDanmaku'
+                                        : 'showDanmaku',
+                                  ),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    _slider(
+                      'danmakuOpacity',
+                      settings.opacity,
+                      .1,
+                      1,
+                      (value) => store.setDanmakuSettings(
+                        settings.copyWith(opacity: value),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    _slider(
+                      'danmakuSize',
+                      settings.scale,
+                      .5,
+                      1.5,
+                      (value) => store.setDanmakuSettings(
+                        settings.copyWith(scale: value),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      store.t('danmakuModes'),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        _choice(
+                          'danmakuRolling',
+                          settings.rolling,
+                          () => store.setDanmakuSettings(
+                            settings.copyWith(rolling: !settings.rolling),
+                          ),
+                        ),
+                        _choice(
+                          'danmakuTop',
+                          settings.top,
+                          () => store.setDanmakuSettings(
+                            settings.copyWith(top: !settings.top),
+                          ),
+                        ),
+                        _choice(
+                          'danmakuBottom',
+                          settings.bottom,
+                          () => store.setDanmakuSettings(
+                            settings.copyWith(bottom: !settings.bottom),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (widget.composerOnly) ...[
+                    Text(
+                      store.t('sendDanmaku'),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      store.t('danmakuLimit'),
+                      style: TextStyle(
+                        color: secondary(context),
+                        fontSize: 12,
+                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (var position = 0; position < 3; position++)
+                          _choice(
+                            [
+                              'danmakuRolling',
+                              'danmakuTop',
+                              'danmakuBottom',
+                            ][position],
+                            _position == position,
+                            () => setState(() => _position = position),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (var size = 0; size < 3; size++)
+                          _choice(
+                            ['smallText', 'standardText', 'largeText'][size],
+                            _size == size,
+                            () => setState(() => _size = size),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 10,
+                      children: [
+                        for (final color in [
+                          '#FFFFFF',
+                          '#FFD166',
+                          '#74D9FF',
+                          '#FF9FBA',
+                          '#9DE0AD',
+                        ])
+                          Semantics(
+                            label: store
+                                .t('danmakuColor')
+                                .replaceAll('{color}', color),
+                            selected: _color == color,
+                            button: true,
+                            child: GestureDetector(
+                              onTap: () => setState(() => _color = color),
+                              child: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: Color(
+                                    int.parse(
+                                      color.replaceFirst('#', 'ff'),
+                                      radix: 16,
+                                    ),
+                                  ),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: _color == color
+                                        ? brandBlue
+                                        : Colors.black12,
+                                    width: _color == color ? 3 : 1,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  if (!canSend) ...[
+                      ],
+                    ),
+                  ],
+                  if (widget.composerOnly && !canSend) ...[
                     const SizedBox(height: 16),
                     Text(
                       store.t('danmakuWaitForContent'),
@@ -312,15 +344,16 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                 ],
               ),
             ),
-            CommunityComposer(
-              store: store,
-              controller: _draft,
-              hint: store.t('danmakuPlaceholder'),
-              sending: _sending,
-              onSend: canSend ? _send : null,
-              maximum: 60,
-              error: _error == null ? null : communityError(store, _error),
-            ),
+            if (widget.composerOnly)
+              CommunityComposer(
+                store: store,
+                controller: _draft,
+                hint: store.t('danmakuPlaceholder'),
+                sending: _sending,
+                onSend: canSend ? _send : null,
+                maximum: 60,
+                error: _error == null ? null : communityError(store, _error),
+              ),
           ],
         ),
       );
