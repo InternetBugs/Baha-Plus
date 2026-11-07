@@ -32,6 +32,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   final _progress = ValueNotifier<int>(0);
   final _webViewKey = GlobalKey(debugLabel: 'official-video-session');
   bool _desktop = false;
+  bool _keepsAndroidMediaAlive = false;
   bool _publicDocumentReady = false;
   String? _nativeAgent;
   int _documentGeneration = 0;
@@ -40,6 +41,8 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   String? _cacheAttemptedDocument;
   bool _cacheInUse = false;
   AppStore get store => widget.store;
+  bool get _shouldKeepAndroidMediaAlive =>
+      defaultTargetPlatform == TargetPlatform.android && store.showsPlayer;
 
   @override
   void initState() {
@@ -149,6 +152,9 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
     mediaPlaybackRequiresUserGesture: false,
     allowsInlineMediaPlayback: true,
     allowsPictureInPictureMediaPlayback: false,
+    // Preserve Android's media pipeline when the view is covered. The app
+    // lifecycle pause guard still pauses video/audio on background or lock.
+    allowBackgroundAudioPlaying: _shouldKeepAndroidMediaAlive,
     userAgent: Platform.isAndroid && _nativeAgent != null
         ? desktop
               ? desktopChromiumUserAgent(_nativeAgent!)
@@ -173,11 +179,15 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
 
   Future<void> _configureMode(Uri uri) async {
     final desktop = OfficialSite.desktopPlayer(uri);
-    if (_desktop == desktop) return;
+    final keepsMediaAlive = _shouldKeepAndroidMediaAlive;
+    if (_desktop == desktop && _keepsAndroidMediaAlive == keepsMediaAlive) {
+      return;
+    }
     // Settings constructors include defaults, so always preserve the complete
     // session/media configuration while changing presentation.
     await _controller?.setSettings(settings: _settingsForMode(desktop));
     _desktop = desktop;
+    _keepsAndroidMediaAlive = keepsMediaAlive;
   }
 
   @override

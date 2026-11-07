@@ -8,6 +8,7 @@ import 'package:baha_plus/ui/comments_page.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/player_page.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -147,6 +148,10 @@ void main() {
 
       await frames();
       final session = tester.widget<InAppWebView>(find.byType(InAppWebView));
+      expect(
+        session.platform.params.initialSettings!.allowBackgroundAudioPlaying,
+        defaultTargetPlatform == TargetPlatform.android,
+      );
       final document = store.operation.id;
       final visits = portal.visited.length;
       final scripts = portal.scripts.length;
