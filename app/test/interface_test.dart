@@ -875,6 +875,13 @@ void main() {
       var video = tester.getRect(surface);
       final background = video.topLeft + const Offset(20, 40);
 
+      tester.view.physicalSize = const Size(320, 850);
+      await frames(tester);
+      expect(rewind.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      tester.view.physicalSize = const Size(400, 850);
+      await frames(tester);
+
       await tester.tapAt(background);
       await frames(tester);
       expect(rewind.hitTestable(), findsOneWidget);
@@ -910,12 +917,40 @@ void main() {
       store.setPlayerFullscreen(true);
       await frames(tester);
       video = tester.getRect(surface);
+      final exitFullscreen = find.byKey(
+        const ValueKey('player-fullscreen-close'),
+      );
+      final danmaku = find.byKey(const ValueKey('player-danmaku-button'));
+      final settings = find.bySemanticsLabel(store.t('playbackSettings'));
+      expect(exitFullscreen.hitTestable(), findsOneWidget);
+      expect(danmaku.hitTestable(), findsOneWidget);
+      expect(settings.hitTestable(), findsOneWidget);
       await tester.tapAt(video.center);
       await frames(tester);
       expect(controls.hitTestable(), findsNothing);
+      expect(exitFullscreen.hitTestable(), findsNothing);
+      expect(danmaku.hitTestable(), findsNothing);
+      expect(settings.hitTestable(), findsNothing);
       await tester.tapAt(video.center);
       await frames(tester);
       expect(controls.hitTestable(), findsOneWidget);
+      expect(exitFullscreen.hitTestable(), findsOneWidget);
+      expect(danmaku.hitTestable(), findsOneWidget);
+      expect(settings.hitTestable(), findsOneWidget);
+      playback(paused: false);
+      await frames(tester);
+      await tester.pump(const Duration(seconds: 3));
+      await frames(tester);
+      expect(controls.hitTestable(), findsNothing);
+      expect(exitFullscreen.hitTestable(), findsNothing);
+      expect(danmaku.hitTestable(), findsNothing);
+      expect(settings.hitTestable(), findsNothing);
+      await tester.tapAt(video.center);
+      await frames(tester);
+      expect(controls.hitTestable(), findsOneWidget);
+      expect(exitFullscreen.hitTestable(), findsOneWidget);
+      expect(danmaku.hitTestable(), findsOneWidget);
+      expect(settings.hitTestable(), findsOneWidget);
       await tester.tap(
         find.bySemanticsLabel(store.t('playbackSettings')).hitTestable(),
       );

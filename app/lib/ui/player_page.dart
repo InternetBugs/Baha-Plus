@@ -506,6 +506,7 @@ class _PlayerPageState extends State<PlayerPage> {
       final position = (_scrub ?? state.position).clamp(0.0, duration);
       final dark = Theme.of(context).brightness == Brightness.dark;
       final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
+      final compact = !fullscreen && MediaQuery.sizeOf(context).width < 350;
       final settings = fullscreen || dark
           ? LiquidGlassSettings.ios27Dark
           : LiquidGlassSettings.ios27Light;
@@ -523,20 +524,20 @@ class _PlayerPageState extends State<PlayerPage> {
         ),
         padding: EdgeInsets.symmetric(
           horizontal: fullscreen ? 20 : 12,
-          vertical: fullscreen ? 14 : 8,
+          vertical: fullscreen ? 14 : 12,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              height: fullscreen ? 32 : 24,
+              height: fullscreen ? 32 : 30,
               child: Semantics(
                 label: store.t('playbackProgress'),
                 child: GlassSlider(
                   value: position,
                   max: duration > 0 ? duration : 1,
-                  thumbRadius: fullscreen ? 8 : 6,
-                  trackHeight: fullscreen ? 4 : 3,
+                  thumbRadius: fullscreen ? 8 : 7,
+                  trackHeight: 4,
                   activeColor: color,
                   inactiveColor: color.withValues(alpha: .33),
                   onChanged: seekable
@@ -562,8 +563,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   state.paused ? 'resumePlayback' : 'pausePlayback',
                   () => store.controlPlayer(state.paused ? 'play' : 'pause'),
                   color,
-                  size: fullscreen ? 30 : 23,
-                  minimumSize: fullscreen ? 52 : 36,
+                  size: fullscreen ? 30 : 26,
+                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
                 ),
                 _control(
                   CupertinoIcons.gobackward_10,
@@ -575,8 +576,8 @@ class _PlayerPageState extends State<PlayerPage> {
                         )
                       : null,
                   color,
-                  size: fullscreen ? 27 : 21,
-                  minimumSize: fullscreen ? 52 : 36,
+                  size: fullscreen ? 27 : 24,
+                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
                 ),
                 _control(
                   CupertinoIcons.goforward_10,
@@ -588,8 +589,8 @@ class _PlayerPageState extends State<PlayerPage> {
                         )
                       : null,
                   color,
-                  size: fullscreen ? 27 : 21,
-                  minimumSize: fullscreen ? 52 : 36,
+                  size: fullscreen ? 27 : 24,
+                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
                 ),
                 Expanded(
                   child: Text(
@@ -598,7 +599,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     maxLines: 1,
                     style: TextStyle(
                       color: color,
-                      fontSize: fullscreen ? 13 : 10,
+                      fontSize: fullscreen ? 13 : (compact ? 10 : 11),
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
@@ -610,8 +611,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   state.muted ? 'unmutePlayback' : 'mutePlayback',
                   () => store.controlPlayer('mute'),
                   color,
-                  size: fullscreen ? 26 : 20,
-                  minimumSize: fullscreen ? 52 : 36,
+                  size: fullscreen ? 26 : 23,
+                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
                 ),
                 _control(
                   store.playerFullscreen
@@ -620,8 +621,8 @@ class _PlayerPageState extends State<PlayerPage> {
                   store.playerFullscreen ? 'exitFullScreen' : 'fullScreen',
                   () => store.setPlayerFullscreen(!store.playerFullscreen),
                   color,
-                  size: fullscreen ? 25 : 18,
-                  minimumSize: fullscreen ? 52 : 36,
+                  size: fullscreen ? 25 : 22,
+                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
                 ),
               ],
             ),
@@ -761,46 +762,63 @@ class _PlayerPageState extends State<PlayerPage> {
           top: MediaQuery.paddingOf(context).top + 14,
           left: 20,
           right: 20,
-          child: Row(
-            children: [
-              GlassIconButton(
-                useOwnLayer: true,
-                platformViewBackdrop: true,
-                settings: mediaGlass.copyWith(
-                  backerColor: const Color(0x66000000),
+          child: IgnorePointer(
+            ignoring: !_controlsVisible,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: Listener(
+                onPointerDown: (_) => _revealControls(),
+                child: Row(
+                  children: [
+                    GlassIconButton(
+                      key: const ValueKey('player-fullscreen-close'),
+                      useOwnLayer: true,
+                      platformViewBackdrop: true,
+                      settings: mediaGlass.copyWith(
+                        backerColor: const Color(0x66000000),
+                      ),
+                      semanticLabel: store.t('exitFullScreen'),
+                      onPressed: () => store.setPlayerFullscreen(false),
+                      icon: const Icon(
+                        CupertinoIcons.xmark,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Text(
+                        store.playingAnime!.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 16,
+                          shadows: [Shadow(blurRadius: 8)],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    ..._danmakuActions(),
+                    const SizedBox(width: 12),
+                    GlassIconButton(
+                      useOwnLayer: true,
+                      platformViewBackdrop: true,
+                      settings: mediaGlass.copyWith(
+                        backerColor: const Color(0x66000000),
+                      ),
+                      semanticLabel: store.t('playbackSettings'),
+                      onPressed: _settingsMenu,
+                      icon: const Icon(
+                        CupertinoIcons.ellipsis,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
-                semanticLabel: store.t('exitFullScreen'),
-                onPressed: () => store.setPlayerFullscreen(false),
-                icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Text(
-                  store.playingAnime!.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                    shadows: [Shadow(blurRadius: 8)],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              ..._danmakuActions(),
-              const SizedBox(width: 12),
-              GlassIconButton(
-                useOwnLayer: true,
-                platformViewBackdrop: true,
-                settings: mediaGlass.copyWith(
-                  backerColor: const Color(0x66000000),
-                ),
-                semanticLabel: store.t('playbackSettings'),
-                onPressed: _settingsMenu,
-                icon: const Icon(CupertinoIcons.ellipsis, color: Colors.white),
-              ),
-            ],
+            ),
           ),
         ),
       ],
