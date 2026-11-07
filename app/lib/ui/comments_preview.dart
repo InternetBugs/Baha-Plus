@@ -147,28 +147,31 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
           ] else if (comments.length == 1) ...[
             _comment(context, comments.single),
             _openAll(),
-          ] else
+          ] else ...[
             SizedBox(
               height: MediaQuery.textScalerOf(
                 context,
-              ).scale(220).clamp(220, 340),
-              child: CupertinoScrollbar(
-                controller: _scroll,
-                child: ListView.builder(
+              ).scale(330).clamp(330, 510),
+              child: LayoutBuilder(
+                builder: (context, constraints) => ListView.builder(
                   key: ValueKey('inline-comments-$_videoId'),
                   controller: _scroll,
+                  scrollDirection: Axis.horizontal,
                   primary: false,
                   padding: EdgeInsets.zero,
-                  itemCount: comments.length + 1,
-                  itemBuilder: (context, index) => index == comments.length
-                      ? _openAll()
-                      : Padding(
-                          padding: const EdgeInsets.only(bottom: 14),
-                          child: _comment(context, comments[index]),
-                        ),
+                  itemCount: comments.length,
+                  itemBuilder: (context, index) => SizedBox(
+                    width: constraints.maxWidth * .9,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: _comment(context, comments[index]),
+                    ),
+                  ),
                 ),
               ),
             ),
+            _openAll(),
+          ],
         ],
       );
     },

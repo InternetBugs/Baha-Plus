@@ -460,7 +460,7 @@ void main() {
   );
 
   testWidgets(
-    'inline comments keep the official order, stop at ten and show a glass button at the scroll end',
+    'inline comments scroll horizontally in official order with a button below',
     (tester) async {
       final (store, portal) = await setup(tester);
       const order = [
@@ -490,24 +490,26 @@ void main() {
       );
       final list = find.byKey(const ValueKey('inline-comments-20'));
       final openAll = find.byKey(const ValueKey('open-full-comments'));
-      expect(tester.getSize(list).height, 220);
+      expect(tester.getSize(list).height, 330);
+      expect(tester.widget<ListView>(list).scrollDirection, Axis.horizontal);
       expect(
         find.byKey(const ValueKey('preview-comment-8')).hitTestable(),
         findsOneWidget,
       );
       expect(
-        tester.getTopLeft(find.byKey(const ValueKey('preview-comment-8'))).dy,
+        tester.getTopLeft(find.byKey(const ValueKey('preview-comment-8'))).dx,
         lessThan(
-          tester.getTopLeft(find.byKey(const ValueKey('preview-comment-3'))).dy,
+          tester.getTopLeft(find.byKey(const ValueKey('preview-comment-3'))).dx,
         ),
       );
-      expect(openAll.hitTestable(), findsNothing);
+      expect(openAll.hitTestable(), findsOneWidget);
       for (
         var step = 0;
-        step < 20 && openAll.hitTestable().evaluate().isEmpty;
+        step < 20 &&
+            find.byKey(const ValueKey('preview-comment-25')).evaluate().isEmpty;
         step++
       ) {
-        await tester.drag(list, const Offset(0, -160));
+        await tester.drag(list, const Offset(-300, 0));
         await frames(tester);
       }
       expect(openAll.hitTestable(), findsOneWidget);
@@ -676,16 +678,9 @@ void main() {
         brightness: brightness,
       );
       await capture('comment-preview-${brightness.name}');
-      final list = find.byKey(const ValueKey('inline-comments-20'));
       final openAll = find.byKey(const ValueKey('open-full-comments'));
-      for (
-        var step = 0;
-        step < 20 && openAll.hitTestable().evaluate().isEmpty;
-        step++
-      ) {
-        await tester.drag(list, const Offset(0, -160));
-        await frames(tester);
-      }
+      await tester.ensureVisible(openAll);
+      await frames(tester);
       expect(openAll.hitTestable(), findsOneWidget);
       await capture('comment-preview-end-${brightness.name}');
       await tester.pumpWidget(const SizedBox());
