@@ -10,7 +10,9 @@
     let hls = false;
     try {
       const url = new URL(raw || '', location.href);
-      hls = url.origin === 'https://bahamut.akamaized.net' &&
+      const cache = window.__bahaCacheBase;
+      hls = (url.origin === 'https://bahamut.akamaized.net' ||
+        (typeof cache === 'string' && url.href.startsWith(cache))) &&
         /\.m3u8$/i.test(url.pathname);
     } catch (_) {}
     if (!hls) {

@@ -9,6 +9,8 @@
   let timer, style, metadataSent = false, last = '', requestedQuality = 0;
   let preferences = window.__bahaDanmakuPreferences || null;
   let appliedManager = null, appliedPreferences = '';
+  let cachePlayer = null, originalSourceSetter = null;
+  let cacheEnabled = false, cacheRecovering = false, cacheFailed = false, cacheTimeline = null;
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -151,6 +153,26 @@
   function tick() {
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
     const c = context();
+    if (cacheEnabled && c.phase === 'content' && c.media?.duration > 0 && !nativeQuality?.isSwitching()) {
+      cacheTimeline = {position: c.media.currentTime, rate: c.media.playbackRate,
+        paused: c.media.paused, muted: c.media.muted};
+    }
+    if (cacheEnabled && c.matches && c.phase === 'error' && !cacheRecovering) {
+      cacheEnabled = false; cacheRecovering = true; cacheFailed = true;
+      const player = cachePlayer, original = originalSourceSetter;
+      cachePlayer = null; originalSourceSetter = null;
+      if (player && original) player.src = original;
+      try { player?.error?.(null); } catch (_) {}
+      const resolver = window.__bahaCacheOriginalSource;
+      Promise.resolve(nativeQuality?.reload(player, c.media, cacheTimeline)).catch(() => false).finally(() => {
+        if (window.__bahaCacheOriginalSource === resolver) {
+          delete window.__bahaCacheOriginalSource;
+          delete window.__bahaCacheBase;
+        }
+        cacheRecovering = false;
+        if (window.__bahaDocumentNonce === nonce) tick();
+      });
+    }
     if (c.matches) mount(c.root);
     applyDanmaku(c);
     metadata();
@@ -178,11 +200,15 @@
       enabled.length === 1 && qualities.length > 1 ? enabled[0] : 0;
     const danmaku = c.root?.querySelector('.vjs-danmu');
     const body = {
-      type: 'player-state', phase: c.phase, surfaceReady: !!c.root && c.matches,
+      type: 'player-state', phase: cacheRecovering ? 'loading' : c.phase, surfaceReady: !!c.root && c.matches,
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
       position, duration, buffered, rate: c.media?.playbackRate || 1,
       qualities, quality,
+      mediaSource: c.phase === 'content' && !c.player?.tech?.(true)?.vhs
+        ? nativeQuality?.source(c.player, c.media) || null : null,
+      cacheActive: cacheEnabled,
+      cacheFailed,
       hasDanmaku: !!danmaku, danmaku: !!danmaku && getComputedStyle(danmaku).display !== 'none'
     };
     const serialized = JSON.stringify(body);
@@ -222,9 +248,79 @@
       tick(); return true;
     } catch (_) { return false; }
   }
+  async function enableCache(ticket, source, base) {
+    if (ticket !== nonce || window.__bahaDocumentNonce !== nonce || cachePlayer ||
+        !nativeQuality) return false;
+    if (nativeQuality.isSwitching()) return null;
+    const c = context();
+    if (!c.matches || c.phase !== 'content' || !c.media || !(c.media.duration > 0) ||
+        c.player?.tech?.(true)?.vhs) return false;
+    if (nativeQuality.source(c.player, c.media) !== source) return null;
+    let origin;
+    try {
+      origin = new URL(base);
+      if (origin.protocol !== 'http:' || origin.hostname !== 'localhost' ||
+          Number(origin.port) < 1024 || origin.username || origin.password ||
+          origin.search || origin.hash ||
+          !/^\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/$/i.test(origin.pathname)) return false;
+    } catch (_) { return false; }
+    function upstream(raw) {
+      try {
+        const value = new URL(raw);
+        if (value.origin === origin.origin && value.pathname.startsWith(origin.pathname)) {
+          return value.searchParams.get('u') || raw;
+        }
+      } catch (_) {}
+      return raw;
+    }
+    function proxy(raw) {
+      try {
+        const value = new URL(raw);
+        if (value.origin !== 'https://bahamut.akamaized.net' || value.username || value.password ||
+            value.hash || !/\.m3u8$/i.test(value.pathname) || !nativeQuality.owns(value.href)) return raw;
+        const local = new URL('media.m3u8', origin);
+        local.searchParams.set('u', value.href);
+        return local.href;
+      } catch (_) { return raw; }
+    }
+    const snapshot = {position: c.media.currentTime, rate: c.media.playbackRate,
+      paused: c.media.paused, muted: c.media.muted};
+    cacheTimeline = snapshot;
+    cachePlayer = c.player;
+    originalSourceSetter = c.player.src;
+    const original = originalSourceSetter;
+    const setter = function (value) {
+      if (arguments.length === 0) return original.call(this);
+      const convert = item => typeof item === 'string' ? proxy(item) :
+        item && typeof item.src === 'string' ? {...item, src: proxy(item.src)} : item;
+      return original.call(this, Array.isArray(value) ? value.map(convert) : convert(value));
+    };
+    window.__bahaCacheOriginalSource = upstream;
+    window.__bahaCacheBase = base;
+    c.player.src = setter;
+    if (await nativeQuality.reload(c.player, c.media, snapshot)) {
+      cacheEnabled = true; tick(); return true;
+    }
+    if (c.player.src === setter) c.player.src = original;
+    // A local gateway failure restores the official authorized source and the
+    // previous timeline; it never changes the official ad/entitlement state.
+    if (window.__bahaDocumentNonce === nonce) {
+      await nativeQuality.reload(c.player, c.media, snapshot);
+    }
+    if (window.__bahaCacheOriginalSource === upstream) {
+      delete window.__bahaCacheOriginalSource;
+      delete window.__bahaCacheBase;
+    }
+    cachePlayer = null; originalSourceSetter = null;
+    return false;
+  }
   function dispose() {
     clearInterval(timer);
     nativeQuality?.dispose();
+    cacheEnabled = false;
+    if (cachePlayer && originalSourceSetter) cachePlayer.src = originalSourceSetter;
+    delete window.__bahaCacheOriginalSource;
+    delete window.__bahaCacheBase;
     style?.remove();
     document.documentElement.classList.remove('baha-native-controls');
     document.querySelectorAll('#video-container .vjs-control-bar,#video-container .vjs-big-play-button').forEach(node => {
@@ -232,7 +328,7 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  window.__bahaPlayerBridge = { ticket: nonce, command, configure, dispose };
+  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, dispose };
   tick();
   timer = setInterval(tick, 500);
 })(); true;

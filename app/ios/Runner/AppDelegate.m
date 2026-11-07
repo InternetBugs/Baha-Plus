@@ -2,9 +2,11 @@
 #import "GeneratedPluginRegistrant.h"
 #import <AVFAudio/AVFAudio.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import "Runner-Swift.h"
 
 @interface AppDelegate ()
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
+@property(nonatomic, strong) FlutterMethodChannel *playbackCacheChannel;
 @end
 
 @implementation AppDelegate
@@ -17,6 +19,24 @@
   [GeneratedPluginRegistrant registerWithRegistry:engineBridge.pluginRegistry];
   NSObject<FlutterPluginRegistrar> *registrar =
       [engineBridge.pluginRegistry registrarForPlugin:@"BahaMediaSession"];
+  self.playbackCacheChannel =
+      [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/hls_cache"
+                                 binaryMessenger:registrar.messenger];
+  [self.playbackCacheChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    NSDictionary *arguments = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
+    if ([call.method isEqualToString:@"prepare"]) {
+      [[PlaybackCache shared] prepare:arguments completion:^(NSDictionary *value) { result(value); }];
+    } else if ([call.method isEqualToString:@"update"]) {
+      [[PlaybackCache shared] update:arguments];
+      result(nil);
+    } else if ([call.method isEqualToString:@"stop"]) {
+      NSString *document = [arguments[@"document"] isKindOfClass:[NSString class]] ? arguments[@"document"] : @"";
+      [[PlaybackCache shared] stop:document];
+      result(nil);
+    } else {
+      result(FlutterMethodNotImplemented);
+    }
+  }];
   self.mediaSessionChannel =
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/media_session"
                                  binaryMessenger:registrar.messenger];
@@ -41,6 +61,17 @@
     }
     result(nil);
   }];
+}
+
+- (void)application:(UIApplication *)application
+    handleEventsForBackgroundURLSession:(NSString *)identifier
+    completionHandler:(void (^)(void))completionHandler {
+  if ([identifier isEqualToString:PlaybackCache.identifier]) {
+    [[PlaybackCache shared] reconnect:completionHandler];
+  } else {
+    [super application:application handleEventsForBackgroundURLSession:identifier
+        completionHandler:completionHandler];
+  }
 }
 @end
 

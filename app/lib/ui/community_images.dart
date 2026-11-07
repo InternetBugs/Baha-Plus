@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'secondary_page_route.dart';
 
 class CommentAvatar extends StatelessWidget {
   const CommentAvatar({this.url, this.size = 36, super.key});
@@ -55,8 +56,8 @@ class CommentAttachment extends StatelessWidget {
       key: ValueKey('comment-attachment-$url'),
       onTap: () => Navigator.push<void>(
         context,
-        CupertinoPageRoute(
-          fullscreenDialog: true,
+        SecondaryPageRoute(
+          keepsPlaybackVisible: store.showsPlayer,
           builder: (_) => _AttachmentViewer(store: store, url: url),
         ),
       ),

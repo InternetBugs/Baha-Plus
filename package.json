@@ -17,7 +17,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/native-adapters.test.ts tests/native-hls.test.ts",
+    "test": "tsx --test tests/native-adapters.test.ts tests/native-hls.test.ts tests/hls-cache.test.ts",
     "resources:check": "node tools/check-native-resources.mjs",
     "resources:search": "node tools/generate-search-folding.mjs",
     "icons": "node tools/generate-native-icons.mjs"

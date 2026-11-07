@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'secondary_page_route.dart';
 
 class SynopsisSection extends StatelessWidget {
   const SynopsisSection({
@@ -43,8 +44,8 @@ class SynopsisSection extends StatelessWidget {
             height: 42,
             onTap: () => Navigator.push<void>(
               context,
-              CupertinoPageRoute(
-                fullscreenDialog: true,
+              SecondaryPageRoute(
+                keepsPlaybackVisible: store.showsPlayer,
                 builder: (_) => SynopsisPage(
                   store: store,
                   title: title,

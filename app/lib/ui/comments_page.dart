@@ -7,6 +7,7 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_images.dart';
 import 'community_widgets.dart';
+import 'secondary_page_route.dart';
 
 Future<void> openComments(
   BuildContext context,
@@ -17,8 +18,8 @@ Future<void> openComments(
   List<Episode> episodes = const [],
   String episodeLabel = '',
 }) => Navigator.of(context).push<void>(
-  CupertinoPageRoute(
-    fullscreenDialog: true,
+  SecondaryPageRoute(
+    keepsPlaybackVisible: store.showsPlayer,
     builder: (_) => CommentsPage(
       store: store,
       videoId: videoId,

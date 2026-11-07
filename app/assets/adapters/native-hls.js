@@ -6,6 +6,7 @@
     const live = () => !disposed && isCurrent();
     function url(raw, base = location.href) {
       try {
+        raw = window.__bahaCacheOriginalSource?.(raw) || raw;
         const value = new URL(raw, base);
         return value.origin === 'https://bahamut.akamaized.net' &&
           !value.username && !value['pass' + 'word'] &&
@@ -65,10 +66,17 @@
           (height !== 0 && !variants.has(height)) || !owns(current(player, media))) return false;
       const target = height === 0 ? master : variants.get(height);
       if (!target || variants.size === 0) return false;
+      return changeSource(target, height, player, media);
+    }
+    async function reload(player, media, snapshot) {
+      return changeSource(current(player, media), selected, player, media, snapshot, true);
+    }
+    async function changeSource(target, height, player, media, snapshot, force = false) {
+      if (!live() || switching || !target || !owns(current(player, media))) return false;
       const previous = current(player, media), previousChoice = selected;
-      if (previous === target) { selected = height; onChange(); return true; }
-      const position = media.currentTime, rate = media.playbackRate;
-      const paused = media.paused, muted = media.muted;
+      if (previous === target && !force) { selected = height; onChange(); return true; }
+      const position = snapshot?.position ?? media.currentTime, rate = snapshot?.rate ?? media.playbackRate;
+      const paused = snapshot?.paused ?? media.paused, muted = snapshot?.muted ?? media.muted;
       const type = player.currentSource?.()?.type || 'application/x-mpegURL';
       switching = true;
       function load(source) {
@@ -88,14 +96,22 @@
                   Number.isFinite(duration) ? duration : position)));
                 player.playbackRate(rate);
                 player.muted(muted);
-                if (paused) player.pause();
+                if (paused || window.__bahaMediaSuspended === true) player.pause();
                 else player.play()?.catch(() => {});
               } catch (_) { ok = false; }
             } else ok = false;
             resolve(ok);
           };
           const ready = () => done(true), failed = () => done(false);
-          const timer = setTimeout(failed, 15000);
+          let remaining = 15000, checked = Date.now();
+          const checkTimeout = () => {
+            const now = Date.now();
+            if (window.__bahaMediaSuspended !== true) remaining -= Math.min(1000, Math.max(0, now - checked));
+            checked = now;
+            if (remaining <= 0) failed();
+            else timer = setTimeout(checkTimeout, 1000);
+          };
+          let timer = setTimeout(checkTimeout, 1000);
           cancelSwitch = failed;
           player.one('loadedmetadata', ready);
           player.one('error', failed);
@@ -106,7 +122,7 @@
         const ok = await load(target);
         if (!live()) return false;
         if (ok) selected = height;
-        else if (current(player, media) === target && previous) {
+        else if (previous !== target && current(player, media) === target && previous) {
           await load(previous);
           selected = previousChoice;
         }
@@ -121,6 +137,6 @@
       fetchController?.abort();
       cancelSwitch?.();
     }
-    return { update, state, select, dispose };
+    return { update, state, select, reload, source: current, owns, isSwitching: () => switching, dispose };
   };
 })(); true;

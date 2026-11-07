@@ -11,6 +11,7 @@ import '../core/browser_presentation.dart';
 import '../core/community.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
+import '../data/ios_hls_cache.dart';
 import 'player_page.dart';
 
 /// One persistent native WebView owns the official login and player session.
@@ -25,13 +26,117 @@ class OfficialBrowser extends StatefulWidget {
 class _OfficialBrowserState extends State<OfficialBrowser>
     implements OfficialPortal {
   InAppWebViewController? _controller;
+  // Keep the plugin delegate and its controller together across route and
+  // layout rebuilds, as well as retaining the native view with the GlobalKey.
+  InAppWebView? _webView;
   final _progress = ValueNotifier<int>(0);
   final _webViewKey = GlobalKey(debugLabel: 'official-video-session');
   bool _desktop = false;
   bool _publicDocumentReady = false;
   String? _nativeAgent;
   int _documentGeneration = 0;
+  final _hlsCache = IOSHlsCache();
+  String? _preparingCacheDocument;
+  String? _cacheAttemptedDocument;
+  bool _cacheInUse = false;
   AppStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    store.addListener(_cacheSessionChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant OfficialBrowser oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != store) {
+      oldWidget.store.removeListener(_cacheSessionChanged);
+      store.addListener(_cacheSessionChanged);
+      _cacheSessionChanged();
+    }
+  }
+
+  void _cacheSessionChanged() {
+    final document = _hlsCache.document;
+    if (document != null &&
+        (!store.showsPlayer ||
+            !store.browserVisible ||
+            store.operation.id != document)) {
+      unawaited(_hlsCache.stop(document));
+      _cacheInUse = false;
+    }
+  }
+
+  Future<void> _syncHlsCache(Json body, String document) async {
+    if (!Platform.isIOS ||
+        !mounted ||
+        !store.showsPlayer ||
+        !store.browserVisible ||
+        store.operation.id != document ||
+        body['type'] != 'player-state') {
+      return;
+    }
+    if (_cacheInUse && body['cacheFailed'] == true) {
+      _cacheInUse = false;
+      await _hlsCache.stop(document);
+      return;
+    }
+    if (body['phase'] != 'content') return;
+    final source = body['mediaSource'];
+    if (source is! String || !IOSHlsCache.validSource(source)) return;
+    if (_hlsCache.document == document) {
+      await _hlsCache.update(document, store.playback.value.position);
+    }
+    if (_preparingCacheDocument == document ||
+        _cacheAttemptedDocument == document ||
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    _preparingCacheDocument = document;
+    try {
+      final endpoint = await _hlsCache.prepare(
+        document: document,
+        videoId: store.playingVideoId!,
+        source: source,
+      );
+      if (endpoint == null) {
+        _cacheAttemptedDocument = document;
+        return;
+      }
+      if (!mounted || store.operation.id != document || !store.showsPlayer) {
+        await _hlsCache.stop(document);
+        return;
+      }
+      final result = await _controller?.callAsyncJavaScript(
+        arguments: {
+          'ticket': document,
+          'source': source,
+          'base': endpoint.base,
+        },
+        functionBody: '''
+return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
+''',
+      );
+      if (!mounted || store.operation.id != document || !store.showsPlayer) {
+        await _hlsCache.stop(document);
+        return;
+      }
+      if (result?.value == null && result?.error == null) return;
+      _cacheAttemptedDocument = document;
+      if (result?.value != true || result?.error != null) {
+        await _hlsCache.stop(document);
+      } else {
+        _cacheInUse = true;
+        await _hlsCache.update(document, store.playback.value.position);
+      }
+    } catch (_) {
+      _cacheAttemptedDocument = document;
+      await _hlsCache.stop(document);
+    } finally {
+      if (_preparingCacheDocument == document) _preparingCacheDocument = null;
+    }
+  }
 
   InAppWebViewSettings _settingsForMode(bool desktop) => InAppWebViewSettings(
     // Keep Android video and Flutter controls in the texture compositor.
@@ -261,12 +366,19 @@ try {
           final origin = Uri.tryParse(sourceOrigin.toString());
           final source = Uri.tryParse(nativeUrl.toString());
           if (origin != null && source != null) {
+            final body = store.operation.accept(
+              raw,
+              origin: origin,
+              source: source,
+              isMainFrame: isMainFrame,
+            );
             await store.receive(
               raw,
               origin: origin,
               source: source,
               isMainFrame: isMainFrame,
             );
+            if (body != null) unawaited(_syncHlsCache(body, requestId));
           }
         },
       ),
@@ -348,7 +460,7 @@ try {
   Widget _surface(Color background) => Stack(
     fit: StackFit.expand,
     children: [
-      InAppWebView(
+      _webView ??= InAppWebView(
         key: _webViewKey,
         initialSettings: _settingsForMode(_desktop),
         initialUserScripts: UnmodifiableListView([
@@ -464,6 +576,9 @@ try {
 
   @override
   void dispose() {
+    store.removeListener(_cacheSessionChanged);
+    final document = _hlsCache.document;
+    if (document != null) unawaited(_hlsCache.stop(document));
     _progress.dispose();
     super.dispose();
   }

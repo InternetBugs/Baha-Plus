@@ -135,3 +135,20 @@ invalid.m3u8`);
   assert.equal(await f.client.select(1080, f.player, f.media), false);
   f.expire();
 });
+
+test('cache source migration keeps the timeline and background completion stays paused', async () => {
+  const f = fixture();
+  f.client.update(f.player, f.media);
+  await flush();
+  const snapshot = {position: 37.4, rate: 1.25, paused: false, muted: true};
+  const pending = f.client.reload(f.player, f.media, snapshot);
+  assert.equal(f.requests[0], master);
+  f.context.window.__bahaMediaSuspended = true;
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.media.currentTime, 37.4);
+  assert.equal(f.media.playbackRate, 1.25);
+  assert.equal(f.media.paused, true);
+  assert.equal(f.media.muted, true);
+  f.expire();
+});

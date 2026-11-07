@@ -511,6 +511,8 @@ function playerFixture(nativeHls = false) {
   const levels = [{ height: 720, enabled: true }, { height: 1080, enabled: true }];
   let tick = () => {};
   let stopped = false;
+  const sources: string[] = [];
+  const mediaEvents = new Map<string, Set<() => void>>();
   Object.defineProperties(media, Object.fromEntries(Object.entries({
     duration: 1200, currentTime: 37, paused: false, ended: false, muted: false,
     playbackRate: 1, readyState: 4, error: null,
@@ -534,8 +536,20 @@ function playerFixture(nativeHls = false) {
   if (nativeHls) {
     levels.length = 0;
     const master = 'https://bahamut.akamaized.net/series/master.m3u8';
-    (fixture.document.querySelector('#ani_video') as any).player.currentSource =
-      () => ({ src: master, type: 'application/x-mpegURL' });
+    let source = master;
+    const player = (fixture.document.querySelector('#ani_video') as any).player;
+    player.currentSource = () => ({ src: source, type: 'application/x-mpegURL' });
+    player.one = (name: string, handler: () => void) => {
+      if (!mediaEvents.has(name)) mediaEvents.set(name, new Set());
+      mediaEvents.get(name)!.add(handler);
+    };
+    player.off = (name: string, handler: () => void) => mediaEvents.get(name)?.delete(handler);
+    player.src = (value: {src: string}) => {
+      source = value.src; sources.push(source);
+      media.currentSrc = source; media.currentTime = 0; media.duration = 0;
+      media.paused = true; media.readyState = 0; media.error = null;
+    };
+    player.duration = () => media.duration;
     fixture.context.fetch = async () => ({
       ok: true, url: master, text: async () => `#EXTM3U
 #EXT-X-STREAM-INF:RESOLUTION=640x360
@@ -546,7 +560,11 @@ function playerFixture(nativeHls = false) {
     vm.runInContext(fs.readFileSync(folder + 'native-hls.js', 'utf8'), fixture.context);
   }
   vm.runInContext(fs.readFileSync(folder + 'player.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
-  return { ...fixture, core, controls, media, commands, levels, fault, tick: () => tick(), stopped: () => stopped,
+  const emit = (name: string) => {
+    if (name === 'loadedmetadata') { media.duration = 1200; media.readyState = 4; }
+    for (const callback of [...(mediaEvents.get(name) || [])]) callback();
+  };
+  return { ...fixture, core, controls, media, commands, levels, fault, emit, sources, tick: () => tick(), stopped: () => stopped,
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
 
@@ -636,6 +654,89 @@ test('native HLS resolutions reach the Flutter bridge without enabling quality c
   fixture.core.state.playingAd = true;
   assert.equal(await fixture.bridge.command('ticket', 'quality', 720), false);
   fixture.bridge.dispose();
+});
+
+test('iOS background cache migrates only approved content and preserves quality controls', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const source = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const base = 'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/';
+  const enabled = f.bridge.enableCache('ticket', source, base);
+  assert.equal(new URL(f.sources[0]).origin, 'http://localhost:12345');
+  assert.equal(new URL(f.sources[0]).searchParams.get('u'), source);
+  f.emit('loadedmetadata');
+  assert.equal(await enabled, true);
+  assert.equal(f.media.currentTime, 37);
+  assert.equal(f.media.paused, false);
+  const selected = f.bridge.command('ticket', 'quality', 720);
+  assert.equal(new URL(f.sources[1]).searchParams.get('u'),
+    'https://bahamut.akamaized.net/series/720/index.m3u8');
+  f.context.window.__bahaMediaSuspended = true;
+  f.emit('loadedmetadata');
+  assert.equal(await selected, true);
+  assert.equal(f.media.paused, true);
+  assert.equal(f.media.currentTime, 37);
+  f.core.state.playingAd = true; f.core.state.playingVideo = false;
+  (f.document.querySelector('#ani_video') as any).player.src({
+    src: 'https://bahamut.akamaized.net/ads/preroll.m3u8',
+  });
+  assert.equal(f.sources.at(-1), 'https://bahamut.akamaized.net/ads/preroll.m3u8');
+  f.bridge.dispose();
+  assert.equal(f.context.window.__bahaCacheBase, undefined);
+});
+
+test('an unavailable local cache restores the official source without restarting the document', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const source = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const pending = f.bridge.enableCache('ticket', source,
+    'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/');
+  f.emit('error');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sources[1], source);
+  f.emit('loadedmetadata');
+  assert.equal(await pending, false);
+  assert.equal(f.media.currentTime, 37);
+  assert.equal(f.context.window.__bahaDocumentNonce, 'ticket');
+  assert.equal(f.context.window.__bahaCacheBase, undefined);
+  f.bridge.dispose();
+});
+
+test('cache setup rejects ads, stale tickets and remote gateways', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const source = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const base = 'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/';
+  assert.equal(await f.bridge.enableCache('stale', source, base), false);
+  assert.equal(await f.bridge.enableCache('ticket', source, base.replace('localhost', 'attacker.test')), false);
+  f.core.state.playingAd = true; f.core.state.playingVideo = false;
+  assert.equal(await f.bridge.enableCache('ticket', source, base), false);
+  assert.deepEqual(f.sources, []);
+  f.bridge.dispose();
+});
+
+test('a later cache transport error restores official playback once, at the saved position', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const source = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const pending = f.bridge.enableCache('ticket', source,
+    'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/');
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  f.media.currentTime = 67;
+  f.tick();
+  f.media.error = {code: 2};
+  f.tick();
+  assert.equal(f.sources[1], source);
+  f.emit('loadedmetadata');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.media.currentTime, 67);
+  assert.equal(f.context.window.__bahaCacheBase, undefined);
+  assert.equal(f.messages.at(-1).cacheFailed, true);
+  assert.equal(f.messages.at(-1).phase, 'content');
+  f.tick();
+  assert.equal(f.sources.length, 2);
+  f.bridge.dispose();
 });
 
 test('native player projects real metadata and uses the official core to gate controls', async () => {
