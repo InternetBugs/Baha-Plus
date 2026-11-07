@@ -350,12 +350,7 @@ class _PlayerPageState extends State<PlayerPage> {
           fit: StackFit.expand,
           children: [
             if (!state.surfaceReady && !store.browserError)
-              const ColoredBox(
-                color: Colors.black,
-                child: Center(
-                  child: CupertinoActivityIndicator(color: Colors.white),
-                ),
-              ),
+              const ColoredBox(color: Colors.black),
             if (state.canControl)
               GestureDetector(
                 key: const ValueKey('player-controls-toggle'),
@@ -373,6 +368,21 @@ class _PlayerPageState extends State<PlayerPage> {
                         }
                       }
                     : null,
+              ),
+            if (!store.browserError &&
+                (state.phase == PlaybackPhase.loading ||
+                    (state.phase == PlaybackPhase.content && state.buffering)))
+              Center(
+                child: IgnorePointer(
+                  child: Semantics(
+                    label: store.t('loading'),
+                    child: const CupertinoActivityIndicator(
+                      key: ValueKey('player-loading-indicator'),
+                      color: Colors.white,
+                      radius: 12,
+                    ),
+                  ),
+                ),
               ),
             if (!store.playerFullscreen)
               Positioned(
@@ -482,13 +492,13 @@ class _PlayerPageState extends State<PlayerPage> {
     valueListenable: store.playback,
     builder: (context, state, child) {
       final key = switch (state.phase) {
-        PlaybackPhase.content => state.buffering ? 'loading' : null,
+        PlaybackPhase.content => null,
         PlaybackPhase.age => 'playerAgeHint',
         PlaybackPhase.advertisement => null,
         PlaybackPhase.error => 'playerPlaybackError',
         PlaybackPhase.verification => 'officialVerificationHint',
         PlaybackPhase.official => 'playerConfirmHint',
-        PlaybackPhase.loading => 'loading',
+        PlaybackPhase.loading => null,
       };
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
