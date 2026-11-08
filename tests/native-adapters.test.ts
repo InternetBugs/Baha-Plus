@@ -826,6 +826,62 @@ test('system pause during a quality load prevents playback after the new source 
   f.bridge.dispose();
 });
 
+test('an initial fixed source retains manual quality controls on a VHS backend', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const player = (f.document.querySelector('#ani_video') as any).player;
+  const master = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const selected = 'https://bahamut.akamaized.net/series/720/index.m3u8';
+  player.tech = () => ({vhs: {}});
+  f.context.window.__bahaInitialHls = {
+    videoId: '20', master, source: selected, quality: 720,
+    variants: [[360, 'https://bahamut.akamaized.net/series/360/index.m3u8'], [720, selected]],
+  };
+  player.src({src: selected}); f.emit('loadedmetadata'); f.tick();
+  assert.equal(f.messages.at(-1).quality, 720);
+  assert.deepEqual(Array.from(f.messages.at(-1).qualities), [720, 360]);
+  const pending = f.bridge.command('ticket', 'quality', 360);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sources.at(-1), 'https://bahamut.akamaized.net/series/360/index.m3u8');
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.messages.at(-1).quality, 360);
+  f.bridge.dispose();
+});
+
+test('a process recovery checkpoint restores time, rate and mute once after content authorization', () => {
+  const f = playerFixture();
+  f.context.window.__bahaPlaybackCheckpoint = {
+    videoId: '20', position: 506.8, rate: 1.5, muted: true, paused: true,
+  };
+  f.media.currentTime = 0;
+  f.core.state.playingVideo = false; f.core.state.playingAd = true;
+  f.tick();
+  assert.equal(f.media.currentTime, 0);
+  f.core.state.playingVideo = true; f.core.state.playingAd = false;
+  f.tick();
+  assert.equal(f.media.currentTime, 506.8);
+  assert.equal(f.media.playbackRate, 1.5);
+  assert.equal(f.media.muted, true);
+  assert.equal(f.media.paused, true);
+  assert.equal(f.messages.at(-1).checkpointRestored, true);
+  f.media.currentTime = 510; f.tick();
+  assert.equal(f.media.currentTime, 510);
+  f.bridge.dispose();
+});
+
+test('playback health exposes bounded numeric diagnostics without media URLs', () => {
+  const f = playerFixture();
+  const diagnostic = f.bridge.diagnostics();
+  assert.equal(diagnostic.position, 37);
+  assert.equal(diagnostic.duration, 1200);
+  assert.equal(diagnostic.videos, 1);
+  assert.ok(diagnostic.domNodes > 0);
+  assert.equal(typeof diagnostic.bufferAhead, 'number');
+  assert.ok(!JSON.stringify(diagnostic).includes('http'));
+  f.bridge.dispose();
+});
+
 test('background elapsed time is excluded from both the projected and restored playback position', async () => {
   const f = playerFixture();
   f.media.currentTime = 137.5;

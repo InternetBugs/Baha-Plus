@@ -14,6 +14,7 @@
   let suspendedTimeline = null, lifecycleSuspended = window.__bahaMediaSuspended === true;
   let qualityQueue = Promise.resolve(), qualityList = null;
   let lastProgress = null, stalledSince = 0, recoveryAfter = 0, recoveryCount = 0;
+  let checkpointRestored = false;
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -29,6 +30,7 @@
     return levels ? Array.from({ length: levels.length }, (_, i) => levels[i]) : [];
   }
   const nativeHls = c => !c.player?.tech?.(true)?.vhs && !!nativeQuality?.source(c.player, c.media);
+  const sourceQuality = c => nativeHls(c) || nativeQuality?.hasInitialSelection(c.player, c.media);
   const snapshot = c => nativeQuality?.timeline() || {
     position: c.media.currentTime, rate: c.media.playbackRate,
     paused: c.media.paused, muted: c.media.muted
@@ -41,6 +43,7 @@
     lifecycleSuspended = true;
     window.__bahaMediaSuspended = true;
     nativeQuality?.suspend();
+    if (window.__bahaPlaybackCheckpoint?.videoId === videoID) window.__bahaPlaybackCheckpoint.paused = true;
     c.player?.pause();
     c.media?.pause?.();
     lastProgress = null;
@@ -70,6 +73,54 @@
     if (document.visibilityState === 'hidden' && window.__bahaMediaSuspended === true) suspend();
     // Flutter owns foreground activation; visibility alone cannot override
     // an application that is still in the background.
+  }
+  function restoreCheckpoint(c) {
+    const saved = window.__bahaPlaybackCheckpoint;
+    if (!saved || saved.videoId !== videoID || c.phase !== 'content' ||
+        !c.media || !(c.media.duration > 0) || c.media.readyState < 1 ||
+        nativeQuality?.isSwitching()) return false;
+    if (!Number.isFinite(saved.position) || saved.position < 0 || saved.position > 172800 ||
+        ![.5, .75, 1, 1.25, 1.5, 1.75, 2].includes(saved.rate) ||
+        typeof saved.paused !== 'boolean' || typeof saved.muted !== 'boolean') {
+      window.__bahaPlaybackCheckpoint = null; return false;
+    }
+    const target = Math.min(saved.position, c.media.duration);
+    if (!saved.positioned) {
+      saved.positioned = true;
+      c.player.currentTime(target);
+    }
+    c.player.playbackRate(saved.rate);
+    c.player.muted(saved.muted);
+    if (saved.paused || window.__bahaMediaSuspended === true) c.player.pause();
+    if (c.media.seeking || Math.abs(c.media.currentTime - target) > 1) return true;
+    checkpointRestored = true;
+    window.__bahaPlaybackCheckpoint = null;
+    return false;
+  }
+  function diagnostics() {
+    const c = context(), media = c.media;
+    let start = 0, end = 0, ranges = 0;
+    try {
+      ranges = media?.buffered.length || 0;
+      if (ranges) {start = media.buffered.start(0); end = media.buffered.end(ranges - 1);}
+    } catch (_) {}
+    const canvases = [...document.querySelectorAll('canvas')];
+    const heap = window.performance?.memory;
+    return {
+      phase: c.phase, backend: c.player?.tech?.(true)?.vhs ? 'vhs' : 'native-hls',
+      position: finite(media?.currentTime), duration: finite(media?.duration),
+      paused: media?.paused !== false, readyState: media?.readyState ?? 0,
+      videoWidth: media?.videoWidth || 0, videoHeight: media?.videoHeight || 0,
+      bufferRanges: ranges, bufferBehind: finite((media?.currentTime || 0) - start),
+      bufferAhead: finite(end - (media?.currentTime || 0)),
+      domNodes: document.querySelectorAll('*').length,
+      danmakuNodes: c.root?.querySelector('.vjs-danmu')?.querySelectorAll('*').length || 0,
+      canvases: canvases.length, canvasPixels: canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0),
+      iframes: document.querySelectorAll('iframe').length,
+      videos: document.querySelectorAll('video').length,
+      heapUsed: Number.isFinite(heap?.usedJSHeapSize) ? heap.usedJSHeapSize : null,
+      cacheActive: cacheEnabled, checkpointRestored
+    };
   }
   function applyQuality(c, value) {
     const levels = qualityLevels(c.player);
@@ -244,6 +295,7 @@
   function tick() {
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
     const c = context();
+    const restoringCheckpoint = restoreCheckpoint(c);
     if (!lifecycleSuspended) restoreSuspended(c);
     const now = Date.now();
     if (!lifecycleSuspended && !cacheRecovering && !nativeQuality?.isSwitching() &&
@@ -286,7 +338,7 @@
       node.inert = nativeControls;
     });
     const levels = qualityLevels(c.player).filter(l => Number.isInteger(l.height) && l.height >= 144 && l.height <= 4320);
-    const native = nativeHls(c) && c.matches &&
+    const native = sourceQuality(c) && c.matches &&
       c.phase === 'content' ? nativeQuality?.update(c.player, c.media) : null;
     if (!native && requestedQuality !== null && c.phase === 'content' && levels[0] !== qualityList &&
         (requestedQuality === 0 || levels.some(level => level.height === requestedQuality))) applyQuality(c, requestedQuality);
@@ -298,15 +350,17 @@
       enabled.length === 1 && qualities.length > 1 ? enabled[0] : 0;
     const danmaku = c.root?.querySelector('.vjs-danmu');
     const body = {
-      type: 'player-state', phase: cacheRecovering ? 'loading' : c.phase, surfaceReady: !!c.root && c.matches,
+      type: 'player-state', phase: cacheRecovering || restoringCheckpoint ? 'loading' : c.phase, surfaceReady: !!c.root && c.matches,
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
       position, duration, buffered, rate: c.media?.playbackRate || 1,
       qualities, quality,
       mediaSource: c.phase === 'content' && !c.player?.tech?.(true)?.vhs
         ? nativeQuality?.source(c.player, c.media) || null : null,
+      mediaSources: nativeQuality?.hasInitialSelection(c.player, c.media) ? nativeQuality.sources() : [],
       cacheActive: cacheEnabled,
       cacheFailed,
+      checkpointRestored,
       hasDanmaku: !!danmaku, danmaku: !!danmaku && getComputedStyle(danmaku).display !== 'none'
     };
     const serialized = JSON.stringify(body);
@@ -322,8 +376,11 @@
             window.__bahaMediaSuspended === true || !c.matches ||
             c.phase !== 'content' || !c.media || !(c.media.duration > 0) ||
             suspendedTimeline || !Number.isInteger(value)) return false;
-        const accepted = nativeHls(c) ? !!await nativeQuality.select(value, c.player, c.media) : applyQuality(c, value);
-        if (accepted) requestedQuality = value;
+        const accepted = sourceQuality(c) ? !!await nativeQuality.select(value, c.player, c.media) : applyQuality(c, value);
+        if (accepted) {
+          requestedQuality = value;
+          window.__bahaPreferredQuality = value;
+        }
         tick(); return accepted;
       };
       const pending = qualityQueue.then(run, run);
@@ -337,14 +394,21 @@
     if (c.phase === 'advertisement' && !['play', 'pause', 'mute'].includes(action)) return false;
     try {
       if (action === 'play') {
+        if (window.__bahaPlaybackCheckpoint?.videoId === videoID) window.__bahaPlaybackCheckpoint.paused = false;
         restoreSuspended(c);
         if (suspendedTimeline) return false;
         await c.player.play();
       }
-      else if (action === 'pause') { c.player.pause(); nativeQuality?.suspend(); }
+      else if (action === 'pause') {
+        if (window.__bahaPlaybackCheckpoint?.videoId === videoID) window.__bahaPlaybackCheckpoint.paused = true;
+        c.player.pause(); nativeQuality?.suspend();
+      }
       else if (action === 'seek' && Number.isFinite(value)) c.player.currentTime(Math.max(0, Math.min(c.media.duration, value)));
       else if (action === 'rate' && [.5, .75, 1, 1.25, 1.5, 1.75, 2].includes(value)) c.player.playbackRate(value);
-      else if (action === 'mute') c.player.muted(!c.player.muted());
+      else if (action === 'mute') {
+        c.player.muted(!c.player.muted());
+        if (window.__bahaPlaybackCheckpoint?.videoId === videoID) window.__bahaPlaybackCheckpoint.muted = c.media.muted;
+      }
       else if (action === 'danmaku' && (value === 0 || value === 1)) {
         const layer = c.root.querySelector('.vjs-danmu');
         if (!layer) return false;
@@ -440,7 +504,7 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, dispose };
+  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, diagnostics, dispose };
   document.addEventListener('visibilitychange', visibilityChanged);
   try {
     navigator.mediaSession?.setActionHandler('play', () => command(nonce, 'play'));

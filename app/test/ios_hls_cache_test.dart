@@ -166,4 +166,59 @@ void main() {
       await cache.stop(document);
     },
   );
+
+  test(
+    'an initial variant registers its master and other listed variants',
+    () async {
+      const selected = 'https://bahamut.akamaized.net/show/1080.m3u8';
+      const other = 'https://bahamut.akamaized.net/show/720.m3u8';
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            if (call.method != 'prepare') return null;
+            final requested = (call.arguments as Map)['source'] as String;
+            return {
+              'base': base,
+              'url': '${base}media.m3u8?u=${Uri.encodeComponent(requested)}',
+            };
+          });
+      final cache = IOSHlsCache();
+      final result = await cache.prepare(
+        document: document,
+        videoId: '20',
+        source: selected,
+        additionalSources: [source, other],
+      );
+      expect(Uri.parse(result!.url).queryParameters['u'], selected);
+      expect(
+        calls
+            .where((call) => call.method == 'prepare')
+            .map((call) => (call.arguments as Map)['source']),
+        [selected, source, other],
+      );
+      await cache.stop(document);
+    },
+  );
+
+  test(
+    'invalid additional playlists are rejected before opening native transport',
+    () async {
+      final cache = IOSHlsCache();
+      for (final sources in [
+        ['https://attacker.invalid/a.m3u8'],
+        List.filled(21, source),
+      ]) {
+        expect(
+          await cache.prepare(
+            document: document,
+            videoId: '20',
+            source: source,
+            additionalSources: sources,
+          ),
+          isNull,
+        );
+      }
+      expect(calls, isEmpty);
+    },
+  );
 }

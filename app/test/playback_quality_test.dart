@@ -375,4 +375,20 @@ void main() {
       }
     },
   );
+
+  test(
+    'the document-start script receives every saved fixed quality and automatic mode',
+    () async {
+      for (final height in [0, 360, 540, 720, 1080]) {
+        final disk = MemoryStorage()..values[_preferenceKey] = '$height';
+        final store = await launch(disk, FakePortal());
+        expect(store.preferredQuality, height);
+        expect(
+          store.initialQualityScript,
+          contains('window.__bahaPreferredQuality = $height;'),
+        );
+        expect(store.initialQualityScript, isNot(contains('%QUALITY%')));
+      }
+    },
+  );
 }

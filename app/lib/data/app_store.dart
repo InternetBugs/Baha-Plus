@@ -74,6 +74,7 @@ class AppStore extends ChangeNotifier {
       'stop-playback',
       'media-compat',
       'native-hls',
+      'initial-quality',
       'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
@@ -194,6 +195,12 @@ class AppStore extends ChangeNotifier {
   String? _qualityRestoredDocument;
   DateTime? _qualityRetryAfter;
   Future<void> _qualityPreferenceWrite = Future<void>.value();
+  PlaybackState? _lastGoodPlayback;
+  Json? _playerCheckpoint;
+  String? _terminatedPlayerDocument;
+  bool _processRecoveryLoading = false;
+  Timer? _processRecoveryDeadline;
+  final List<DateTime> _processRecoveries = [];
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
@@ -433,6 +440,10 @@ class AppStore extends ChangeNotifier {
   }
 
   String t(String key) => dictionaries[language]?[key] ?? key;
+  int get preferredQuality => _preferredQuality;
+  String get initialQualityScript =>
+      '${scripts['native-hls']}\n'
+      '${scripts['initial-quality']?.replaceAll('%QUALITY%', '$_preferredQuality') ?? ''}';
   bool get simplified => language == 'zh-Hans';
   bool get canRetryFavorite => operation.intent == BrowserIntent.favorite;
   bool get browserIsPlayer =>
@@ -472,6 +483,9 @@ class AppStore extends ChangeNotifier {
   Future<void> setApplicationActive(bool active) async {
     if (_applicationActive == active) return;
     _applicationActive = active;
+    if (!active && _playerCheckpoint != null) {
+      _playerCheckpoint!['paused'] = true;
+    }
     if (active && !browserVisible && !busy && _portal != null) {
       await syncAccount();
     }
@@ -514,6 +528,13 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       return;
     }
     if (value != null && !value.isFinite) return;
+    if (_playerCheckpoint != null) {
+      if (action == 'play' || action == 'pause') {
+        _playerCheckpoint!['paused'] = action == 'pause';
+      } else if (action == 'mute') {
+        _playerCheckpoint!['muted'] = !playback.value.muted;
+      }
+    }
     Future<void>? preferenceWrite;
     if (action == 'quality') {
       if (value == null ||
@@ -865,6 +886,11 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> play(Anime anime, {Episode? episode}) async {
+    _lastGoodPlayback = null;
+    _playerCheckpoint = null;
+    _terminatedPlayerDocument = null;
+    _processRecoveryLoading = false;
+    _processRecoveryDeadline?.cancel();
     if (playingAnime?.id != anime.id) {
       playerDetail = selectedAnime?.id == anime.id ? detail : null;
     }
@@ -892,6 +918,12 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> closeBrowser() async {
+    _lastGoodPlayback = null;
+    _playerCheckpoint = null;
+    _terminatedPlayerDocument = null;
+    _processRecoveryLoading = false;
+    _processRecoveryDeadline?.cancel();
+    _processRecoveries.clear();
     final document = operation.id;
     final releaseSystemMedia = browserIsPlayer;
     final refreshAccount =
@@ -923,6 +955,34 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> reloadBrowser() async {
+    _processRecoveryDeadline?.cancel();
+    _processRecoveryLoading = false;
+    final checkpoint = _terminatedPlayerDocument == null
+        ? null
+        : _playerCheckpoint;
+    _terminatedPlayerDocument = null;
+    if (showsPlayer &&
+        checkpoint != null &&
+        checkpoint['videoId'] == playingVideoId) {
+      playback.value = const PlaybackState();
+      _processRecoveryLoading = true;
+      final target = OfficialSite.video(playingVideoId!).replace(
+        queryParameters: {
+          'sn': playingVideoId!,
+          't': (checkpoint['position'] as num).floor().toString(),
+        },
+      );
+      await _load(target, BrowserIntent.play, visible: true);
+      final document = operation.id;
+      _processRecoveryDeadline = Timer(const Duration(minutes: 2), () {
+        if (!_disposed && operation.id == document && _processRecoveryLoading) {
+          _processRecoveryLoading = false;
+          playback.value = const PlaybackState(phase: PlaybackPhase.error);
+          _emit();
+        }
+      });
+      return;
+    }
     if (showsPlayer) playback.value = const PlaybackState();
     _begin(operation.intent);
     browserError = false;
@@ -930,6 +990,44 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     busy = true;
     _emit();
     await _portal?.reload();
+  }
+
+  Future<void> playerProcessTerminated() async {
+    if (_disposed || _processRecoveryLoading) return;
+    if (!showsPlayer || !browserVisible || playingVideoId == null) {
+      if (browserVisible) navigationFailed();
+      return;
+    }
+    if (_terminatedPlayerDocument == operation.id) return;
+    final current = playback.value;
+    final timeline = _lastGoodPlayback ?? current;
+    final content =
+        current.phase == PlaybackPhase.content && timeline.canControl;
+    _playerCheckpoint = content
+        ? {
+            'videoId': playingVideoId,
+            'position': timeline.position,
+            'rate': timeline.rate,
+            'muted': current.muted,
+            'paused': current.paused || !_applicationActive,
+          }
+        : null;
+    _terminatedPlayerDocument = operation.id;
+    final now = DateTime.now();
+    _processRecoveries.removeWhere(
+      (time) => now.difference(time) > const Duration(minutes: 30),
+    );
+    final automatic =
+        content &&
+        _applicationActive &&
+        !current.paused &&
+        _processRecoveries.length < 2;
+    playback.value = const PlaybackState(phase: PlaybackPhase.error);
+    _emit();
+    if (automatic) {
+      _processRecoveries.add(now);
+      await reloadBrowser();
+    }
   }
 
   Future<void> goBack() async => _portal?.goBack();
@@ -982,6 +1080,8 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 window.__bahaDocumentNonce = ${jsonEncode(operation.id)};
 window.__bahaMediaSuspended = ${!_applicationActive};
 window.__bahaDanmakuPreferences = ${jsonEncode(danmakuSettings.toJson())};
+window.__bahaPreferredQuality = $_preferredQuality;
+window.__bahaPlaybackCheckpoint = ${jsonEncode(_playerCheckpoint)};
 ${_applicationActive ? '' : _suspendMedia} true;
 ''');
     await _runScript('player', {'%ANIME_ID%': playingAnime!.id});
@@ -1111,6 +1211,14 @@ window.__bahaMediaSuspended = false; true;
       }
       if (body['type'] == 'player-state') {
         playback.value = PlaybackState.fromJson(body);
+        if (playback.value.canControl && !playback.value.buffering) {
+          _lastGoodPlayback = playback.value;
+        }
+        if (body['checkpointRestored'] == true && playback.value.canControl) {
+          _playerCheckpoint = null;
+          _processRecoveryLoading = false;
+          _processRecoveryDeadline?.cancel();
+        }
         await _restorePreferredQuality();
       } else {
         playerDetail = AnimeDetail.fromJson(body['detail'] as Json);
@@ -1391,6 +1499,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
     _deadline?.cancel();
     _searchDebounce?.cancel();
     _searchGeneration++;
+    _processRecoveryDeadline?.cancel();
     searchService.dispose();
     playback.dispose();
     super.dispose();

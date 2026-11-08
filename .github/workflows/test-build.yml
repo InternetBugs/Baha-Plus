@@ -49,6 +49,7 @@ jobs:
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
+          flutter test --no-pub --dart-define=BAHA_DIAGNOSTICS=true test/player_session_test.dart test/player_process_recovery_test.dart
       - name: Select test version
         id: version
         env:
@@ -93,7 +94,7 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           flutter pub get --enforce-lockfile
-          flutter build apk --release --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build apk --release --dart-define=BAHA_DIAGNOSTICS=true --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
           mkdir -p test-package
           cp build/app/outputs/flutter-apk/app-release.apk test-package/BahaPlus-Android-test.apk
       - uses: actions/upload-artifact@v4
@@ -126,7 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile
-          flutter build ios --release --no-codesign --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
           test -d build/ios/iphoneos/Runner.app
           mkdir -p test-package/Payload
           cp -R build/ios/iphoneos/Runner.app test-package/Payload/
@@ -212,6 +213,7 @@ jobs:
               "run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
               "android_signing": "production",
               "ios_signing": "unsigned",
+              "diagnostics": True,
               "checks": ["javascript", "python", "flutter-analyze", "flutter-test", "ios-native-tests"],
           }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY

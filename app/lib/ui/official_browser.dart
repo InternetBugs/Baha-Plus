@@ -40,6 +40,12 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   String? _preparingCacheDocument;
   String? _cacheAttemptedDocument;
   bool _cacheInUse = false;
+  int? _queuedInitialQuality;
+  Future<void> _initialQualityWrite = Future<void>.value();
+  Timer? _healthTimer;
+  bool _readingHealth = false;
+  int? _terminatedGeneration;
+  static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   AppStore get store => widget.store;
   bool get _shouldKeepAndroidMediaAlive =>
       defaultTargetPlatform == TargetPlatform.android && store.showsPlayer;
@@ -48,6 +54,12 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   void initState() {
     super.initState();
     store.addListener(_cacheSessionChanged);
+    if (_diagnostics) {
+      _healthTimer = Timer.periodic(
+        const Duration(seconds: 10),
+        (_) => unawaited(_samplePlaybackHealth()),
+      );
+    }
   }
 
   @override
@@ -88,6 +100,14 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     if (body['phase'] != 'content') return;
     final source = body['mediaSource'];
     if (source is! String || !IOSHlsCache.validSource(source)) return;
+    final sources = body['mediaSources'] ?? const [];
+    if (sources is! List ||
+        sources.length > 21 ||
+        sources.any(
+          (value) => value is! String || !IOSHlsCache.validSource(value),
+        )) {
+      return;
+    }
     if (_hlsCache.document == document) {
       await _hlsCache.update(document, store.playback.value.position);
     }
@@ -102,6 +122,10 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         document: document,
         videoId: store.playingVideoId!,
         source: source,
+        additionalSources: sources
+            .cast<String>()
+            .where((value) => value != source)
+            .toList(),
       );
       if (endpoint == null) {
         _cacheAttemptedDocument = document;
@@ -174,7 +198,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
     builtInZoomControls: true,
     displayZoomControls: false,
     safeBrowsingEnabled: true,
-    isInspectable: kDebugMode,
+    isInspectable: kDebugMode || _diagnostics,
   );
 
   Future<void> _configureMode(Uri uri) async {
@@ -193,6 +217,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   @override
   Future<void> load(Uri uri) async {
     if (!OfficialSite.allowedNavigation(uri)) return;
+    await _syncInitialQualityScript();
     await _configureMode(uri);
     await _controller?.loadUrl(
       urlRequest: URLRequest(url: WebUri(uri.toString())),
@@ -200,9 +225,17 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   }
 
   @override
-  Future<void> reload() async => _controller?.reload();
+  Future<void> reload() async {
+    await _syncInitialQualityScript();
+    await _controller?.reload();
+  }
+
   @override
-  Future<void> goBack() async => _controller?.goBack();
+  Future<void> goBack() async {
+    await _syncInitialQualityScript();
+    await _controller?.goBack();
+  }
+
   @override
   Future<dynamic> evaluate(String script) async =>
       _controller?.evaluateJavascript(source: script);
@@ -213,9 +246,11 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
     String action,
     double? value,
   ) async {
+    if (action == 'quality') await _syncInitialQualityScript();
     final result = await _controller?.callAsyncJavaScript(
       arguments: {'ticket': document, 'action': action, 'value': value},
       functionBody: '''
+if (action === 'quality') window.__bahaPreferredQuality = value;
 return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
 ''',
     );
@@ -223,6 +258,72 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
         store.operation.id == document &&
         result?.error == null &&
         result?.value == true;
+  }
+
+  UserScript _initialQualityUserScript() => UserScript(
+    groupName: 'baha-initial-quality',
+    source: store.initialQualityScript,
+    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+    forMainFrameOnly: true,
+  );
+
+  Future<void> _syncInitialQualityScript() {
+    final controller = _controller;
+    final quality = store.preferredQuality;
+    if (controller == null || _queuedInitialQuality == quality) {
+      return _initialQualityWrite;
+    }
+    _queuedInitialQuality = quality;
+    final previous = _initialQualityWrite;
+    final script = _initialQualityUserScript();
+    return _initialQualityWrite = () async {
+      try {
+        await previous;
+      } catch (_) {
+        /* Retry a failed registration. */
+      }
+      if (!mounted || _controller != controller) return;
+      try {
+        await controller.removeUserScriptsByGroupName(
+          groupName: 'baha-initial-quality',
+        );
+        await controller.addUserScript(userScript: script);
+      } catch (_) {
+        if (_queuedInitialQuality == quality) _queuedInitialQuality = null;
+        debugPrint('[BAHA_HEALTH] initial-quality registration unavailable');
+      }
+    }();
+  }
+
+  Future<void> _samplePlaybackHealth() async {
+    if (_readingHealth ||
+        !mounted ||
+        !store.showsPlayer ||
+        !store.browserVisible ||
+        _controller == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.hidden) {
+      return;
+    }
+    _readingHealth = true;
+    try {
+      final result = await _controller!
+          .callAsyncJavaScript(
+            functionBody:
+                'return JSON.stringify(window.__bahaPlayerBridge?.diagnostics() ?? null);',
+          )
+          .timeout(const Duration(seconds: 5));
+      if (mounted &&
+          result?.error == null &&
+          result?.value is String &&
+          result!.value != 'null') {
+        debugPrint('[BAHA_HEALTH] ${result.value}');
+      }
+    } catch (_) {
+      debugPrint('[BAHA_HEALTH] snapshot unavailable');
+    } finally {
+      _readingHealth = false;
+    }
   }
 
   @override
@@ -492,6 +593,7 @@ try {
         key: _webViewKey,
         initialSettings: _settingsForMode(_desktop),
         initialUserScripts: UnmodifiableListView([
+          _initialQualityUserScript(),
           if (Platform.isIOS)
             UserScript(
               source: store.scripts['media-compat']!,
@@ -500,6 +602,13 @@ try {
             ),
         ]),
         onWebViewCreated: _created,
+        onWebContentProcessDidTerminate: (controller) {
+          if (!mounted || _terminatedGeneration == _documentGeneration) return;
+          _terminatedGeneration = _documentGeneration;
+          _publicDocumentReady = false;
+          debugPrint('[BAHA_HEALTH] web-content-process-terminated');
+          unawaited(store.playerProcessTerminated());
+        },
         onLoadStart: (controller, url) async {
           _documentGeneration++;
           _publicDocumentReady = false;
@@ -604,6 +713,7 @@ try {
 
   @override
   void dispose() {
+    _healthTimer?.cancel();
     store.removeListener(_cacheSessionChanged);
     final document = _hlsCache.document;
     if (document != null) unawaited(_hlsCache.stop(document));

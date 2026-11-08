@@ -34,10 +34,13 @@ class IOSHlsCache {
     required String document,
     required String videoId,
     required String source,
+    List<String> additionalSources = const [],
   }) async {
     if (!RegExp(r'^[0-9a-f]{48}$').hasMatch(document) ||
         !RegExp(r'^[0-9]{1,10}$').hasMatch(videoId) ||
-        !validSource(source)) {
+        !validSource(source) ||
+        additionalSources.length > 20 ||
+        additionalSources.any((value) => !validSource(value))) {
       return null;
     }
     if (_document != document) _lastPosition = null;
@@ -78,6 +81,18 @@ class IOSHlsCache {
           url.queryParameters['u'] != source) {
         await stop(document);
         return null;
+      }
+      for (final variant in additionalSources.toSet()..remove(source)) {
+        if (_document != document) return null;
+        final registered = await prepare(
+          document: document,
+          videoId: videoId,
+          source: variant,
+        );
+        if (registered == null || registered.base != base.toString()) {
+          if (_document == document) await stop(document);
+          return null;
+        }
       }
       return HlsCacheEndpoint(base.toString(), url.toString());
     } on MissingPluginException {

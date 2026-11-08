@@ -149,6 +149,21 @@ void main() {
       await frames();
       final session = tester.widget<InAppWebView>(find.byType(InAppWebView));
       expect(
+        session.platform.params.onWebContentProcessDidTerminate,
+        isNotNull,
+      );
+      final initialQuality = session.platform.params.initialUserScripts!
+          .where((script) => script.groupName == 'baha-initial-quality')
+          .single;
+      expect(
+        initialQuality.source,
+        contains('window.__bahaPreferredQuality = 0'),
+      );
+      expect(
+        initialQuality.injectionTime,
+        UserScriptInjectionTime.AT_DOCUMENT_START,
+      );
+      expect(
         session.platform.params.initialSettings!.allowBackgroundAudioPlaying,
         defaultTargetPlatform == TargetPlatform.android,
       );

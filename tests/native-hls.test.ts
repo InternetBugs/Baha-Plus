@@ -192,3 +192,55 @@ test('native HLS waits for seek completion and playable data before acknowledgin
   assert.equal(f.client.state().quality, 720);
   f.expire();
 });
+
+test('native HLS starts the intended playback before waiting for canplay', async () => {
+  const f = fixture();
+  f.client.update(f.player, f.media);
+  await flush();
+  f.media.readyState = 1;
+  const pending = f.client.select(1080, f.player, f.media);
+  f.emit('loadedmetadata');
+  assert.equal(f.media.paused, false);
+  assert.equal(f.client.state().quality, 0);
+  f.media.readyState = 4;
+  f.emit('canplay');
+  assert.equal(await pending, true);
+  assert.equal(f.client.state().quality, 1080);
+  f.expire();
+});
+
+test('a paused native HLS selection can finish at metadata without forcing playback', async () => {
+  const f = fixture();
+  f.client.update(f.player, f.media);
+  await flush();
+  f.media.paused = true;
+  f.media.readyState = 1;
+  const pending = f.client.select(540, f.player, f.media);
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.media.paused, true);
+  assert.equal(f.client.state().quality, 540);
+  f.expire();
+});
+
+test('an initially selected official variant keeps the full quality list and automatic master', async () => {
+  const f = fixture();
+  const source = 'https://bahamut.akamaized.net/series/720/index.m3u8?auth=fixture';
+  f.context.window.__bahaInitialHls = {
+    videoId: '20', master, source, quality: 720,
+    variants: [360, 540, 720, 1080].map(height => [height,
+      `https://bahamut.akamaized.net/series/${height}/index.m3u8?auth=fixture`]),
+  };
+  f.player.src({src: source}); f.media.duration = 1200;
+  f.client.update(f.player, f.media);
+  assert.equal(f.client.hasInitialSelection(f.player, f.media), true);
+  assert.equal(f.client.state().quality, 720);
+  assert.deepEqual(Array.from(f.client.state().qualities), [1080, 720, 540, 360]);
+  assert.equal(f.client.sources().length, 5);
+  const pending = f.client.select(0, f.player, f.media);
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.requests.at(-1), master);
+  assert.equal(f.client.state().quality, 0);
+  f.expire();
+});
