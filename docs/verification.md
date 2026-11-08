@@ -4,6 +4,7 @@
 
 ## 已验证
 
+- 2026-11-08 将观看记录的观看时间、集数与条件式下一集入口同本轮播放器修复整合，源码提交为 `aa68edc`。GitHub Actions **Manual test build**（运行 `42457473209`）完整通过：106 项 Flutter 测试、74 项 JavaScript 测试、12 项 Python 构建工具测试、全项目静态检查、Android Release APK、iOS Release 真机包／Debug 模拟器包编译，以及全部 3 项原生 XCTest。生成 `0.4.1 (4001)` 测试包，Android 使用正式密钥签名、iOS IPA 未签名；最终附件同时包含源码提交记录和 SHA-256 校验文件，保留 14 天。本次只生成 Actions 测试附件，未创建标签或正式 Release；播放、控制中心、后台进度及约十分钟黑屏仍需 iPhone 实测。
 - 2026-11-08 针对实测反馈修正画质命令确认、iOS 后台时长引起的进度前跳、视频卡流恢复和控制中心事件，并加入播放常亮。当前工作区 106 项 Flutter 测试、74 项 JavaScript 测试、本轮相关文件的静态分析、类型与资源检查通过，Android x64 Debug Kotlin 编译通过。离线测试覆盖原生 HLS 忽略遗留 VHS 档位、连续切画质、等待 seek／canplay、后台往返后延迟加载不自动播放、冻结后台媒体位置、卡流／解码帧停滞恢复、缓存回退，以及系统控制过期事件隔离、切源中暂停和常亮释放。当前这轮 iOS 原生改动尚未在 macOS 编译或 iPhone 验收；实测约十分钟视频黑屏的具体触发原因仍需设备日志确认，离线回归不能证明已消除真机故障。
 - 2026-11-08 修复 iOS 混合语言工程中 `PlaybackCache` 未出现在 `Runner-Swift.h` 的编译错误：新增桥接头文件，并为 Debug、Release、Profile 配置 `SWIFT_OBJC_BRIDGING_HEADER`。独立 macOS 任务（Actions 42400722242）已通过未签名 iOS Release 构建、Debug 模拟器构建及全部 3 项原生 XCTest，覆盖 Flutter 引擎可用性、拒绝外部缓存源、回环网关与过期会话隔离；本地 5 项 iOS 缓存通道测试通过。本次只做构建验证，未触发正式发布。
 - 2026-11-08 补回 Android 播放会话的媒体保留设置，普通浏览会话关闭；模式相同但播放状态改变时也会更新原生设置。两端平台替身测试验证 Android 启用、iOS 不启用该专用设置，并覆盖二级页面、后台和锁屏往返中的同一 WebView、自动暂停及不自动恢复播放。全部 95 项 Flutter 测试及静态检查通过；本轮 Android 原生挂起／缓冲保留仍需设备验收。
