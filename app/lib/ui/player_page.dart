@@ -420,7 +420,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     ignoring: !_controlsVisible,
                     child: AnimatedOpacity(
                       opacity: _controlsVisible ? 1 : 0,
-                      duration: const Duration(milliseconds: 180),
+                      duration: const Duration(milliseconds: 100),
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 620),
                         child: Listener(
@@ -818,7 +818,7 @@ class _PlayerPageState extends State<PlayerPage> {
               ignoring: !_controlsVisible,
               child: AnimatedOpacity(
                 opacity: _controlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
+                duration: const Duration(milliseconds: 100),
                 child: Listener(
                   onPointerDown: (_) => _revealControls(),
                   child: Row(
@@ -896,7 +896,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   ignoring: !_controlsVisible,
                   child: AnimatedOpacity(
                     opacity: _controlsVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
+                    duration: const Duration(milliseconds: 100),
                     child: GlassIconButton(
                       key: ValueKey(
                         store.playerLocked ? 'player-unlock' : 'player-lock',
@@ -945,7 +945,7 @@ class _PlayerMenuRoute<T> extends RawDialogRoute<T> {
     required super.barrierColor,
     required super.barrierLabel,
   }) : super(
-         transitionDuration: const Duration(milliseconds: 250),
+         transitionDuration: const Duration(milliseconds: 160),
          pageBuilder: (context, animation, secondaryAnimation) =>
              CupertinoUserInterfaceLevel(
                data: CupertinoUserInterfaceLevelData.elevated,
@@ -969,7 +969,7 @@ class _PlayerMenuRoute<T> extends RawDialogRoute<T> {
        );
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 180);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 90);
 
   @override
   Curve get barrierCurve => Curves.linear;

@@ -10,6 +10,7 @@ import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/app_root.dart';
+import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/player_page.dart';
 import 'package:baha_plus/ui/detail_page.dart';
 import 'package:baha_plus/ui/seasonal_page.dart';
@@ -852,7 +853,7 @@ void main() {
 
     Future<void> expectDismissed() async {
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump(const Duration(milliseconds: 100));
       await tester.pump();
       expect(find.byType(CupertinoActionSheet), findsNothing);
       expect(
@@ -906,6 +907,63 @@ void main() {
     await expectDismissed();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'iOS player panels remove their barrier promptly when dismissed',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        final store = await launch(tester);
+        final portal = FakePortal();
+        await store.attach(portal);
+        await store.play(
+          const Anime(
+            id: '10',
+            title: 'Test Anime',
+            cover: 'https://p2.bahamut.com.tw/10.jpg',
+            latestVideoId: '20',
+          ),
+        );
+        store.playback.value = const PlaybackState(
+          phase: PlaybackPhase.content,
+          surfaceReady: true,
+          paused: true,
+          duration: 1200,
+          hasDanmaku: true,
+        );
+        Navigator.of(tester.element(find.byType(AppRoot))).push(
+          CupertinoPageRoute<void>(
+            builder: (_) => PlayerPage(
+              store: store,
+              video: const ColoredBox(color: Colors.black),
+            ),
+          ),
+        );
+        await frames(tester);
+
+        showDanmakuPanel(tester.element(find.byType(PlayerPage)), store);
+        await frames(tester);
+        expect(find.byKey(const ValueKey('danmaku-panel')), findsOneWidget);
+        await tester.tap(find.bySemanticsLabel(store.t('close')).last);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('danmaku-panel')), findsNothing);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is ModalBarrier && widget.dismissible ||
+                widget is AnimatedModalBarrier && widget.dismissible,
+            description: 'dismissible player panel barrier',
+          ),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
 
   testWidgets(
     'double tap toggles playback only on unlocked fullscreen content',

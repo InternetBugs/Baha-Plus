@@ -6,6 +6,13 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_widgets.dart';
 
+const _playerSheetAnimation = AnimationStyle(
+  duration: Duration(milliseconds: 140),
+  reverseDuration: Duration(milliseconds: 80),
+  curve: Curves.easeOutCubic,
+  reverseCurve: Curves.easeInCubic,
+);
+
 void showDanmakuPanel(BuildContext context, AppStore store) {
   GlassModalSheet.show<void>(
     context: context,
@@ -16,6 +23,7 @@ void showDanmakuPanel(BuildContext context, AppStore store) {
     showDragIndicator: false,
     expandedColor: const Color(0xfff2f2f7),
     expandedDarkColor: const Color(0xff111113),
+    sheetAnimationStyle: _playerSheetAnimation,
     builder: (_) => DanmakuPanel(store: store),
   );
 }
@@ -23,6 +31,7 @@ void showDanmakuPanel(BuildContext context, AppStore store) {
 void showDanmakuComposer(BuildContext context, AppStore store) {
   showDialog<void>(
     context: context,
+    animationStyle: _playerSheetAnimation,
     builder: (context) => Dialog(
       insetPadding: const EdgeInsets.all(16),
       clipBehavior: Clip.antiAlias,
