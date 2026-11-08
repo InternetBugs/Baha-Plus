@@ -3,6 +3,15 @@ name: Manual test build
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "测试平台（默认仅 iOS）"
+        required: true
+        default: ios
+        type: choice
+        options:
+          - ios
+          - android
+          - both
       version:
         description: "测试版本号（留空自动选择下一个版本）"
         required: false
@@ -59,6 +68,7 @@ jobs:
   android:
     name: Build signed Android test APK
     needs: validate
+    if: inputs.platform == 'android' || inputs.platform == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -107,6 +117,7 @@ jobs:
   ios:
     name: Build unsigned iOS test IPA
     needs: validate
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
@@ -143,6 +154,7 @@ jobs:
   ios_native_tests:
     name: Run iOS native tests
     needs: validate
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
@@ -187,6 +199,12 @@ jobs:
   package:
     name: Collect verified test packages
     needs: [validate, android, ios, ios_native_tests]
+    if: >-
+      always() && !cancelled() && needs.validate.result == 'success' &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped') &&
+      (needs.ios.result == 'success' || needs.ios.result == 'skipped') &&
+      (needs.ios_native_tests.result == 'success' || needs.ios_native_tests.result == 'skipped') &&
+      (needs.android.result == 'success' || needs.ios.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -199,27 +217,43 @@ jobs:
         env:
           TEST_VERSION: ${{ needs.validate.outputs.version }}
           BUILD_NUMBER: ${{ needs.validate.outputs.build_number }}
+          TEST_PLATFORM: ${{ inputs.platform }}
         working-directory: test-package
         run: |
           set -euo pipefail
-          sha256sum BahaPlus-Android-test.apk BahaPlus-iOS-test-unsigned.ipa > SHA256SUMS.txt
+          packages=()
+          if [[ "$TEST_PLATFORM" == "android" || "$TEST_PLATFORM" == "both" ]]; then
+            test -f BahaPlus-Android-test.apk
+            packages+=(BahaPlus-Android-test.apk)
+          fi
+          if [[ "$TEST_PLATFORM" == "ios" || "$TEST_PLATFORM" == "both" ]]; then
+            test -f BahaPlus-iOS-test-unsigned.ipa
+            packages+=(BahaPlus-iOS-test-unsigned.ipa)
+          fi
+          sha256sum "${packages[@]}" > SHA256SUMS.txt
           python3 - <<'PY'
           import json, os
           from pathlib import Path
+          platform = os.environ["TEST_PLATFORM"]
+          android = platform in ("android", "both")
+          ios = platform in ("ios", "both")
           Path("build-info.json").write_text(json.dumps({
               "version": os.environ["TEST_VERSION"],
               "build_number": int(os.environ["BUILD_NUMBER"]),
               "commit": os.environ["GITHUB_SHA"],
               "run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
-              "android_signing": "production",
-              "ios_signing": "unsigned",
+              "platform": platform,
+              "android_signing": "production" if android else None,
+              "ios_signing": "unsigned" if ios else None,
               "diagnostics": True,
-              "checks": ["javascript", "python", "flutter-analyze", "flutter-test", "ios-native-tests"],
+              "checks": ["javascript", "python", "flutter-analyze", "flutter-test"] + (["ios-native-tests"] if ios else []),
           }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
           echo "Test version: $TEST_VERSION ($BUILD_NUMBER)" >> "$GITHUB_STEP_SUMMARY"
           echo "Source commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
-          echo "The iOS IPA requires signing before installation." >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$TEST_PLATFORM" != "android" ]]; then
+            echo "The iOS IPA requires signing before installation." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: BahaPlus-test-build-${{ needs.validate.outputs.version }}
