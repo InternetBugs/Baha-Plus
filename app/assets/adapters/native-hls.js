@@ -3,6 +3,7 @@
   window.__bahaCreateNativeHlsQuality = function ({ isCurrent, onChange }) {
     let master = '', variants = new Map(), selected = 0, disposed = false;
     let fetchController = null, cancelSwitch = null, switching = false, generation = 0;
+    let restoring = null;
     const live = () => !disposed && isCurrent();
     function url(raw, base = location.href) {
       try {
@@ -69,40 +70,57 @@
       return changeSource(target, height, player, media);
     }
     async function reload(player, media, snapshot) {
-      return changeSource(current(player, media), selected, player, media, snapshot, true);
+      const source = current(player, media);
+      if (!source) return false;
+      // VHS recovery also reloads the existing authorized source, without
+      // fetching a new entitlement or changing the official content phase.
+      if (!owns(source)) { master = source; variants = new Map(); selected = 0; }
+      return changeSource(source, selected, player, media, snapshot, true);
     }
     async function changeSource(target, height, player, media, snapshot, force = false) {
       if (!live() || switching || !target || !owns(current(player, media))) return false;
       const previous = current(player, media), previousChoice = selected;
       if (previous === target && !force) { selected = height; onChange(); return true; }
-      const position = snapshot?.position ?? media.currentTime, rate = snapshot?.rate ?? media.playbackRate;
-      const paused = snapshot?.paused ?? media.paused, muted = snapshot?.muted ?? media.muted;
+      restoring = {position: snapshot?.position ?? media.currentTime, rate: snapshot?.rate ?? media.playbackRate,
+        paused: snapshot?.paused ?? media.paused, muted: snapshot?.muted ?? media.muted};
       const type = player.currentSource?.()?.type || 'application/x-mpegURL';
       switching = true;
       function load(source) {
         return new Promise(resolve => {
-          let finished = false;
+          let finished = false, positioned = false;
           const done = ok => {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
             player.off('loadedmetadata', ready);
+            player.off('canplay', ready);
+            player.off('seeked', ready);
             player.off('error', failed);
             cancelSwitch = null;
             if (ok && live() && current(player, media) === source) {
               try {
-                const duration = player.duration();
-                player.currentTime(Math.max(0, Math.min(position,
-                  Number.isFinite(duration) ? duration : position)));
-                player.playbackRate(rate);
-                player.muted(muted);
-                if (paused || window.__bahaMediaSuspended === true) player.pause();
+                player.playbackRate(restoring.rate);
+                player.muted(restoring.muted);
+                if (restoring.paused || window.__bahaMediaSuspended === true) player.pause();
                 else player.play()?.catch(() => {});
               } catch (_) { ok = false; }
             } else ok = false;
             resolve(ok);
           };
-          const ready = () => done(true), failed = () => done(false);
+          const ready = () => {
+            if (!live() || current(player, media) !== source) { done(false); return; }
+            try {
+              if (!positioned) {
+                const duration = player.duration();
+                if (!(duration > 0)) return;
+                positioned = true;
+                // Metadata alone does not mean WebKit has completed its seek.
+                player.currentTime(Math.max(0, Math.min(restoring.position, duration)));
+              }
+              if (media.seeking || (media.readyState != null && media.readyState < 3)) return;
+              done(true);
+            } catch (_) { done(false); }
+          }, failed = () => done(false);
           let remaining = 15000, checked = Date.now();
           const checkTimeout = () => {
             const now = Date.now();
@@ -114,6 +132,8 @@
           let timer = setTimeout(checkTimeout, 1000);
           cancelSwitch = failed;
           player.one('loadedmetadata', ready);
+          player.on ? player.on('canplay', ready) : player.one('canplay', ready);
+          player.on ? player.on('seeked', ready) : player.one('seeked', ready);
           player.one('error', failed);
           try { player.src({ src: source, type }); } catch (_) { failed(); }
         });
@@ -129,6 +149,7 @@
         return ok;
       } finally {
         switching = false;
+        restoring = null;
         if (live()) onChange();
       }
     }
@@ -137,6 +158,12 @@
       fetchController?.abort();
       cancelSwitch?.();
     }
-    return { update, state, select, reload, source: current, owns, isSwitching: () => switching, dispose };
+    function suspend() {
+      // Latch this across a complete background/foreground round trip, even
+      // when loadedmetadata arrives only after the foreground event.
+      if (restoring) restoring.paused = true;
+    }
+    return { update, state, select, reload, source: current, owns, isSwitching: () => switching,
+      timeline: () => restoring && {...restoring}, suspend, dispose };
   };
 })(); true;

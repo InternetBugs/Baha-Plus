@@ -7,6 +7,11 @@
 @interface AppDelegate ()
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
 @property(nonatomic, strong) FlutterMethodChannel *playbackCacheChannel;
+@property(nonatomic, strong) FlutterMethodChannel *playbackEnvironmentChannel;
+@property(nonatomic, strong) id remotePlayTarget;
+@property(nonatomic, strong) id remotePauseTarget;
+@property(nonatomic, strong) id remoteToggleTarget;
+@property(nonatomic, copy) NSString *playbackDocument;
 @end
 
 @implementation AppDelegate
@@ -19,6 +24,35 @@
   [GeneratedPluginRegistrant registerWithRegistry:engineBridge.pluginRegistry];
   NSObject<FlutterPluginRegistrar> *registrar =
       [engineBridge.pluginRegistry registrarForPlugin:@"BahaMediaSession"];
+  self.playbackEnvironmentChannel =
+      [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/playback_environment"
+                                 binaryMessenger:registrar.messenger];
+  __weak AppDelegate *weakSelf = self;
+  [self.playbackEnvironmentChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    AppDelegate *owner = weakSelf;
+    if (![call.method isEqualToString:@"update"]) {
+      result(FlutterMethodNotImplemented);
+      return;
+    }
+    NSDictionary *arguments = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
+    BOOL active = [arguments[@"active"] boolValue];
+    UIApplication.sharedApplication.idleTimerDisabled = active && [arguments[@"keepAwake"] boolValue];
+    if (!active) {
+      [owner clearPlaybackControls];
+      result(nil);
+      return;
+    }
+    owner.playbackDocument = arguments[@"document"];
+    [owner installPlaybackControls];
+    MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = @{
+      MPMediaItemPropertyTitle: arguments[@"title"] ?: @"Baha Plus",
+      MPMediaItemPropertyAlbumTitle: arguments[@"episode"] ?: @"",
+      MPMediaItemPropertyPlaybackDuration: arguments[@"duration"] ?: @0,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: arguments[@"position"] ?: @0,
+      MPNowPlayingInfoPropertyPlaybackRate: [arguments[@"playing"] boolValue] ? arguments[@"rate"] ?: @1 : @0
+    };
+    result(nil);
+  }];
   self.playbackCacheChannel =
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/hls_cache"
                                  binaryMessenger:registrar.messenger];
@@ -61,6 +95,47 @@
     }
     result(nil);
   }];
+}
+
+- (void)installPlaybackControls {
+  if (self.remotePlayTarget) return;
+  __weak AppDelegate *weakSelf = self;
+  MPRemoteCommandCenter *commands = MPRemoteCommandCenter.sharedCommandCenter;
+  commands.playCommand.enabled = YES;
+  commands.pauseCommand.enabled = YES;
+  commands.togglePlayPauseCommand.enabled = YES;
+  self.remotePlayTarget = [commands.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
+    return [weakSelf forwardPlaybackCommand:@"play"];
+  }];
+  self.remotePauseTarget = [commands.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
+    return [weakSelf forwardPlaybackCommand:@"pause"];
+  }];
+  self.remoteToggleTarget = [commands.togglePlayPauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
+    return [weakSelf forwardPlaybackCommand:@"toggle"];
+  }];
+}
+
+- (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action {
+  NSString *document = self.playbackDocument;
+  if (!document.length) return MPRemoteCommandHandlerStatusNoSuchContent;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (![self.playbackDocument isEqualToString:document]) return;
+    [self.playbackEnvironmentChannel invokeMethod:@"remoteCommand"
+        arguments:@{@"document": document, @"action": action}];
+  });
+  return MPRemoteCommandHandlerStatusSuccess;
+}
+
+- (void)clearPlaybackControls {
+  MPRemoteCommandCenter *commands = MPRemoteCommandCenter.sharedCommandCenter;
+  if (self.remotePlayTarget) [commands.playCommand removeTarget:self.remotePlayTarget];
+  if (self.remotePauseTarget) [commands.pauseCommand removeTarget:self.remotePauseTarget];
+  if (self.remoteToggleTarget) [commands.togglePlayPauseCommand removeTarget:self.remoteToggleTarget];
+  self.remotePlayTarget = nil;
+  self.remotePauseTarget = nil;
+  self.remoteToggleTarget = nil;
+  if (self.playbackDocument) MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = nil;
+  self.playbackDocument = nil;
 }
 
 - (void)application:(UIApplication *)application

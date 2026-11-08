@@ -244,6 +244,42 @@ test('malformed cloud history reports a sync error instead of an empty account',
   assert.deepEqual(fixture.messages, [{ type: 'account-error' }]);
 });
 
+test('cloud history preserves official watch time and only offers a valid next episode', async () => {
+  const nextIds = [21, 0, null, undefined, -1, 20, 21.5, 'invalid', '99999999999'];
+  for (const nextVideoSn of nextIds) {
+    const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+      <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
+      'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+        JSON.stringify({ data: { history: [{
+          ...historyRecord(), nextVideoSn, watchTime: '2026-11-08T14:42:00+08:00',
+        }], totalPage: 1 } }),
+    });
+    await runAccount(fixture);
+    const entry = fixture.messages[0].history[0];
+    assert.equal(entry.watchedAt, '2026-11-08T06:42:00.000Z');
+    assert.equal(entry.nextVideoId, nextVideoSn === 21 ? '21' : undefined);
+    assert.equal(entry.videoId, '20');
+    assert.equal(entry.episodeLabel, '5');
+  }
+});
+
+test('missing or invalid optional history metadata keeps the existing record usable', async () => {
+  const fixture = setup(`<a class="btn-logout">登出</a><h1 class="theme-title">我的動畫</h1>
+    <a href="viewList.php?u=fixture-user">觀看紀錄</a>`, '/mygather.php', {
+    'https://api.gamer.com.tw/anime/v3/history.php?page=1':
+      JSON.stringify({ data: { history: [
+        historyRecord(), { ...historyRecord(11, 22), watchTime: 'invalid date' },
+      ], totalPage: 1 } }),
+  });
+  await runAccount(fixture);
+  assert.equal(fixture.messages[0].type, 'account-synced');
+  for (const entry of fixture.messages[0].history) {
+    assert.equal(entry.watchedAt, undefined);
+    assert.equal(entry.nextVideoId, undefined);
+    assert.equal(entry.progress, 0.64);
+  }
+});
+
 test('withdrawn history placeholders do not discard cloud favorites or playable history', async () => {
   for (const isTakenDown of [1, true]) {
     const fixture = setup('<h1 class="theme-title">我的動畫</h1>', '/mygather.php', {
@@ -510,6 +546,7 @@ function playerFixture(nativeHls = false) {
   const fault = { code: 0 };
   const levels = [{ height: 720, enabled: true }, { height: 1080, enabled: true }];
   let tick = () => {};
+  let now = 1000;
   let stopped = false;
   const sources: string[] = [];
   const mediaEvents = new Map<string, Set<() => void>>();
@@ -533,6 +570,7 @@ function playerFixture(nativeHls = false) {
   fixture.context.getComputedStyle = (node: any) => ({ display: node.style?.display || 'block', visibility: 'visible', opacity: '1' });
   fixture.context.setInterval = (callback: () => void) => { tick = callback; return 1; };
   fixture.context.clearInterval = () => { stopped = true; };
+  fixture.context.Date = class extends Date { static now() { return now; } };
   if (nativeHls) {
     levels.length = 0;
     const master = 'https://bahamut.akamaized.net/series/master.m3u8';
@@ -565,6 +603,7 @@ function playerFixture(nativeHls = false) {
     for (const callback of [...(mediaEvents.get(name) || [])]) callback();
   };
   return { ...fixture, core, controls, media, commands, levels, fault, emit, sources, tick: () => tick(), stopped: () => stopped,
+    advance: (milliseconds: number) => { now += milliseconds; },
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
 
@@ -669,6 +708,7 @@ test('iOS background cache migrates only approved content and preserves quality 
   assert.equal(f.media.currentTime, 37);
   assert.equal(f.media.paused, false);
   const selected = f.bridge.command('ticket', 'quality', 720);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(new URL(f.sources[1]).searchParams.get('u'),
     'https://bahamut.akamaized.net/series/720/index.m3u8');
   f.context.window.__bahaMediaSuspended = true;
@@ -736,6 +776,144 @@ test('a later cache transport error restores official playback once, at the save
   assert.equal(f.messages.at(-1).phase, 'content');
   f.tick();
   assert.equal(f.sources.length, 2);
+  f.bridge.dispose();
+});
+
+test('native HLS ignores leftover VHS quality levels and actually changes the media source', async () => {
+  const f = playerFixture(true);
+  // A prior ad/source may leave a quality-level list behind on the player.
+  f.levels.push({height: 720, enabled: true}, {height: 1080, enabled: true});
+  f.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(f.messages.at(-1).qualities), [720, 360]);
+  const pending = f.bridge.command('ticket', 'quality', 360);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sources.at(-1), 'https://bahamut.akamaized.net/series/360/index.m3u8');
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.messages.at(-1).quality, 360);
+  f.bridge.dispose();
+});
+
+test('rapid native quality selections run in order and finish at the last requested resolution', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const first = f.bridge.command('ticket', 'quality', 360);
+  const second = f.bridge.command('ticket', 'quality', 720);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sources.length, 1);
+  f.emit('loadedmetadata');
+  assert.equal(await first, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sources.length, 2);
+  f.emit('loadedmetadata');
+  assert.equal(await second, true);
+  assert.equal(f.messages.at(-1).quality, 720);
+  assert.equal(f.media.currentTime, 37);
+  f.bridge.dispose();
+});
+
+test('system pause during a quality load prevents playback after the new source becomes ready', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const pending = f.bridge.command('ticket', 'quality', 720);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.media.duration, 0);
+  assert.equal(await f.bridge.command('ticket', 'pause'), true);
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.media.paused, true);
+  f.bridge.dispose();
+});
+
+test('background elapsed time is excluded from both the projected and restored playback position', async () => {
+  const f = playerFixture();
+  f.media.currentTime = 137.5;
+  f.bridge.suspend();
+  assert.equal(f.media.paused, true);
+  // Model WebKit incorrectly advancing its presentation clock while hidden.
+  f.media.currentTime = 257.5;
+  f.advance(120000);
+  f.tick();
+  assert.equal(f.messages.at(-1).position, 137.5);
+  f.bridge.suspend(); // Repeated hidden/paused callbacks must not replace it.
+  f.bridge.resume();
+  assert.equal(f.media.currentTime, 137.5);
+  assert.equal(f.media.paused, true);
+  assert.equal(await f.bridge.command('ticket', 'play'), true);
+  assert.equal(f.media.currentTime, 137.5);
+  f.bridge.dispose();
+});
+
+test('a frozen native stream recovers in place, preserving the latest timeline', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  f.media.currentTime = 637;
+  f.tick();
+  f.media.readyState = 2;
+  f.advance(21000);
+  f.tick();
+  assert.equal(f.sources.length, 1);
+  f.emit('loadedmetadata');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.media.currentTime, 637);
+  assert.equal(f.media.paused, false);
+  assert.equal(f.context.window.__bahaDocumentNonce, 'ticket');
+  f.bridge.dispose();
+});
+
+test('decoder frame stalls recover even while the media clock is still advancing', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  f.media.getVideoPlaybackQuality = () => ({totalVideoFrames: 100});
+  f.tick();
+  f.advance(21000);
+  f.media.currentTime += 21;
+  f.tick();
+  assert.equal(f.sources.length, 1);
+  f.emit('loadedmetadata');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.media.currentTime, 58);
+  f.bridge.dispose();
+});
+
+test('paused, background and official entitlement errors cannot trigger stream recovery', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  f.media.paused = true;
+  f.tick(); f.advance(21000); f.tick();
+  assert.equal(f.sources.length, 0);
+  f.media.paused = false;
+  f.bridge.suspend();
+  f.advance(120000); f.tick();
+  assert.equal(f.sources.length, 0);
+  f.bridge.resume();
+  f.media.error = {code: 2};
+  f.fault.code = 1014;
+  f.tick();
+  assert.equal(f.sources.length, 0);
+  f.fault.code = 0;
+  f.core.state.playingVideo = false;
+  f.core.state.playingAd = true;
+  f.tick();
+  assert.equal(f.sources.length, 0);
+  f.bridge.dispose();
+});
+
+test('a stalled cache without a media error falls back to the official source', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  const source = 'https://bahamut.akamaized.net/series/master.m3u8';
+  const pending = f.bridge.enableCache('ticket', source,
+    'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/');
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  f.tick(); f.advance(21000); f.tick();
+  assert.equal(f.sources.at(-1), source);
+  f.emit('loadedmetadata');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.messages.at(-1).cacheFailed, true);
+  assert.equal(f.media.currentTime, 37);
   f.bridge.dispose();
 });
 

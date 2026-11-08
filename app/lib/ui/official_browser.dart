@@ -208,6 +208,24 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
       _controller?.evaluateJavascript(source: script);
 
   @override
+  Future<bool> playerCommand(
+    String document,
+    String action,
+    double? value,
+  ) async {
+    final result = await _controller?.callAsyncJavaScript(
+      arguments: {'ticket': document, 'action': action, 'value': value},
+      functionBody: '''
+return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
+''',
+    );
+    return mounted &&
+        store.operation.id == document &&
+        result?.error == null &&
+        result?.value == true;
+  }
+
+  @override
   Future<Json> community(String action, Json arguments) async {
     final script = store.scripts['community'];
     if (script == null) throw const CommunityException('unavailable');

@@ -73,6 +73,18 @@ class FakePortal implements OfficialPortal {
   }
 
   @override
+  Future<bool> playerCommand(
+    String document,
+    String action,
+    double? value,
+  ) async =>
+      await evaluate(
+        'window.__bahaPlayerBridge?.command(${jsonEncode(document)},'
+        '${jsonEncode(action)},${jsonEncode(value)}); true;',
+      ) ==
+      true;
+
+  @override
   Future<void> goBack() async {}
   @override
   Future<void> reload() async {}
@@ -577,6 +589,8 @@ void main() {
               'videoId': '20',
               'episodeLabel': '第一集',
               'progress': 0.5,
+              'watchedAt': '2026-11-08T06:42:00.000Z',
+              'nextVideoId': '21',
             },
           ],
         }),
@@ -591,6 +605,11 @@ void main() {
       expect(restored.accountSynced, isTrue);
       expect(restored.favorites.single.id, catalog.items.first.id);
       expect(restored.history.single.progress, 0.5);
+      expect(
+        restored.history.single.watchedAt,
+        DateTime.utc(2026, 11, 8, 6, 42),
+      );
+      expect(restored.history.single.nextVideoId, '21');
 
       restored.catalog = catalog;
       await restored.attach(FakePortal());

@@ -15,6 +15,7 @@ abstract interface class OfficialPortal {
   Future<void> reload();
   Future<void> goBack();
   Future<dynamic> evaluate(String script);
+  Future<bool> playerCommand(String document, String action, double? value);
   Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount});
   Future<Json> community(String action, Json arguments);
 }
@@ -191,6 +192,7 @@ class AppStore extends ChangeNotifier {
   Future<void> _accountCacheWrite = Future<void>.value();
   int _preferredQuality = 0;
   String? _qualityRestoredDocument;
+  DateTime? _qualityRetryAfter;
   Future<void> _qualityPreferenceWrite = Future<void>.value();
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
@@ -478,7 +480,7 @@ class AppStore extends ChangeNotifier {
     try {
       await _portal?.evaluate('''
 if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
-  ${active ? 'window.__bahaMediaSuspended = false;' : _suspendMedia}
+  ${active ? 'window.__bahaMediaSuspended = false; window.__bahaPlayerBridge?.resume();' : _suspendMedia}
 } true;
 ''');
     } catch (_) {
@@ -494,7 +496,8 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     if (!_applicationActive ||
         !browserVisible ||
         !showsPlayer ||
-        !playback.value.canOperate ||
+        (!playback.value.canOperate &&
+            !(action == 'pause' && playback.value.surfaceReady)) ||
         !const [
           'play',
           'pause',
@@ -519,31 +522,44 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
         return;
       }
       _preferredQuality = value.toInt();
+      _qualityRetryAfter = null;
       _qualityRestoredDocument = operation.id;
       final saved = _preferredQuality.toString();
       preferenceWrite = _qualityPreferenceWrite = _qualityPreferenceWrite.then(
         (_) => _savePreference('baha.device.quality', saved),
       );
     }
+    final document = operation.id;
     try {
-      await _sendPlayerCommand(action, value);
+      final accepted = await _sendPlayerCommand(action, value);
+      if (action == 'quality' &&
+          !accepted &&
+          operation.id == document &&
+          _preferredQuality == value?.toInt()) {
+        _qualityRestoredDocument = null;
+        _qualityRetryAfter = DateTime.now().add(const Duration(seconds: 5));
+      }
+    } catch (_) {
+      if (action == 'quality' &&
+          operation.id == document &&
+          _preferredQuality == value?.toInt()) {
+        _qualityRestoredDocument = null;
+        _qualityRetryAfter = DateTime.now().add(const Duration(seconds: 5));
+      }
     } finally {
       if (preferenceWrite != null) await preferenceWrite;
     }
   }
 
-  Future<void> _sendPlayerCommand(String action, double? value) async {
-    await _portal?.evaluate(
-      'window.__bahaPlayerBridge?.command(${jsonEncode(operation.id)},'
-      '${jsonEncode(action)},${jsonEncode(value)}); true;',
-    );
-  }
+  Future<bool> _sendPlayerCommand(String action, double? value) async =>
+      await _portal?.playerCommand(operation.id, action, value) ?? false;
 
   Future<void> _restorePreferredQuality() async {
     final state = playback.value;
     if (_disposed ||
         !_applicationActive ||
         _portal == null ||
+        (_qualityRetryAfter?.isAfter(DateTime.now()) ?? false) ||
         !browserVisible ||
         !showsPlayer ||
         !state.canControl ||
@@ -560,9 +576,15 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     _qualityRestoredDocument = document;
     if (state.quality == quality) return;
     try {
-      await _sendPlayerCommand('quality', quality.toDouble());
+      if (!await _sendPlayerCommand('quality', quality.toDouble()) &&
+          _qualityRestoredDocument == document &&
+          _preferredQuality == quality) {
+        _qualityRestoredDocument = null;
+        _qualityRetryAfter = DateTime.now().add(const Duration(seconds: 5));
+      }
     } catch (_) {
-      if (_qualityRestoredDocument == document && _preferredQuality == quality) {
+      if (_qualityRestoredDocument == document &&
+          _preferredQuality == quality) {
         _qualityRestoredDocument = null;
       }
       // Keep playback available if navigation interrupted the bridge. A later
@@ -1239,6 +1261,7 @@ window.__bahaMediaSuspended = false; true;
 
   void _begin(BrowserIntent intent) {
     _deadline?.cancel();
+    _qualityRetryAfter = null;
     operation = BrowserRequest(
       intent: intent,
       animeId:
@@ -1348,6 +1371,7 @@ true;
 
   static const _suspendMedia = '''
 window.__bahaMediaSuspended = true;
+window.__bahaPlayerBridge?.suspend();
 if (!window.__bahaPauseGuard) {
   document.addEventListener('play', function(event) {
     if (window.__bahaMediaSuspended && event.target instanceof HTMLMediaElement) event.target.pause();

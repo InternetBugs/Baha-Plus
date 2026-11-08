@@ -273,12 +273,18 @@ void main() {
       for (final fullscreen in [false, true]) {
         store.setPlayerFullscreen(fullscreen);
         await frames();
-        // A brief interruption can resume without hiding the application.
+        // Control Center removes focus without hiding the application or
+        // disabling its play/pause commands.
+        final beforeInactive = portal.scripts.length;
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.inactive,
         );
         await frames();
-        expect(portal.scripts.last, contains('media.pause()'));
+        expect(portal.scripts.length, beforeInactive);
+        await store.controlPlayer('pause');
+        expect(portal.scripts.last, contains('"pause"'));
+        await store.controlPlayer('play');
+        expect(portal.scripts.last, contains('"play"'));
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.resumed,
         );
@@ -290,11 +296,12 @@ void main() {
           AppLifecycleState.inactive,
         );
         await frames();
-        expect(portal.scripts.last, contains('media.pause()'));
         expectSession();
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
         await frames();
+        expect(portal.scripts.last, contains('media.pause()'));
+        expect(portal.scripts.last, contains('__bahaPlayerBridge?.suspend()'));
         expectSession();
         // Returning from the lock screen can also change window insets.
         tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);

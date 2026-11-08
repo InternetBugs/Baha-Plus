@@ -284,10 +284,19 @@ class WatchEntry {
       videoId = json['videoId'] as String,
       episodeLabel = json['episodeLabel'] as String,
       progress = (json['progress'] as num?)?.toDouble(),
-      progressLabel = json['progressLabel'] as String? {
+      progressLabel = json['progressLabel'] as String?,
+      watchedAt = json['watchedAt'] == null
+          ? null
+          : DateTime.parse(json['watchedAt'] as String),
+      nextVideoId = json['nextVideoId'] as String? {
     if (!OfficialSite.validId(videoId) ||
         episodeLabel.length > 200 ||
         (progressLabel?.length ?? 0) > 2000 ||
+        (watchedAt != null &&
+            !Catalog.validTimestamp(json['watchedAt'] as String)) ||
+        (nextVideoId != null &&
+            (!RegExp(r'^[1-9]\d{0,9}$').hasMatch(nextVideoId!) ||
+                nextVideoId == videoId)) ||
         (progress != null &&
             (!progress!.isFinite || progress! < 0 || progress! > 1))) {
       throw const FormatException('Invalid cloud history');
@@ -297,4 +306,6 @@ class WatchEntry {
   final String videoId, episodeLabel;
   final double? progress;
   final String? progressLabel;
+  final DateTime? watchedAt;
+  final String? nextVideoId;
 }

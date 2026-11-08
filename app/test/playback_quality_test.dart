@@ -44,6 +44,20 @@ class _FailingPortal extends FakePortal {
   }
 }
 
+class _RejectingPortal extends FakePortal {
+  bool reject = true;
+
+  @override
+  Future<bool> playerCommand(
+    String document,
+    String action,
+    double? value,
+  ) async {
+    await super.playerCommand(document, action, value);
+    return action != 'quality' || !reject;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -311,6 +325,31 @@ void main() {
       await state(store, quality: 1080);
       expect(qualityCommands(portal), hasLength(2));
       expect(disk.values[_preferenceKey], '1080');
+    },
+  );
+
+  test(
+    'a rejected switch is retried for a new document and a later manual choice',
+    () async {
+      final disk = MemoryStorage()..values[_preferenceKey] = '1080';
+      final portal = _RejectingPortal();
+      final store = await launch(disk, portal);
+      await state(store);
+      await state(store);
+      // Repeated state messages cannot hammer a failed switch.
+      expect(qualityCommands(portal), hasLength(1));
+      expect(store.playback.value.quality, 0);
+      expect(disk.values[_preferenceKey], '1080');
+      await store.play(
+        _anime,
+        episode: const Episode(id: '21', label: '2'),
+      );
+      portal.reject = false;
+      await state(store);
+      expect(qualityCommands(portal), hasLength(2));
+      await store.controlPlayer('quality', 720);
+      expect(qualityCommands(portal), hasLength(3));
+      expect(disk.values[_preferenceKey], '720');
     },
   );
 

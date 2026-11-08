@@ -730,6 +730,9 @@ void main() {
       expect(portal.scripts.last, contains('"pause"'));
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       await frames(tester);
+      expect(portal.scripts.last, contains('"pause"'));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await frames(tester);
       expect(
         portal.scripts.last,
         contains('window.__bahaMediaSuspended = true'),

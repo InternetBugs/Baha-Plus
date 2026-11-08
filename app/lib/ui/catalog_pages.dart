@@ -98,6 +98,7 @@ class HomeContent extends StatelessWidget {
                       child: ContinueCard(
                         store: store,
                         entry: store.history[index],
+                        compact: true,
                       ),
                     ),
                   ),
@@ -327,9 +328,44 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
 }
 
 class ContinueCard extends StatelessWidget {
-  const ContinueCard({required this.store, required this.entry, super.key});
+  const ContinueCard({
+    required this.store,
+    required this.entry,
+    this.compact = false,
+    super.key,
+  });
   final AppStore store;
   final WatchEntry entry;
+  final bool compact;
+
+  String _summary() {
+    final label = entry.episodeLabel.trim();
+    final episode = RegExp(r'^\d+(?:\.\d+)?$').hasMatch(label)
+        ? store.t('episodeNumber').replaceAll('{n}', label)
+        : label;
+    final watchedTo = store
+        .t('historyWatchedTo')
+        .replaceAll('{episode}', episode);
+    final watchedAt = entry.watchedAt?.toLocal();
+    if (watchedAt == null) return watchedTo;
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final String date;
+    if (DateUtils.isSameDay(watchedAt, now)) {
+      date = store.t('historyToday');
+    } else if (DateUtils.isSameDay(
+      watchedAt,
+      DateTime(now.year, now.month, now.day - 1),
+    )) {
+      date = store.t('historyYesterday');
+    } else {
+      date =
+          '${watchedAt.year == now.year ? '' : '${watchedAt.year}/'}'
+          '${two(watchedAt.month)}/${two(watchedAt.day)}';
+    }
+    return '$date ${two(watchedAt.hour)}:${two(watchedAt.minute)} · $watchedTo';
+  }
+
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -345,6 +381,20 @@ class ContinueCard extends StatelessWidget {
               blur: 3,
               chromaticAberration: .06,
             );
+    final nextVideoId = entry.nextVideoId;
+    final playButton = GlassIconButton(
+      key: ValueKey('history-play-${entry.anime.id}'),
+      size: 44,
+      useOwnLayer: true,
+      quality: GlassQuality.standard,
+      settings: controlsGlass,
+      semanticLabel: '${store.t('history')} ${entry.anime.title}',
+      icon: const Padding(
+        padding: EdgeInsets.only(left: 2),
+        child: Icon(CupertinoIcons.play_fill, color: brandBlue, size: 18),
+      ),
+      onPressed: () => store.continueWatching(entry),
+    );
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => store.continueWatching(entry),
@@ -359,7 +409,11 @@ class ContinueCard extends StatelessWidget {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Artwork(entry.anime.artwork, width: 60, height: 80),
+                child: Artwork(
+                  entry.anime.artwork,
+                  width: compact ? 60 : 80,
+                  height: compact ? 80 : 112,
+                ),
               ),
               const SizedBox(width: 13),
               Expanded(
@@ -369,12 +423,14 @@ class ContinueCard extends StatelessWidget {
                   children: [
                     Text(
                       entry.anime.title,
-                      maxLines: 1,
+                      maxLines: compact ? 1 : 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      'EP ${entry.episodeLabel}',
+                      compact ? 'EP ${entry.episodeLabel}' : _summary(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 12, color: secondary(context)),
                     ),
                     if (entry.progress != null) ...[
@@ -418,7 +474,7 @@ class ContinueCard extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (entry.progressLabel != null) ...[
+                    if (compact && entry.progressLabel != null) ...[
                       const SizedBox(height: 5),
                       Text(
                         entry.progress == 1
@@ -431,27 +487,68 @@ class ContinueCard extends StatelessWidget {
                         ),
                       ),
                     ],
+                    if (!compact) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              entry.progress == 1
+                                  ? store.t('historyFinished')
+                                  : entry.progressLabel ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: secondary(context),
+                              ),
+                            ),
+                          ),
+                          if (nextVideoId != null) ...[
+                            GlassButton.custom(
+                              key: ValueKey('history-next-${entry.anime.id}'),
+                              shape: const LiquidRoundedRectangle(
+                                borderRadius: 22,
+                              ),
+                              width: 88,
+                              height: 44,
+                              useOwnLayer: true,
+                              settings: controlsGlass,
+                              label: store.t('nextEpisode'),
+                              onTap: () => store.play(
+                                entry.anime,
+                                episode: Episode(
+                                  id: nextVideoId,
+                                  label: store.t('nextEpisode'),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(
+                                    CupertinoIcons.forward_end_fill,
+                                    size: 14,
+                                    color: brandBlue,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    store.t('nextEpisode'),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: brandBlue,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          playButton,
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              GlassIconButton(
-                key: ValueKey('history-play-${entry.anime.id}'),
-                size: 44,
-                useOwnLayer: true,
-                quality: GlassQuality.standard,
-                settings: controlsGlass,
-                semanticLabel: '${store.t('history')} ${entry.anime.title}',
-                icon: const Padding(
-                  padding: EdgeInsets.only(left: 2),
-                  child: Icon(
-                    CupertinoIcons.play_fill,
-                    color: brandBlue,
-                    size: 18,
-                  ),
-                ),
-                onPressed: () => store.continueWatching(entry),
-              ),
+              if (compact) ...[const SizedBox(width: 12), playButton],
             ],
           ),
         ),

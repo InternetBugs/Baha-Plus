@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
+import '../data/playback_environment.dart';
 import 'account_page.dart';
 import 'catalog_pages.dart';
 import 'chrome.dart';
@@ -26,6 +27,7 @@ class _AppRootState extends State<AppRoot>
   final _search = TextEditingController();
   late final AnimationController _tabAnimation;
   late int _lastTab;
+  late PlaybackEnvironment _playbackEnvironment;
   double _tabDirection = 1;
   AppStore get store => widget.store;
 
@@ -39,10 +41,12 @@ class _AppRootState extends State<AppRoot>
       value: 1,
     );
     store.addListener(_tabChanged);
+    _playbackEnvironment = PlaybackEnvironment(store);
     WidgetsBinding.instance.addObserver(this);
     final state = WidgetsBinding.instance.lifecycleState;
     if (state != null) {
-      unawaited(store.setApplicationActive(state == AppLifecycleState.resumed));
+      _playbackEnvironment.setForeground(_mediaActive(state));
+      unawaited(store.setApplicationActive(_mediaActive(state)));
     }
   }
 
@@ -61,6 +65,8 @@ class _AppRootState extends State<AppRoot>
   void didUpdateWidget(covariant AppRoot oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.store != store) {
+      _playbackEnvironment.dispose();
+      _playbackEnvironment = PlaybackEnvironment(store);
       oldWidget.store.removeListener(_tabChanged);
       store.addListener(_tabChanged);
       _lastTab = store.tab;
@@ -70,8 +76,14 @@ class _AppRootState extends State<AppRoot>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    unawaited(store.setApplicationActive(state == AppLifecycleState.resumed));
+    _playbackEnvironment.setForeground(_mediaActive(state));
+    unawaited(store.setApplicationActive(_mediaActive(state)));
   }
+
+  // Pulling down iOS Control Center temporarily removes focus. Only a hidden
+  // or paused application has actually entered the background.
+  bool _mediaActive(AppLifecycleState state) =>
+      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
 
   void _account() => GlassModalSheet.show<void>(
     context: context,
@@ -358,6 +370,7 @@ class _AppRootState extends State<AppRoot>
 
   @override
   void dispose() {
+    _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_tabChanged);
     _tabAnimation.dispose();

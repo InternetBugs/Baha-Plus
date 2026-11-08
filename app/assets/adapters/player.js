@@ -6,11 +6,14 @@
   const nonce = window.__bahaDocumentNonce;
   if (window.__bahaPlayerBridge?.ticket === nonce) return;
   window.__bahaPlayerBridge?.dispose();
-  let timer, style, metadataSent = false, last = '', requestedQuality = 0;
+  let timer, style, metadataSent = false, last = '', requestedQuality = null;
   let preferences = window.__bahaDanmakuPreferences || null;
   let appliedManager = null, appliedPreferences = '';
   let cachePlayer = null, originalSourceSetter = null;
   let cacheEnabled = false, cacheRecovering = false, cacheFailed = false, cacheTimeline = null;
+  let suspendedTimeline = null, lifecycleSuspended = window.__bahaMediaSuspended === true;
+  let qualityQueue = Promise.resolve(), qualityList = null;
+  let lastProgress = null, stalledSince = 0, recoveryAfter = 0, recoveryCount = 0;
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -18,12 +21,99 @@
   const post = body => bahaPostJSON(JSON.stringify({ ...body, id: expectedID, videoId: videoID }));
   const finite = value => Number.isFinite(value) ? Math.max(0, Math.min(172800, value)) : 0;
   const nativeQuality = window.__bahaCreateNativeHlsQuality?.({
-    isCurrent: () => window.__bahaDocumentNonce === nonce,
+    isCurrent: () => window.__bahaDocumentNonce === nonce && context().contentAuthorized,
     onChange: () => tick()
   });
   function qualityLevels(player) {
     const levels = player?.qualityLevels?.();
     return levels ? Array.from({ length: levels.length }, (_, i) => levels[i]) : [];
+  }
+  const nativeHls = c => !c.player?.tech?.(true)?.vhs && !!nativeQuality?.source(c.player, c.media);
+  const snapshot = c => nativeQuality?.timeline() || {
+    position: c.media.currentTime, rate: c.media.playbackRate,
+    paused: c.media.paused, muted: c.media.muted
+  };
+  function suspend() {
+    const c = context();
+    if (!lifecycleSuspended && c.matches && c.media && c.media.duration > 0) {
+      suspendedTimeline = {...snapshot(c), paused: true};
+    }
+    lifecycleSuspended = true;
+    window.__bahaMediaSuspended = true;
+    nativeQuality?.suspend();
+    c.player?.pause();
+    c.media?.pause?.();
+    lastProgress = null;
+  }
+  function restoreSuspended(c) {
+    if (!suspendedTimeline || !c.matches || !c.media || !(c.media.duration > 0) ||
+        c.media.readyState < 1 || nativeQuality?.isSwitching()) return;
+    c.player.pause();
+    const position = Math.min(suspendedTimeline.position, c.media.duration);
+    if (!suspendedTimeline.positioned || Math.abs(c.media.currentTime - position) > .5) {
+      suspendedTimeline.positioned = true;
+      c.player.currentTime(position);
+    }
+    c.player.playbackRate(suspendedTimeline.rate);
+    c.player.muted(suspendedTimeline.muted);
+    if (c.media.seeking || Math.abs(c.media.currentTime - position) > .5) return;
+    suspendedTimeline = null;
+  }
+  function resume() {
+    lifecycleSuspended = false;
+    window.__bahaMediaSuspended = false;
+    restoreSuspended(context());
+    lastProgress = null;
+    tick();
+  }
+  function visibilityChanged() {
+    if (document.visibilityState === 'hidden' && window.__bahaMediaSuspended === true) suspend();
+    // Flutter owns foreground activation; visibility alone cannot override
+    // an application that is still in the background.
+  }
+  function applyQuality(c, value) {
+    const levels = qualityLevels(c.player);
+    if (value !== 0 && !levels.some(level => level.height === value)) return false;
+    // Keep the official selector's saved choice in sync: animePlayer can
+    // otherwise restore its old local choice after rebuilding its controls.
+    try { window.localStorage?.setItem('ANIME_quality',
+      value === 0 ? c.player.localize?.('Auto') || 'Auto' : String(value)); } catch (_) {}
+    const selector = c.player.controlBar?.getChildById?.('controlBarR')?.getChildById?.('resButton');
+    selector?.updateQuality?.(value === 0 ? c.player.localize?.('Auto') || 'Auto' : value);
+    // Enable the target before disabling the old rendition, so VHS never
+    // observes an intermediate state with every rendition disabled.
+    levels.filter(level => value === 0 || level.height === value).forEach(level => { level.enabled = true; });
+    levels.filter(level => value !== 0 && level.height !== value).forEach(level => { level.enabled = false; });
+    qualityList = levels[0];
+    return levels.length > 0 && levels.every(level => level.enabled === (value === 0 || level.height === value));
+  }
+  async function recover(c) {
+    if (cacheRecovering || nativeQuality?.isSwitching() || !nativeQuality ||
+        !c.matches || !c.contentAuthorized || !nativeQuality.source(c.player, c.media)) return;
+    const timeline = suspendedTimeline || cacheTimeline || (c.media && snapshot(c));
+    if (!timeline) return;
+    recoveryAfter = Date.now() + 60000;
+    recoveryCount++;
+    cacheRecovering = true;
+    const resolver = window.__bahaCacheOriginalSource;
+    if (cacheEnabled) {
+      cacheEnabled = false; cacheFailed = true;
+      if (cachePlayer && originalSourceSetter) cachePlayer.src = originalSourceSetter;
+      cachePlayer = null; originalSourceSetter = null;
+    }
+    try {
+      c.player.error?.(null);
+      await nativeQuality.reload(c.player, c.media, timeline);
+    } catch (_) {}
+    finally {
+      if (resolver && window.__bahaCacheOriginalSource === resolver) {
+        delete window.__bahaCacheOriginalSource;
+        delete window.__bahaCacheBase;
+      }
+      cacheRecovering = false;
+      qualityList = null; lastProgress = null;
+      if (window.__bahaDocumentNonce === nonce) tick();
+    }
   }
   function context() {
     const root = document.querySelector('#video-container');
@@ -36,15 +126,16 @@
     const media = root?.querySelector('video');
     const age = visible(root?.querySelector('.ncc-choosebar'));
     const error = !!media?.error || !!player?.error?.();
+    const contentAuthorized = core?.state?.playingVideo === true &&
+      core.state.playingAd !== true && String(core.state.videoSn) === videoID;
     let phase = 'loading';
     if (series && !matches) phase = 'error';
     else if (age) phase = 'age';
     else if (error) phase = 'error';
     else if (core?.state?.playingAd === true) phase = 'advertisement';
-    else if (core?.state?.playingVideo === true &&
-      String(core.state.videoSn) === videoID) phase = 'content';
+    else if (contentAuthorized) phase = 'content';
     else if (root && !core) phase = 'official';
-    return { root, player, media, manager: controls?.danmuManager, phase, matches };
+    return { root, player, media, manager: controls?.danmuManager, phase, matches, contentAuthorized };
   }
   function applyDanmaku(c) {
     if (!preferences || c.phase !== 'content') {
@@ -153,31 +244,36 @@
   function tick() {
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
     const c = context();
-    if (cacheEnabled && c.phase === 'content' && c.media?.duration > 0 && !nativeQuality?.isSwitching()) {
-      cacheTimeline = {position: c.media.currentTime, rate: c.media.playbackRate,
-        paused: c.media.paused, muted: c.media.muted};
-    }
-    if (cacheEnabled && c.matches && c.phase === 'error' && !cacheRecovering) {
-      cacheEnabled = false; cacheRecovering = true; cacheFailed = true;
-      const player = cachePlayer, original = originalSourceSetter;
-      cachePlayer = null; originalSourceSetter = null;
-      if (player && original) player.src = original;
-      try { player?.error?.(null); } catch (_) {}
-      const resolver = window.__bahaCacheOriginalSource;
-      Promise.resolve(nativeQuality?.reload(player, c.media, cacheTimeline)).catch(() => false).finally(() => {
-        if (window.__bahaCacheOriginalSource === resolver) {
-          delete window.__bahaCacheOriginalSource;
-          delete window.__bahaCacheBase;
-        }
-        cacheRecovering = false;
-        if (window.__bahaDocumentNonce === nonce) tick();
-      });
+    if (!lifecycleSuspended) restoreSuspended(c);
+    const now = Date.now();
+    if (!lifecycleSuspended && !cacheRecovering && !nativeQuality?.isSwitching() &&
+        c.phase === 'content' && c.media?.duration > 0) {
+      cacheTimeline = snapshot(c);
+      const frames = c.media.getVideoPlaybackQuality?.()?.totalVideoFrames ?? c.media.webkitDecodedFrameCount;
+      const progress = {position: c.media.currentTime, frames};
+      if (lastProgress && progress.position > lastProgress.position &&
+          (!(frames > 0) || frames > lastProgress.frames) && now >= recoveryAfter) recoveryCount = 0;
+      if (c.media.paused || c.media.ended || c.media.seeking || !lastProgress ||
+          (progress.position !== lastProgress.position &&
+            (!(frames > 0) || frames !== lastProgress.frames))) stalledSince = now;
+      lastProgress = progress;
+      if (!c.media.paused && !c.media.ended && !c.media.seeking &&
+          now - stalledSince >= 20000 && now >= recoveryAfter && recoveryCount < 2) {
+        void recover(c);
+      }
+    } else lastProgress = null;
+    const mediaError = c.media?.error?.code;
+    const playerError = c.player?.error?.()?.code;
+    if (!lifecycleSuspended && c.matches && c.phase === 'error' &&
+        [2, 3, 4].includes(mediaError || playerError) && !(playerError >= 1000) &&
+        now >= recoveryAfter && recoveryCount < 2) {
+      void recover(c);
     }
     if (c.matches) mount(c.root);
     applyDanmaku(c);
     metadata();
     const duration = finite(c.media?.duration);
-    const position = Math.min(duration, finite(c.media?.currentTime));
+    const position = Math.min(duration, finite(suspendedTimeline?.position ?? c.media?.currentTime));
     let buffered = 0;
     try { if (c.media?.buffered.length) buffered = Math.min(duration, finite(c.media.buffered.end(c.media.buffered.length - 1))); } catch (_) {}
     // Preserve official prompts until there is a timeline native controls can
@@ -190,8 +286,10 @@
       node.inert = nativeControls;
     });
     const levels = qualityLevels(c.player).filter(l => Number.isInteger(l.height) && l.height >= 144 && l.height <= 4320);
-    const native = levels.length === 0 && !c.player?.tech?.(true)?.vhs && c.matches &&
+    const native = nativeHls(c) && c.matches &&
       c.phase === 'content' ? nativeQuality?.update(c.player, c.media) : null;
+    if (!native && requestedQuality !== null && c.phase === 'content' && levels[0] !== qualityList &&
+        (requestedQuality === 0 || levels.some(level => level.height === requestedQuality))) applyQuality(c, requestedQuality);
     const qualities = native?.qualities ||
       [...new Set(levels.map(l => l.height))].sort((a, b) => b - a);
     const enabled = [...new Set(levels.filter(l => l.enabled === true).map(l => l.height))];
@@ -217,27 +315,36 @@
   async function command(ticket, action, value) {
     if (ticket !== nonce || window.__bahaDocumentNonce !== nonce ||
         window.__bahaMediaSuspended === true) return false;
+    if (action === 'quality') {
+      const run = async () => {
+        const c = context();
+        if (ticket !== nonce || window.__bahaDocumentNonce !== nonce ||
+            window.__bahaMediaSuspended === true || !c.matches ||
+            c.phase !== 'content' || !c.media || !(c.media.duration > 0) ||
+            suspendedTimeline || !Number.isInteger(value)) return false;
+        const accepted = nativeHls(c) ? !!await nativeQuality.select(value, c.player, c.media) : applyQuality(c, value);
+        if (accepted) requestedQuality = value;
+        tick(); return accepted;
+      };
+      const pending = qualityQueue.then(run, run);
+      qualityQueue = pending.catch(() => false);
+      return pending;
+    }
     const c = context();
     // Only the official core can declare that ads and age checks are complete.
     if (!c.matches || !['content', 'advertisement'].includes(c.phase) ||
-        !c.media || !(c.media.duration > 0)) return false;
+        !c.media || (!(c.media.duration > 0) && action !== 'pause')) return false;
     if (c.phase === 'advertisement' && !['play', 'pause', 'mute'].includes(action)) return false;
     try {
-      if (action === 'play') await c.player.play();
-      else if (action === 'pause') c.player.pause();
+      if (action === 'play') {
+        restoreSuspended(c);
+        if (suspendedTimeline) return false;
+        await c.player.play();
+      }
+      else if (action === 'pause') { c.player.pause(); nativeQuality?.suspend(); }
       else if (action === 'seek' && Number.isFinite(value)) c.player.currentTime(Math.max(0, Math.min(c.media.duration, value)));
       else if (action === 'rate' && [.5, .75, 1, 1.25, 1.5, 1.75, 2].includes(value)) c.player.playbackRate(value);
       else if (action === 'mute') c.player.muted(!c.player.muted());
-      else if (action === 'quality' && Number.isInteger(value)) {
-        const levels = qualityLevels(c.player);
-        if (levels.length === 0 && !c.player?.tech?.(true)?.vhs) {
-          if (!nativeQuality || !await nativeQuality.select(value, c.player, c.media)) return false;
-        } else {
-          if (value !== 0 && !levels.some(l => l.height === value)) return false;
-          levels.forEach(level => { level.enabled = value === 0 || level.height === value; });
-          requestedQuality = value;
-        }
-      }
       else if (action === 'danmaku' && (value === 0 || value === 1)) {
         const layer = c.root.querySelector('.vjs-danmu');
         if (!layer) return false;
@@ -317,6 +424,11 @@
   function dispose() {
     clearInterval(timer);
     nativeQuality?.dispose();
+    document.removeEventListener('visibilitychange', visibilityChanged);
+    try {
+      navigator.mediaSession?.setActionHandler('play', null);
+      navigator.mediaSession?.setActionHandler('pause', null);
+    } catch (_) {}
     cacheEnabled = false;
     if (cachePlayer && originalSourceSetter) cachePlayer.src = originalSourceSetter;
     delete window.__bahaCacheOriginalSource;
@@ -328,7 +440,12 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, dispose };
+  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, dispose };
+  document.addEventListener('visibilitychange', visibilityChanged);
+  try {
+    navigator.mediaSession?.setActionHandler('play', () => command(nonce, 'play'));
+    navigator.mediaSession?.setActionHandler('pause', () => command(nonce, 'pause'));
+  } catch (_) {}
   tick();
   timer = setInterval(tick, 500);
 })(); true;

@@ -21,6 +21,7 @@ import CryptoKit
     private var resources: [String: Resource] = [:]
     private var playlists: [String: [[String: Any]]] = [:]
     private var tasks: [String: URLSessionDownloadTask] = [:]
+    private var demandTasks = Set<String>()
     private var failed = Set<String>()
     private var excludedPrefetch = Set<String>()
     private var waiters: [String: [(NWConnection, String?, Bool)]] = [:]
@@ -49,6 +50,18 @@ import CryptoKit
     private lazy var manifests: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+    }()
+    private lazy var foreground: URLSession = {
+        // An AVPlayer read must not wait for the background transfer scheduler.
+        // Speculative read-ahead still uses the persistent background session.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        configuration.httpMaximumConnectionsPerHost = 4
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
     }()
@@ -161,6 +174,7 @@ import CryptoKit
     private func reset() {
         for task in tasks.values { task.cancel() }
         tasks.removeAll()
+        demandTasks.removeAll()
         for waiting in waiters.values {
             for (connection, _, _) in waiting { reply(connection, status: 410) }
         }
@@ -279,8 +293,15 @@ import CryptoKit
             serve(connection, source: source, range: headers["range"], head: head)
         } else {
             waiters[source, default: []].append((connection, headers["range"], head))
-            tasks[source]?.priority = URLSessionTask.highPriority
-            download(source)
+            download(source, demand: true)
+            let ticket = token
+            queue.asyncAfter(deadline: .now() + 30) {
+                guard ticket == self.token, var pending = self.waiters[source],
+                      let index = pending.firstIndex(where: { $0.0 === connection }) else { return }
+                pending.remove(at: index)
+                self.waiters[source] = pending.isEmpty ? nil : pending
+                self.reply(connection, status: 502)
+            }
         }
     }
     private func parse(_ text: String, base: URL, role: String) -> [String: Any]? {
@@ -341,10 +362,15 @@ import CryptoKit
             if !FileManager.default.fileExists(atPath: file(source).path) { download(source) }
         }
     }
-    private func download(_ source: String) {
-        guard tasks[source] == nil, let resource = resources[source], resource.kind != "playlist",
+    private func download(_ source: String, demand: Bool = false) {
+        guard let resource = resources[source], resource.kind != "playlist",
               !token.isEmpty else { return }
-        let task = session.downloadTask(with: request(resource.url))
+        if let existing = tasks[source] {
+            if !demand || demandTasks.contains(source) { return }
+            existing.cancel()
+        }
+        let task = (demand ? foreground : session).downloadTask(with: request(resource.url))
+        if demand { demandTasks.insert(source) }
         task.taskDescription = token + "\n" + source
         task.priority = waiters[source] == nil ? URLSessionTask.lowPriority : URLSessionTask.highPriority
         tasks[source] = task
@@ -367,7 +393,7 @@ import CryptoKit
               let response = downloadTask.response as? HTTPURLResponse, response.statusCode == 200,
               let finalURL = response.url, allowed(finalURL.absoluteString) != nil else { return }
         let source = String(description.dropFirst(token.count + 1))
-        guard resources[source] != nil else { return }
+        guard resources[source] != nil, tasks[source] === downloadTask else { return }
         do {
             let destination = file(source)
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
@@ -399,8 +425,10 @@ import CryptoKit
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let description = task.taskDescription, description.hasPrefix(token + "\n") else { return }
         let source = String(description.dropFirst(token.count + 1))
-        guard tasks[source] == nil || tasks[source]?.taskIdentifier == task.taskIdentifier else { return }
+        // Task identifiers are only unique inside one URLSession.
+        guard tasks[source] === task else { return }
         tasks.removeValue(forKey: source)
+        demandTasks.remove(source)
         if error != nil || !FileManager.default.fileExists(atPath: file(source).path) { failed.insert(source) }
         let pending = waiters.removeValue(forKey: source) ?? []
         for (connection, range, head) in pending {

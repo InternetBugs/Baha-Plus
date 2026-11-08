@@ -135,8 +135,12 @@
         var progress = point == null ? undefined : point === -1 ? 1 : item.duration > 0 ? Math.min(1,point/(item.duration*60)) : undefined;
         var seconds = Math.max(0, Math.floor(point));
         var label = point === -1 ? '觀看結束' : point > 0 ? Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0') : undefined;
+        var watchedAt = typeof item.watchTime === 'string' ? new Date(item.watchTime) : null;
+        var nextVideoId = String(item.nextVideoSn);
         history.push({anime:{id:id,title:item.title.trim(),cover:cover.href,poster:cover.href,sections:[]},
-          videoId:videoId,episodeLabel:item.episode,progress:progress,progressLabel:label});
+          videoId:videoId,episodeLabel:item.episode,progress:progress,progressLabel:label,
+          watchedAt:watchedAt && Number.isFinite(watchedAt.getTime()) ? watchedAt.toISOString() : undefined,
+          nextVideoId:/^[1-9]\d{0,9}$/.test(nextVideoId) && nextVideoId !== videoId ? nextVideoId : undefined});
       });
       if (history.length > 1000) throw Error('History exceeds account limit');
     }

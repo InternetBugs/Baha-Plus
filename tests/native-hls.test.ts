@@ -22,7 +22,7 @@ function fixture(body = playlist) {
   const requests: string[] = [];
   const media = {
     duration: 1200, currentTime: 37.4, playbackRate: 1.25, paused: false,
-    muted: true, currentSrc: source,
+    muted: true, currentSrc: source, readyState: 4, seeking: false,
   };
   const player = {
     currentSource: () => ({src: source, type: 'application/x-mpegURL'}),
@@ -150,5 +150,45 @@ test('cache source migration keeps the timeline and background completion stays 
   assert.equal(f.media.playbackRate, 1.25);
   assert.equal(f.media.paused, true);
   assert.equal(f.media.muted, true);
+  f.expire();
+});
+
+test('a source load completing after a full background round trip cannot resume playback', async () => {
+  const f = fixture();
+  f.client.update(f.player, f.media);
+  await flush();
+  const pending = f.client.select(720, f.player, f.media);
+  f.context.window.__bahaMediaSuspended = true;
+  f.client.suspend();
+  f.context.window.__bahaMediaSuspended = false;
+  f.emit('loadedmetadata');
+  assert.equal(await pending, true);
+  assert.equal(f.media.currentTime, 37.4);
+  assert.equal(f.media.paused, true);
+  f.expire();
+});
+
+test('native HLS waits for seek completion and playable data before acknowledging a quality', async () => {
+  const f = fixture();
+  f.client.update(f.player, f.media);
+  await flush();
+  let completed = false;
+  const pending = f.client.select(720, f.player, f.media).then((ok: boolean) => {
+    completed = true; return ok;
+  });
+  f.media.seeking = true;
+  f.media.readyState = 1;
+  f.emit('loadedmetadata');
+  await flush();
+  assert.equal(completed, false);
+  assert.equal(f.client.state().quality, 0);
+  f.media.seeking = false;
+  f.emit('seeked');
+  await flush();
+  assert.equal(completed, false);
+  f.media.readyState = 4;
+  f.emit('canplay');
+  assert.equal(await pending, true);
+  assert.equal(f.client.state().quality, 720);
   f.expire();
 });
