@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'dart:convert';
-import 'dart:ui' show FramePhase, FrameTiming;
+import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -69,7 +69,9 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   late final Ticker _ticker;
   final _position = ValueNotifier<double>(0);
   final _text = <String, TextPainter>{};
+  final _sprites = _DanmakuRasterCache();
   final _lanes = StableDanmakuLanes();
+  double _pixelRatio = 1;
   late final DanmakuAnimationClock _animationClock;
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   int? _firstTimedFrame, _lastTimedFrame;
@@ -78,6 +80,8 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   VideoPlayerController? _video;
   bool _failed = false;
   int get cachedTextPainters => _text.length;
+  int get cachedRasterBytes => _sprites.bytes;
+  int get cachedRasterImages => _sprites.length;
   static const maximumTextPainters = 64;
 
   @override
@@ -97,6 +101,16 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     });
     widget.playback.addListener(_changed);
     _changed();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    if (_pixelRatio != ratio) {
+      _clearText();
+      _pixelRatio = ratio;
+    }
   }
 
   @override
@@ -134,19 +148,22 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
 
   void _clearText() {
     _lanes.clear();
+    _sprites.clear();
     for (final painter in _text.values) {
       painter.dispose();
     }
     _text.clear();
   }
 
-  void _recordTimings(List<FrameTiming> timings) {
+  void _recordTimings(List<ui.FrameTiming> timings) {
     if (!mounted || !_ticker.isActive || widget.playback.state.paused) {
       _resetTimings();
       return;
     }
     for (final timing in timings) {
-      final timestamp = timing.timestampInMicroseconds(FramePhase.vsyncStart);
+      final timestamp = timing.timestampInMicroseconds(
+        ui.FramePhase.vsyncStart,
+      );
       _firstTimedFrame ??= timestamp;
       _lastTimedFrame = timestamp;
       _timedFrames++;
@@ -161,7 +178,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     final seconds = (_lastTimedFrame! - _firstTimedFrame!) / 1e6;
     if (seconds < 10) return;
     debugPrint(
-      '[BAHA_DANMAKU] ${jsonEncode({'frames': _timedFrames, 'windowSeconds': double.parse(seconds.toStringAsFixed(3)), 'fps': double.parse(((_timedFrames - 1) / seconds).toStringAsFixed(2)), 'buildOver16ms': _slowBuilds, 'rasterOver16ms': _slowRasters, 'maxBuildMs': _maxBuildUs / 1000, 'maxRasterMs': _maxRasterUs / 1000, 'textPainters': _text.length})}',
+      '[BAHA_DANMAKU] ${jsonEncode({'frames': _timedFrames, 'windowSeconds': double.parse(seconds.toStringAsFixed(3)), 'fps': double.parse(((_timedFrames - 1) / seconds).toStringAsFixed(2)), 'buildOver16ms': _slowBuilds, 'rasterOver16ms': _slowRasters, 'maxBuildMs': _maxBuildUs / 1000, 'maxRasterMs': _maxRasterUs / 1000, 'textPainters': _text.length, 'rasterImages': _sprites.length, 'rasterBytes': _sprites.bytes})}',
     );
     _resetTimings();
   }
@@ -195,6 +212,8 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
                 settings: widget.settings,
                 text: _text,
                 lanes: _lanes,
+                sprites: _sprites,
+                pixelRatio: _pixelRatio,
               ),
             ),
           ),
@@ -235,6 +254,74 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   }
 }
 
+class _DanmakuSprite {
+  const _DanmakuSprite(this.image, this.width, this.height, this.bytes);
+  final ui.Image image;
+  final double width, height;
+  final int bytes;
+}
+
+class _DanmakuRasterCache {
+  static const maximumBytes = 16 * 1024 * 1024;
+  static const padding = 4.0;
+  final _images = <String, _DanmakuSprite>{};
+  final _unavailable = <String>{};
+  int bytes = 0;
+  int get length => _images.length;
+
+  _DanmakuSprite? obtain(String id, TextPainter painter, double ratio) {
+    final existing = _images[id];
+    if (existing != null) return existing;
+    if (_unavailable.contains(id)) return null;
+    final width = painter.width + padding * 2;
+    final height = painter.height + padding * 2;
+    final pixelWidth = (width * ratio).ceil();
+    final pixelHeight = (height * ratio).ceil();
+    final cost = pixelWidth * pixelHeight * 8;
+    if (pixelWidth > 4096 ||
+        pixelHeight > 1024 ||
+        cost > maximumBytes ||
+        bytes + cost > maximumBytes) {
+      return null;
+    }
+    ui.Picture? picture;
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder)..scale(ratio);
+      painter.paint(canvas, const Offset(padding, padding));
+      picture = recorder.endRecording();
+      final image = picture.toImageSync(pixelWidth, pixelHeight);
+      final sprite = _DanmakuSprite(image, width, height, cost);
+      _images[id] = sprite;
+      bytes += cost;
+      return sprite;
+    } catch (_) {
+      _unavailable.add(id);
+      return null;
+    } finally {
+      picture?.dispose();
+    }
+  }
+
+  void retain(Set<String> ids) {
+    for (final id in _images.keys.where((id) => !ids.contains(id)).toList()) {
+      final sprite = _images.remove(id)!;
+      bytes -= sprite.bytes;
+      sprite.image.dispose();
+    }
+    _unavailable.removeWhere((id) => !ids.contains(id));
+  }
+
+  void clear() {
+    for (final sprite in _images.values) {
+      sprite.image.dispose();
+    }
+    _images.clear();
+    _unavailable.clear();
+    bytes = 0;
+  }
+}
+
 class _DanmakuPainter extends CustomPainter {
   _DanmakuPainter({
     required this.position,
@@ -242,12 +329,16 @@ class _DanmakuPainter extends CustomPainter {
     required this.settings,
     required this.text,
     required this.lanes,
+    required this.sprites,
+    required this.pixelRatio,
   }) : super(repaint: position);
   final ValueNotifier<double> position;
   final List<NativeDanmaku> items;
   final DanmakuSettings settings;
   final Map<String, TextPainter> text;
   final StableDanmakuLanes lanes;
+  final _DanmakuRasterCache sprites;
+  final double pixelRatio;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -317,7 +408,27 @@ class _DanmakuPainter extends CustomPainter {
         final y = item.mode == 'bottom'
             ? size.height - (lane + 1) * lineHeight - 5
             : lane * lineHeight + 5;
-        painter.paint(canvas, Offset(x, y));
+        final sprite = sprites.obtain(item.id, painter, pixelRatio);
+        if (sprite == null) {
+          painter.paint(canvas, Offset(x, y));
+        } else {
+          canvas.drawImageRect(
+            sprite.image,
+            Rect.fromLTWH(
+              0,
+              0,
+              sprite.image.width.toDouble(),
+              sprite.image.height.toDouble(),
+            ),
+            Rect.fromLTWH(
+              x - _DanmakuRasterCache.padding,
+              y - _DanmakuRasterCache.padding,
+              sprite.width,
+              sprite.height,
+            ),
+            Paint()..filterQuality = FilterQuality.low,
+          );
+        }
       }
       canvas.restore();
     } else {
@@ -326,9 +437,12 @@ class _DanmakuPainter extends CustomPainter {
     for (final id in text.keys.where((id) => !retained.contains(id)).toList()) {
       text.remove(id)!.dispose();
     }
+    sprites.retain(retained);
   }
 
   @override
   bool shouldRepaint(covariant _DanmakuPainter oldDelegate) =>
-      oldDelegate.items != items || oldDelegate.settings != settings;
+      oldDelegate.items != items ||
+      oldDelegate.settings != settings ||
+      oldDelegate.pixelRatio != pixelRatio;
 }

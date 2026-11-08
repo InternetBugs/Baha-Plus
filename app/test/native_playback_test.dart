@@ -236,9 +236,13 @@ void main() {
       );
       expect(state.cachedTextPainters, greaterThan(0));
       expect(state.cachedTextPainters, lessThanOrEqualTo(64));
+      expect(state.cachedRasterImages, greaterThan(0));
+      expect(state.cachedRasterBytes, lessThanOrEqualTo(16 * 1024 * 1024));
       await tester.pumpWidget(surface(const DanmakuSettings(enabled: false)));
       await tester.pump();
       expect(state.cachedTextPainters, 0);
+      expect(state.cachedRasterImages, 0);
+      expect(state.cachedRasterBytes, 0);
       await tester.pumpWidget(const SizedBox());
       native.dispose();
     },
