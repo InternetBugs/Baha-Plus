@@ -1,9 +1,12 @@
 import 'dart:math' as math;
+import 'dart:convert';
+import 'dart:ui' show FramePhase, FrameTiming;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:video_player/video_player.dart';
 import '../core/community.dart';
+import '../core/danmaku_animation.dart';
 import '../core/models.dart';
 import '../data/native_playback.dart';
 
@@ -66,8 +69,12 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   late final Ticker _ticker;
   final _position = ValueNotifier<double>(0);
   final _text = <String, TextPainter>{};
-  DateTime _sampledAt = DateTime.now();
-  double _sampledPosition = 0;
+  final _lanes = StableDanmakuLanes();
+  late final DanmakuAnimationClock _animationClock;
+  static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
+  int? _firstTimedFrame, _lastTimedFrame;
+  int _timedFrames = 0, _slowBuilds = 0, _slowRasters = 0;
+  int _maxBuildUs = 0, _maxRasterUs = 0;
   VideoPlayerController? _video;
   bool _failed = false;
   int get cachedTextPainters => _text.length;
@@ -76,15 +83,17 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   @override
   void initState() {
     super.initState();
+    // Notification arrival time is not animation time. Use the shared engine
+    // frame timestamp so all movement in a rendered frame has one time base.
+    _animationClock = DanmakuAnimationClock(
+      now: () => SchedulerBinding.instance.currentSystemFrameTimeStamp,
+    );
+    if (_diagnostics) {
+      SchedulerBinding.instance.addTimingsCallback(_recordTimings);
+    }
     _ticker = createTicker((_) {
       final state = widget.playback.state;
-      _position.value = math.min(
-        state.duration,
-        _sampledPosition +
-            DateTime.now().difference(_sampledAt).inMicroseconds /
-                1e6 *
-                state.rate,
-      );
+      _position.value = math.min(state.duration, _animationClock.position);
     });
     widget.playback.addListener(_changed);
     _changed();
@@ -104,9 +113,12 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   void _changed() {
     if (!mounted) return;
     final state = widget.playback.state;
-    _sampledPosition = state.position;
-    _sampledAt = DateTime.now();
-    _position.value = state.position;
+    _animationClock.update(
+      position: state.position,
+      rate: state.rate,
+      running: !state.paused && !state.buffering,
+    );
+    _position.value = math.min(state.duration, _animationClock.position);
     final animate =
         !state.paused && !state.buffering && widget.settings.enabled;
     if (animate && !_ticker.isActive) _ticker.start();
@@ -121,10 +133,43 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   }
 
   void _clearText() {
+    _lanes.clear();
     for (final painter in _text.values) {
       painter.dispose();
     }
     _text.clear();
+  }
+
+  void _recordTimings(List<FrameTiming> timings) {
+    if (!mounted || !_ticker.isActive || widget.playback.state.paused) {
+      _resetTimings();
+      return;
+    }
+    for (final timing in timings) {
+      final timestamp = timing.timestampInMicroseconds(FramePhase.vsyncStart);
+      _firstTimedFrame ??= timestamp;
+      _lastTimedFrame = timestamp;
+      _timedFrames++;
+      final build = timing.buildDuration.inMicroseconds;
+      final raster = timing.rasterDuration.inMicroseconds;
+      if (build > 16667) _slowBuilds++;
+      if (raster > 16667) _slowRasters++;
+      _maxBuildUs = math.max(_maxBuildUs, build);
+      _maxRasterUs = math.max(_maxRasterUs, raster);
+    }
+    if (_firstTimedFrame == null || _lastTimedFrame == null) return;
+    final seconds = (_lastTimedFrame! - _firstTimedFrame!) / 1e6;
+    if (seconds < 10) return;
+    debugPrint(
+      '[BAHA_DANMAKU] ${jsonEncode({'frames': _timedFrames, 'windowSeconds': double.parse(seconds.toStringAsFixed(3)), 'fps': double.parse(((_timedFrames - 1) / seconds).toStringAsFixed(2)), 'buildOver16ms': _slowBuilds, 'rasterOver16ms': _slowRasters, 'maxBuildMs': _maxBuildUs / 1000, 'maxRasterMs': _maxRasterUs / 1000, 'textPainters': _text.length})}',
+    );
+    _resetTimings();
+  }
+
+  void _resetTimings() {
+    _firstTimedFrame = _lastTimedFrame = null;
+    _timedFrames = _slowBuilds = _slowRasters = 0;
+    _maxBuildUs = _maxRasterUs = 0;
   }
 
   @override
@@ -149,6 +194,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
                 items: widget.danmaku,
                 settings: widget.settings,
                 text: _text,
+                lanes: _lanes,
               ),
             ),
           ),
@@ -179,6 +225,9 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   @override
   void dispose() {
     widget.playback.removeListener(_changed);
+    if (_diagnostics) {
+      SchedulerBinding.instance.removeTimingsCallback(_recordTimings);
+    }
     _ticker.dispose();
     _position.dispose();
     _clearText();
@@ -192,11 +241,13 @@ class _DanmakuPainter extends CustomPainter {
     required this.items,
     required this.settings,
     required this.text,
+    required this.lanes,
   }) : super(repaint: position);
   final ValueNotifier<double> position;
   final List<NativeDanmaku> items;
   final DanmakuSettings settings;
   final Map<String, TextPainter> text;
+  final StableDanmakuLanes lanes;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -213,10 +264,8 @@ class _DanmakuPainter extends CustomPainter {
         }
       }
       final lineHeight = 26 * settings.scale;
-      final lanes = math.max(1, (size.height * .65 / lineHeight).floor());
-      final rolling = List<double>.filled(lanes, -1);
-      final top = List<double>.filled(lanes, -1);
-      final bottom = List<double>.filled(lanes, -1);
+      final laneCount = math.max(1, (size.height * .65 / lineHeight).floor());
+      lanes.prepare(position: now, laneCount: laneCount);
       var considered = 0;
       canvas.save();
       canvas.clipRect(Offset.zero & size);
@@ -237,13 +286,13 @@ class _DanmakuPainter extends CustomPainter {
             (item.mode == 'bottom' && !settings.bottom)) {
           continue;
         }
-        final available = switch (item.mode) {
-          'top' => top,
-          'bottom' => bottom,
-          _ => rolling,
-        };
-        final lane = available.indexWhere((until) => until <= item.time);
-        if (lane < 0) continue;
+        final lane = lanes.assign(
+          id: item.id,
+          mode: item.mode,
+          start: item.time,
+          end: item.time + duration,
+        );
+        if (lane == null) continue;
         final painter = text.putIfAbsent(
           item.id,
           () => TextPainter(
@@ -269,10 +318,10 @@ class _DanmakuPainter extends CustomPainter {
             ? size.height - (lane + 1) * lineHeight - 5
             : lane * lineHeight + 5;
         painter.paint(canvas, Offset(x, y));
-        // A lane is reused only after the previous message has left it.
-        available[lane] = item.time + duration;
       }
       canvas.restore();
+    } else {
+      lanes.clear();
     }
     for (final id in text.keys.where((id) => !retained.contains(id)).toList()) {
       text.remove(id)!.dispose();
