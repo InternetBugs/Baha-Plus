@@ -49,6 +49,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   bool _readingHealth = false;
   int? _terminatedGeneration;
   NativePlayback? _nativePlayback;
+  Future<void> _nativeRelease = Future.value();
   String? _preparingNative, _nativeAttempted;
   bool _syncingNative = false;
   List<NativeDanmaku> _nativeDanmaku = const [];
@@ -101,6 +102,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       _nativeDanmaku = const [];
       _danmakuTimer?.cancel();
       native.dispose();
+      _nativeRelease = Future.wait([_nativeRelease, native.released])
+          .then<void>((_) {})
+          .catchError((Object _) {
+            debugPrint('[BAHA_NATIVE] player release unavailable');
+          });
     } else if (native != null && !store.applicationActive) {
       unawaited(native.setApplicationActive(false));
     }
@@ -116,6 +122,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
 
   Future<void> _syncHlsCache(Json body, String document) async {
     if (!Platform.isIOS ||
+        AppStore.nativePlaybackBackend != null ||
         !mounted ||
         !store.showsPlayer ||
         !store.browserVisible ||
@@ -248,6 +255,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   @override
   Future<void> load(Uri uri) async {
     if (!OfficialSite.allowedNavigation(uri)) return;
+    await _nativeRelease;
     await _syncInitialQualityScript();
     await _configureMode(uri);
     await _controller?.loadUrl(
@@ -257,6 +265,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
 
   @override
   Future<void> reload() async {
+    await _nativeRelease;
     await _syncInitialQualityScript();
     await _controller?.reload();
   }
@@ -268,8 +277,13 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   }
 
   @override
-  Future<dynamic> evaluate(String script) async =>
-      _controller?.evaluateJavascript(source: script);
+  Future<dynamic> evaluate(String script) async {
+    // On exit this completes before AppStore deactivates AVAudioSession.
+    // Navigation can replace the operation before its next store notification.
+    _cacheSessionChanged();
+    await _nativeRelease;
+    return _controller?.evaluateJavascript(source: script);
+  }
 
   @override
   Future<bool> playerCommand(
@@ -655,7 +669,11 @@ try {
             _terminatedGeneration = _documentGeneration;
             _publicDocumentReady = false;
             debugPrint('[BAHA_HEALTH] web-content-process-terminated');
+            // Native playback still depends on this document's authorization.
+            // Stop it synchronously before process recovery can replace it.
+            unawaited(_nativePlayback?.pause());
             unawaited(store.playerProcessTerminated());
+            unawaited(_nativePlayback?.block());
           },
           onLoadStart: (controller, url) async {
             _documentGeneration++;
@@ -787,8 +805,8 @@ try {
   }
 
   Future<void> _prepareNativePlayback(Json body, String document) async {
-    if (!Platform.isAndroid ||
-        !AppStore.androidNativePlaybackEnabled ||
+    final backend = AppStore.nativePlaybackBackend;
+    if (backend == null ||
         !mounted ||
         !store.showsPlayer ||
         !store.browserVisible ||
@@ -804,13 +822,17 @@ try {
     _preparingNative = document;
     NativePlayback? candidate;
     bool live() =>
-        mounted && store.operation.id == document && store.showsPlayer;
+        mounted &&
+        store.operation.id == document &&
+        store.showsPlayer &&
+        store.browserVisible;
     try {
       final prepared = await _controller?.callAsyncJavaScript(
         arguments: {'ticket': document},
         functionBody: '''
 if (window.__bahaDocumentNonce !== ticket) return null;
-return JSON.stringify(await window.__bahaPlayerBridge?.prepareNative() ?? null);
+const source = await window.__bahaPlayerBridge?.prepareNative();
+return JSON.stringify(source ? {...source, userAgent: navigator.userAgent} : null);
 ''',
       );
       if (!live() || prepared?.value is! String || prepared?.error != null) {
@@ -819,10 +841,19 @@ return JSON.stringify(await window.__bahaPlayerBridge?.prepareNative() ?? null);
       final raw = jsonDecode(prepared!.value as String);
       if (raw == null) return;
       final source = NativePlaybackSource.fromJson(raw as Json);
+      // Desktop content mode may change WKWebView's agent. Use the agent of
+      // the actual authorized document, rather than a separate default view.
+      final userAgent = raw['userAgent'];
+      if (userAgent is! String ||
+          userAgent.isEmpty ||
+          userAgent.length > 4096 ||
+          userAgent.contains(RegExp(r'[\r\n]'))) {
+        throw const FormatException('Invalid native media user agent');
+      }
       candidate = NativePlayback(
         document: document,
         source: source,
-        userAgent: _nativeAgent ?? '',
+        userAgent: userAgent,
         onState: (value) {
           if (!live()) return;
           store.updateNativePlayback(document, value);
@@ -851,7 +882,7 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
       );
       if (!live()) return;
       setState(() {});
-      debugPrint('[BAHA_NATIVE] Android ExoPlayer handoff complete');
+      debugPrint('[BAHA_NATIVE] $backend handoff complete');
       unawaited(_readNativeDanmaku());
       _danmakuTimer?.cancel();
       _danmakuTimer = Timer.periodic(
@@ -880,18 +911,26 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
     if (!mounted || native?.active != true || _syncingNative) return;
     _syncingNative = true;
     try {
-      final result = await _controller?.callAsyncJavaScript(
-        arguments: {'ticket': native!.document, 'clock': native.clock},
-        functionBody: '''
+      final result = await _controller
+          ?.callAsyncJavaScript(
+            arguments: {'ticket': native!.document, 'clock': native.clock},
+            functionBody: '''
 return window.__bahaDocumentNonce === ticket &&
   window.__bahaPlayerBridge?.syncNative(clock) === true;
 ''',
-      );
-      if (_nativePlayback == native && result?.value == false) {
+          )
+          .timeout(const Duration(seconds: 5));
+      if (_nativePlayback == native &&
+          store.applicationActive &&
+          (result?.error != null || result?.value != true)) {
         await native!.block();
       }
     } catch (_) {
-      if (_nativePlayback == native) await native!.block();
+      // WKWebView may be suspended along with the app. A foreground session
+      // must still stop if its official authorization clock is unavailable.
+      if (_nativePlayback == native && store.applicationActive) {
+        await native!.block();
+      }
     } finally {
       _syncingNative = false;
     }

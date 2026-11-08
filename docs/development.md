@@ -78,7 +78,7 @@ Android 日常开发、打包、模拟器验证均在本地完成。GitHub Actio
 
 GitHub Actions 的 **Manual test build** 默认只构建 iOS 测试包并运行 iPhone 模拟器原生 XCTest；`platform` 可选择 `ios`、`android` 或 `both`。先在所选提交运行 JavaScript、Python 和 Flutter 回归及静态检查，再构建所选平台：Android 为正式 Android 密钥签名的 Release APK，iOS 为未签名 IPA。全部所选检查成功后，`BahaPlus-test-build-版本号` 附件提供对应安装包、SHA-256 校验文件和记录平台、源码提交及运行地址的 `build-info.json`，保留 14 天。未选的平台跳过，不会阻塞最终附件汇总。
 
-测试版本复用现有版本选择规则，默认选择高于现有标签的下一个版本，也可手动指定更高版本。测试构建不创建版本标签或 GitHub Release，不修改 `pubspec.yaml`。Android 使用与正式包相同的签名便于覆盖安装；iOS IPA 仍须另行签名后安装。测试构建开启 `BAHA_DIAGNOSTICS`：允许检查 WebView，并每十秒输出不含媒体 URL 的播放健康信息，包括后端类型、缓冲范围、DOM／弹幕节点和画布像素数；正式发布默认关闭。云端编译和模拟器测试完成后，播放、系统控制中心及后台缓存仍需真机验收。
+测试版本复用现有版本选择规则，默认选择高于现有标签的下一个版本，也可手动指定更高版本。测试构建不创建版本标签或 GitHub Release，不修改 `pubspec.yaml`。Android 使用与正式包相同的签名便于覆盖安装；iOS IPA 仍须另行签名后安装。iOS 的 `ios_build_mode` 可选择 `release`（默认）或真正的 `debug`，文件名和 `build-info.json` 均记录模式；Android 保持 Release。测试构建开启 `BAHA_DIAGNOSTICS`：允许检查 WebView，并每十秒输出不含媒体 URL 的播放健康信息，包括后端类型、缓冲范围、DOM／弹幕节点和画布像素数；正式发布默认关闭。云端编译和模拟器测试完成后，播放、系统控制中心及后台缓存仍需真机验收。
 
 ### 首次配置 Android 签名
 
@@ -139,9 +139,11 @@ flutter build ios --no-codesign
 
 Android 原生播放实验分支在官方完成广告和授权后，以 ExoPlayer 接管正片，并使用 Flutter 绘制弹幕；精简官方 WebView 继续承担账号校验和进度回传。迁移边界、测试与回退参数见 [Android 原生播放迁移](android-native-player.md)。
 
+当前 `codex/ios-native-player` 分支在同一接管边界使用 `video_player` 的 AVPlayer 后端。iOS 原生模式不启动下述 WebView 专用 HLS 缓存；使用 `BAHA_IOS_NATIVE=false` 可回退原路径。原生生命周期、控制中心、编译命令及真机待验收项见 [iOS 原生播放迁移](ios-native-player.md)。以下 WKWebView 媒体解码、缓存与网页弹幕说明适用于 iOS 回退模式。
+
 广告和回退播放会话启用 WebView 的媒体保留设置，减少二级页面遮挡、应用后台及锁屏时的媒体管线挂起；普通浏览会话关闭该设置。即使桌面／移动页面模式没有变化，进入或离开播放会话也会更新原生设置。应用真正进入 hidden／paused 时暂停视频和音频，返回前台恢复切后台前的媒体位置并保持暂停；临时 inactive（例如拉下 iOS 控制中心）继续接受播放／暂停命令。该设置不代表已实现可靠的 Android 系统后台下载。
 
-iOS 继续使用官方 WKWebView 播放，进入后台／息屏时自动暂停，回到前台保持暂停；当前不启用小窗或后台音频。正片阶段新增原生 `PlaybackCache`：用系统后台 `URLSession` 下载当前画质、音轨接下来约 120 秒的 HLS 分片、初始化数据与密钥，通过仅监听回环地址的本机 HTTP 网关供同一个播放器读取。缓存按播放请求隔离，切集或退出时取消旧任务；磁盘缓存上限 96 MiB。官方广告、账号、地区与年龄校验仍先由原页面完成。
+iOS 回退模式使用官方 WKWebView 播放，进入后台／息屏时自动暂停，回到前台保持暂停；当前不启用小窗或后台音频。正片阶段的原生 `PlaybackCache` 用系统后台 `URLSession` 下载当前画质、音轨接下来约 120 秒的 HLS 分片、初始化数据与密钥，通过仅监听回环地址的本机 HTTP 网关供同一个播放器读取。缓存按播放请求隔离，切集或退出时取消旧任务；磁盘缓存上限 96 MiB。官方广告、账号、地区与年龄校验仍先由原页面完成。
 
 网关只接受当前清单中登记的 `bahamut.akamaized.net` HTTPS 资源，使用每次会话独立的随机路径及官方页面来源校验；不读取或导出 WebView Cookie。清单保留原有加密、分片范围、音轨和时间信息。预加载使用后台 URLSession；播放器正在等待的分片改用有明确超时的前台会话，避免被后台调度长期阻塞。第一次转入缓存源时保留进度、画质、倍速、静音与暂停状态；切源等待时间定位和可播放数据，期间进入后台会锁定暂停，即使加载在返回前台后才完成也不会自动播放。媒体传输／解码错误或持续 20 秒没有播放进展时，会限次重载当前已授权媒体源；缓存通道故障则回退到官方源。暂停、后台、广告和官方权限错误不会触发该恢复。
 

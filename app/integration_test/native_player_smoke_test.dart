@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:baha_plus/core/models.dart';
@@ -11,7 +12,7 @@ import 'package:baha_plus/ui/native_video_surface.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'authorized Android native playback, quality, pause, seek, lifecycle and release',
+    'authorized mobile native playback, quality, pause, seek, lifecycle and release',
     (tester) async {
       Future<void> waitFor(bool Function() ready, {int seconds = 60}) async {
         final end = DateTime.now().add(Duration(seconds: seconds));
@@ -25,6 +26,9 @@ void main() {
       await application.main();
       await waitFor(() => find.byType(AppRoot).evaluate().isNotEmpty);
       final store = tester.widget<AppRoot>(find.byType(AppRoot)).store;
+      final backend = defaultTargetPlatform == TargetPlatform.iOS
+          ? 'ios-avplayer'
+          : 'android-exoplayer';
       await waitFor(() => !store.busy && store.browserUri != null);
       final dynamic portal = tester.state(
         find.byType(OfficialBrowser, skipOffstage: false),
@@ -61,7 +65,7 @@ void main() {
       expect(
         store.usesNativePlayback,
         isTrue,
-        reason: 'Playback must actually use Android ExoPlayer',
+        reason: 'Playback must actually use $backend',
       );
       await waitFor(() => !store.playback.value.buffering);
       expect(find.byType(NativeVideoSurface), findsOneWidget);
@@ -83,7 +87,7 @@ JSON.stringify({dom: document.querySelectorAll('*').length,
               as Json;
       expect(web['source'], isEmpty);
       expect(web['iframeCount'], 0);
-      expect(web['backend'], 'android-exoplayer');
+      expect(web['backend'], backend);
       debugPrint(
         '[BAHA_NATIVE_TEST] actual native texture active; remaining DOM=${web['dom']}',
       );

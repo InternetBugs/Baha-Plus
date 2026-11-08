@@ -1,8 +1,9 @@
 (function () {
   if (location.origin !== 'https://ani.gamer.com.tw') return;
-  // Only the Android host opts in. The official document continues to own
+  // The mobile host explicitly selects its backend. The document still owns
   // entitlement, ads, device locks, CSRF and the official progress callbacks.
-  window.__bahaCreateAndroidPlayback = function ({ context, isCurrent }) {
+  window.__bahaCreateNativePlayback = function ({ context, isCurrent }) {
+    const backend = window.__bahaNativeBackend;
     let active = false, disposed = false, prepared = null, clock = null;
     let player = null, manager = null, media = null, original = new Map();
     const live = () => !disposed && isCurrent();
@@ -20,7 +21,7 @@
     }
     async function prepare() {
       const c = context();
-      if (window.__bahaAndroidNative !== true || !authorized(c) ||
+      if (!['android-exoplayer', 'ios-avplayer'].includes(backend) || !authorized(c) ||
           !(c.media.duration > 0)) return null;
       const current = source(c.player.currentSource?.()?.src || c.media.currentSrc);
       if (!current) return null;
@@ -77,7 +78,7 @@
         ['playbackRate', 'rate'], ['muted', 'muted'], ['seeking', 'seeking'], ['ended', 'ended']
       ]) replace(name, () => clock[key]);
       // Web UI commands cannot restart the unloaded HTML video. Native
-      // controls are routed to ExoPlayer by the host instead.
+      // controls are routed to the platform player by the host instead.
       replace('play', () => Promise.resolve());
       replace('pause', () => {});
       replace('readyState', () => 4);
@@ -169,6 +170,7 @@
       selected.danmuList = remaining;
       return true;
     }
-    return {prepare, commit, sync, danmaku, acknowledgeDanmaku, dispose, get active() {return active;}};
+    return {prepare, commit, sync, danmaku, acknowledgeDanmaku, dispose, backend,
+      get active() {return active;}};
   };
 })(); true;

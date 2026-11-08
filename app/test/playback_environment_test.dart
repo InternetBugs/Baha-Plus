@@ -61,7 +61,11 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  Future<dynamic> remote(String action, {String? document}) async {
+  Future<dynamic> remote(
+    String action, {
+    String? document,
+    dynamic value,
+  }) async {
     final finished = Completer<dynamic>();
     await messenger.handlePlatformMessage(
       channel.name,
@@ -69,6 +73,7 @@ void main() {
         MethodCall('remoteCommand', {
           'action': action,
           'document': document ?? store.operation.id,
+          'value': ?value,
         }),
       ),
       (reply) => finished.complete(channel.codec.decodeEnvelope(reply!)),
@@ -84,6 +89,28 @@ void main() {
       expect(getLast()['position'], 637);
       expect(getLast()['duration'], 1200);
       expect(getLast()['title'], 'Test Anime');
+    },
+  );
+
+  test(
+    'iOS native system seeking uses the current clock and rejects invalid or stale input',
+    () async {
+      store.updateNativePlayback(store.operation.id, store.playback.value);
+      await flush();
+      expect(getLast()['native'], isTrue);
+      portal.scripts.clear();
+      expect(await remote('seek', value: 240.5), isTrue);
+      expect(portal.scripts.last, contains('"seek",240.5'));
+      final sent = portal.scripts.length;
+      expect(await remote('seek', value: '240'), isFalse);
+      expect(await remote('seek', value: double.infinity), isFalse);
+      expect(
+        await remote('seek', value: 240, document: 'old-document'),
+        isFalse,
+      );
+      environment.setForeground(false);
+      expect(await remote('seek', value: 300), isFalse);
+      expect(portal.scripts.length, sent);
     },
   );
 

@@ -25,6 +25,17 @@ class AppStore extends ChangeNotifier {
     'BAHA_ANDROID_NATIVE',
     defaultValue: true,
   );
+  static const iosNativePlaybackEnabled = bool.fromEnvironment(
+    'BAHA_IOS_NATIVE',
+    defaultValue: true,
+  );
+
+  static String? get nativePlaybackBackend => switch (defaultTargetPlatform) {
+    TargetPlatform.android when androidNativePlaybackEnabled =>
+      'android-exoplayer',
+    TargetPlatform.iOS when iosNativePlaybackEnabled => 'ios-avplayer',
+    _ => null,
+  };
   AppStore({
     required this.storage,
     required this.dictionaries,
@@ -79,7 +90,7 @@ class AppStore extends ChangeNotifier {
       'media-compat',
       'native-hls',
       'initial-quality',
-      'android-playback',
+      'native-playback',
       'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
@@ -87,7 +98,7 @@ class AppStore extends ChangeNotifier {
     // Install the native HLS helper and player bridge in the same document
     // evaluation, after the lifecycle pause guard has been initialized.
     scripts['player'] =
-        '${scripts['native-hls']}\n${scripts['android-playback']}\n${scripts['player']}';
+        '${scripts['native-hls']}\n${scripts['native-playback']}\n${scripts['player']}';
     String? language, appearance, danmaku, quality;
     try {
       language = await disk.read('baha.device.language');
@@ -1090,7 +1101,7 @@ window.__bahaDocumentNonce = ${jsonEncode(operation.id)};
 window.__bahaMediaSuspended = ${!_applicationActive};
 window.__bahaDanmakuPreferences = ${jsonEncode(danmakuSettings.toJson())};
 window.__bahaPreferredQuality = $_preferredQuality;
-window.__bahaAndroidNative = ${defaultTargetPlatform == TargetPlatform.android && androidNativePlaybackEnabled};
+window.__bahaNativeBackend = ${jsonEncode(nativePlaybackBackend)};
 window.__bahaPlaybackCheckpoint = ${jsonEncode(_playerCheckpoint)};
 ${_applicationActive ? '' : _suspendMedia} true;
 ''');

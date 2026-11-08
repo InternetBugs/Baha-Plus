@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {parseHTML} from 'linkedom';
 
-function fixture() {
+function fixture(backend: string | null = 'android-exoplayer') {
   const {document} = parseHTML(`<html><head></head><body>
     <header>unused</header><div class="user-info">signed-in identity</div>
     <div class="anime_name"><button>original identity</button></div>
@@ -28,13 +28,13 @@ function fixture() {
   const player: any = {
     pause() {media.pause();}, isDisposed: () => false, error: () => policyError,
     currentSource: () => ({src: 'https://bahamut.akamaized.net/master.m3u8'}),
-    tech: () => ({vhs: {dispose() {vhsDisposed = true;}}}),
+    tech: () => backend === 'ios-avplayer' ? {} : {vhs: {dispose() {vhsDisposed = true;}}},
     currentTime: () => media.currentTime, duration: () => media.duration,
     trigger(name: string) {events.push(name);},
   };
   const context: any = {matches: true, contentAuthorized: true, phase: 'content',
     player, media, manager, root: document.querySelector('#video-container')};
-  const win: any = {__bahaAndroidNative: true,
+  const win: any = {__bahaNativeBackend: backend,
     __bahaParseHlsVariants: () => new Map([[360, 'https://bahamut.akamaized.net/360.m3u8']])};
   const sandbox = vm.createContext({window: win, document, URL, Map, Set,
     location: new URL('https://ani.gamer.com.tw/animeVideo.php?sn=20'),
@@ -42,15 +42,16 @@ function fixture() {
     fetch: async () => ({ok: true, url: 'https://bahamut.akamaized.net/master.m3u8',
       text: async () => '#EXTM3U'}),
   });
-  vm.runInContext(fs.readFileSync('app/assets/adapters/android-playback.js', 'utf8'), sandbox);
-  const bridge = win.__bahaCreateAndroidPlayback({context: () => context, isCurrent: () => live});
+  vm.runInContext(fs.readFileSync('app/assets/adapters/native-playback.js', 'utf8'), sandbox);
+  const bridge = win.__bahaCreateNativePlayback({context: () => context, isCurrent: () => live});
   return {bridge, context, media, player, manager, events, document, win,
     vhsDisposed: () => vhsDisposed, stale: () => {live = false;},
     rejectPolicy: () => {policyError = true;}};
 }
 
-test('Android handoff is gated by the official ad/age/content state and Android opt-in', async () => {
-  const f = fixture();
+for (const backend of ['android-exoplayer', 'ios-avplayer']) {
+test(`${backend}: handoff is gated by the official ad/age/content state`, async () => {
+  const f = fixture(backend);
   for (const phase of ['advertisement', 'age', 'verification', 'error']) {
     f.context.phase = phase;
     assert.equal(await f.bridge.prepare(), null);
@@ -58,19 +59,20 @@ test('Android handoff is gated by the official ad/age/content state and Android 
   }
   f.context.phase = 'content'; f.context.contentAuthorized = false;
   assert.equal(await f.bridge.prepare(), null);
-  f.context.contentAuthorized = true; f.win.__bahaAndroidNative = false;
+  f.context.contentAuthorized = true;
+  f.stale();
   assert.equal(await f.bridge.prepare(), null);
 });
 
-test('handoff unloads the web video and animations, retaining real account/episode context', async () => {
-  const f = fixture();
+test(`${backend}: handoff unloads web media and animations, retaining account/episode context`, async () => {
+  const f = fixture(backend);
   const prepared = await f.bridge.prepare();
   assert.equal(prepared.variants[0].height, 360);
   f.media.currentTime = 42; // Playback may advance during native initialization.
   const handoff = f.bridge.commit();
   assert.equal(handoff.position, 42);
   assert.equal(f.media.getAttribute('src'), null);
-  assert.equal(f.vhsDisposed(), true);
+  assert.equal(f.vhsDisposed(), backend === 'android-exoplayer');
   assert.equal(f.manager.enabled, false);
   assert.equal(f.document.querySelector('iframe'), null);
   assert.equal(f.document.querySelector('section'), null);
@@ -80,8 +82,8 @@ test('handoff unloads the web video and animations, retaining real account/episo
   assert.equal(f.document.querySelector('.vjs-danmu')!.children.length, 0);
 });
 
-test('official callbacks read actual native positions; policy errors and stale documents stop synchronization', async () => {
-  const f = fixture();
+test(`${backend}: official callbacks read the native clock and reject policy errors and stale documents`, async () => {
+  const f = fixture(backend);
   await f.bridge.prepare(); f.bridge.commit();
   assert.equal(f.bridge.sync({position: 50, duration: 1200, paused: false}), true);
   assert.equal(f.player.currentTime(), 50);
@@ -95,8 +97,8 @@ test('official callbacks read actual native positions; policy errors and stale d
   assert.equal(f.bridge.sync({position: 52, duration: 1200, paused: false}), false);
 });
 
-test('danmaku projection decodes plain text, deduplicates IDs and rejects unsupported modes', () => {
-  const f = fixture();
+test(`${backend}: danmaku decodes plain text, deduplicates IDs and rejects unsupported modes`, () => {
+  const f = fixture(backend);
   const items = f.bridge.danmaku();
   assert.equal(items.length, 1);
   assert.equal(items[0].time, 1);
@@ -104,8 +106,8 @@ test('danmaku projection decodes plain text, deduplicates IDs and rejects unsupp
   assert.equal(items[0].color, '#FF0000');
 });
 
-test('acknowledged native danmaku releases its webpage copy while preserving new arrivals', async () => {
-  const f = fixture();
+test(`${backend}: acknowledged danmaku releases the web copy while preserving new arrivals`, async () => {
+  const f = fixture(backend);
   await f.bridge.prepare(); f.bridge.commit();
   const batch = f.bridge.danmaku();
   f.manager.danmuList[2000] = [
@@ -117,8 +119,8 @@ test('acknowledged native danmaku releases its webpage copy while preserving new
   assert.equal(remaining[0].id, '3');
 });
 
-test('exit notifies official pause/unlock handlers before restoring the unloaded web clock', async () => {
-  const f = fixture();
+test(`${backend}: exit notifies official pause/unlock handlers and restores the unloaded web clock`, async () => {
+  const f = fixture(backend);
   const originalClock = f.player.currentTime;
   await f.bridge.prepare(); f.bridge.commit();
   f.bridge.sync({position: 75, duration: 1200, paused: false});
@@ -126,4 +128,13 @@ test('exit notifies official pause/unlock handlers before restoring the unloaded
   assert.equal(f.events.at(-1), 'pause');
   assert.equal(f.player.currentTime, originalClock);
   assert.equal(f.win.__bahaNativeTimeline, undefined);
+});
+}
+
+test('native handoff requires an explicitly supported host backend', async () => {
+  for (const backend of [null, '', 'native-hls', 'unsupported']) {
+    const f = fixture(backend);
+    assert.equal(await f.bridge.prepare(), null);
+    assert.equal(f.bridge.commit(), false);
+  }
 });

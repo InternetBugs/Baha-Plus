@@ -17,7 +17,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/native-adapters.test.ts tests/native-hls.test.ts tests/hls-cache.test.ts tests/initial-quality.test.ts tests/android-playback.test.ts",
+    "test": "tsx --test tests/native-adapters.test.ts tests/native-hls.test.ts tests/hls-cache.test.ts tests/initial-quality.test.ts tests/native-playback.test.ts",
     "resources:check": "node tools/check-native-resources.mjs",
     "resources:search": "node tools/generate-search-folding.mjs",
     "icons": "node tools/generate-native-icons.mjs"

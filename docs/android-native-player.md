@@ -1,6 +1,6 @@
 # Android 原生播放迁移
 
-本实验在 `codex/android-native-player` 分支进行，起点为 `ff7c339376cc4352056602e681425a4640262706`。主分支不合入本次迁移；iOS 保持现有播放路径。
+本实验在 `codex/android-native-player` 分支进行，起点为 `ff7c339376cc4352056602e681425a4640262706`。主分支不合入本次迁移；该 Android 分支的实测不覆盖 iOS。后续 iOS 适配在 `codex/ios-native-player` 独立分支继续，见 [iOS 原生播放迁移](ios-native-player.md)。
 
 ## 播放路径
 
@@ -28,7 +28,7 @@ Android 使用 Flutter 官方 `video_player` 的 ExoPlayer 后端和纹理画面
 
 ## 本地验证
 
-接管与授权边界的离线测试位于 `tests/android-playback.test.ts`；原生画质、资源释放、后台切源和弹幕绘制对象上限位于 `app/test/native_playback_test.dart`。
+接管与授权边界的离线测试位于 `tests/native-playback.test.ts`（Android 分支原名 `tests/android-playback.test.ts`）；原生画质、资源释放、后台切源和弹幕绘制对象上限位于 `app/test/native_playback_test.dart`。
 
 真实 Android 模拟器测试入口：
 

@@ -16,6 +16,14 @@ on:
         description: "测试版本号（留空自动选择下一个版本）"
         required: false
         type: string
+      ios_build_mode:
+        description: "iOS 构建模式"
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - debug
 
 permissions:
   contents: read
@@ -115,7 +123,7 @@ jobs:
           retention-days: 7
 
   ios:
-    name: Build unsigned iOS test IPA
+    name: Build unsigned iOS ${{ inputs.ios_build_mode || 'release' }} test IPA
     needs: validate
     if: inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: macos-latest
@@ -135,19 +143,24 @@ jobs:
         env:
           TEST_VERSION: ${{ needs.validate.outputs.version }}
           BUILD_NUMBER: ${{ needs.validate.outputs.build_number }}
+          IOS_BUILD_MODE: ${{ inputs.ios_build_mode || 'release' }}
         run: |
           set -euo pipefail
+          case "$IOS_BUILD_MODE" in
+            release|debug) ;;
+            *) echo "::error::Unsupported iOS build mode"; exit 1 ;;
+          esac
           flutter pub get --enforce-lockfile
-          flutter build ios --release --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build ios "--$IOS_BUILD_MODE" --no-codesign --dart-define=BAHA_DIAGNOSTICS=true --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
           test -d build/ios/iphoneos/Runner.app
           mkdir -p test-package/Payload
           cp -R build/ios/iphoneos/Runner.app test-package/Payload/
           cd test-package
-          ditto -c -k --sequesterRsrc --keepParent Payload BahaPlus-iOS-test-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload "BahaPlus-iOS-test-$IOS_BUILD_MODE-unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
           name: test-package-ios
-          path: app/test-package/BahaPlus-iOS-test-unsigned.ipa
+          path: app/test-package/BahaPlus-iOS-test-*-unsigned.ipa
           if-no-files-found: error
           retention-days: 7
 
@@ -218,6 +231,7 @@ jobs:
           TEST_VERSION: ${{ needs.validate.outputs.version }}
           BUILD_NUMBER: ${{ needs.validate.outputs.build_number }}
           TEST_PLATFORM: ${{ inputs.platform }}
+          IOS_BUILD_MODE: ${{ inputs.ios_build_mode || 'release' }}
         working-directory: test-package
         run: |
           set -euo pipefail
@@ -227,8 +241,9 @@ jobs:
             packages+=(BahaPlus-Android-test.apk)
           fi
           if [[ "$TEST_PLATFORM" == "ios" || "$TEST_PLATFORM" == "both" ]]; then
-            test -f BahaPlus-iOS-test-unsigned.ipa
-            packages+=(BahaPlus-iOS-test-unsigned.ipa)
+            ios_package="BahaPlus-iOS-test-$IOS_BUILD_MODE-unsigned.ipa"
+            test -f "$ios_package"
+            packages+=("$ios_package")
           fi
           sha256sum "${packages[@]}" > SHA256SUMS.txt
           python3 - <<'PY'
@@ -245,6 +260,7 @@ jobs:
               "platform": platform,
               "android_signing": "production" if android else None,
               "ios_signing": "unsigned" if ios else None,
+              "ios_build_mode": os.environ["IOS_BUILD_MODE"] if ios else None,
               "diagnostics": True,
               "checks": ["javascript", "python", "flutter-analyze", "flutter-test"] + (["ios-native-tests"] if ios else []),
           }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -252,11 +268,12 @@ jobs:
           echo "Test version: $TEST_VERSION ($BUILD_NUMBER)" >> "$GITHUB_STEP_SUMMARY"
           echo "Source commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           if [[ "$TEST_PLATFORM" != "android" ]]; then
+            echo "iOS build mode: $IOS_BUILD_MODE" >> "$GITHUB_STEP_SUMMARY"
             echo "The iOS IPA requires signing before installation." >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: BahaPlus-test-build-${{ needs.validate.outputs.version }}
+          name: BahaPlus-test-build-${{ needs.validate.outputs.version }}${{ inputs.platform != 'android' && inputs.ios_build_mode == 'debug' && '-ios-debug' || '' }}
           path: test-package/*
           if-no-files-found: error
           retention-days: 14

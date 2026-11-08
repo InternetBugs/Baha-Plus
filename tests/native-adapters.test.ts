@@ -529,7 +529,7 @@ test('iOS HLS compatibility leaves other origins, other formats and audio unchan
   }
 });
 
-function playerFixture(nativeHls = false) {
+function playerFixture(nativeHls = false, backend?: string) {
   const fixture = setup(`<html><head></head><body><nav>官網導覽</nav>
     <div class="anime_name"><h1>測試動畫 [1]</h1><button onclick="animefun.toggleGather(500, 10, x)"></button></div>
     <div class="data-intro"><p>故事簡介</p><div class="link">作品資料</div></div>
@@ -566,7 +566,8 @@ function playerFixture(nativeHls = false) {
     playbackRate: (value: number) => { commands.push(['rate', value]); media.playbackRate = value; },
     muted: (value?: boolean) => value === undefined ? media.muted : (media.muted = value),
   };
-  fixture.context.window = { __bahaDocumentNonce: 'ticket', __bahaMediaSuspended: false };
+  fixture.context.window = { __bahaDocumentNonce: 'ticket', __bahaMediaSuspended: false,
+    __bahaNativeBackend: backend };
   fixture.context.getComputedStyle = (node: any) => ({ display: node.style?.display || 'block', visibility: 'visible', opacity: '1' });
   fixture.context.setInterval = (callback: () => void) => { tick = callback; return 1; };
   fixture.context.clearInterval = () => { stopped = true; };
@@ -597,6 +598,13 @@ function playerFixture(nativeHls = false) {
     });
     vm.runInContext(fs.readFileSync(folder + 'native-hls.js', 'utf8'), fixture.context);
   }
+  if (backend) {
+    const player = (fixture.document.querySelector('#ani_video') as any).player;
+    media.pause = () => {media.paused = true;};
+    media.load = () => {media.duration = NaN;};
+    player.trigger = (name: string) => commands.push(['event', name]);
+    vm.runInContext(fs.readFileSync(folder + 'native-playback.js', 'utf8'), fixture.context);
+  }
   vm.runInContext(fs.readFileSync(folder + 'player.js', 'utf8').replaceAll('%ANIME_ID%', '10'), fixture.context);
   const emit = (name: string) => {
     if (name === 'loadedmetadata') { media.duration = 1200; media.readyState = 4; }
@@ -606,6 +614,51 @@ function playerFixture(nativeHls = false) {
     advance: (milliseconds: number) => { now += milliseconds; },
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
+
+test('iOS AVPlayer handoff owns the clock, disables web recovery and excludes the legacy cache', async () => {
+  const f = playerFixture(true, 'ios-avplayer');
+  await new Promise(resolve => setImmediate(resolve));
+  const prepared = await f.bridge.prepareNative();
+  assert.equal(prepared.duration, 1200);
+  assert.equal(prepared.variants.length, 2);
+  assert.equal(await f.bridge.enableCache('ticket', prepared.master,
+    'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/'), false);
+  assert.deepEqual(f.sources, []);
+  f.media.currentTime = 51;
+  const handoff = f.bridge.commitNative();
+  assert.equal(handoff.position, 51);
+  assert.equal(f.bridge.syncNative({position: 52, duration: 1200, buffered: 80,
+    paused: false, rate: 1.5, muted: false}), true);
+  assert.equal(f.bridge.diagnostics().backend, 'ios-avplayer');
+  assert.equal(f.bridge.diagnostics().position, 52);
+  const count = f.commands.length;
+  f.bridge.suspend();
+  f.bridge.resume();
+  f.advance(90000);
+  f.tick();
+  assert.equal(f.commands.length, count, 'no restore/seek/recovery runs against the unloaded HTML video');
+  assert.equal(await f.bridge.command('ticket', 'play'), false);
+  assert.equal(await f.bridge.command('ticket', 'quality', 720), false);
+  assert.deepEqual(f.sources, []);
+  f.core.state.playingVideo = false;
+  f.core.state.playingAd = true;
+  assert.equal(f.bridge.syncNative({position: 53, duration: 1200, paused: false}), false);
+  f.bridge.dispose();
+});
+
+test('an in-flight iOS web quality switch delays native commit until the source is settled', async () => {
+  const f = playerFixture(true, 'ios-avplayer');
+  await new Promise(resolve => setImmediate(resolve));
+  await f.bridge.prepareNative();
+  const selecting = f.bridge.command('ticket', 'quality', 720);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.bridge.commitNative(), null);
+  f.emit('loadedmetadata');
+  assert.equal(await selecting, true);
+  assert.equal((await f.bridge.prepareNative()).duration, 1200);
+  assert.ok(f.bridge.commitNative());
+  f.bridge.dispose();
+});
 
 test('exiting playback unloads every media source and clears the web system session', () => {
   const fixture = playerFixture();

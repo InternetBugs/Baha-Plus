@@ -21,11 +21,14 @@ Map<String, dynamic> sourceJson() => {
 
 class FakeVideo extends VideoPlayerPlatform {
   Completer<void>? holdCreation;
+  Completer<void>? holdSeek;
   final sources = <DataSource>[];
+  final options = <VideoCreationOptions>[];
   final streams = <int, StreamController<VideoEvent>>{};
   final positions = <int, Duration>{};
   final released = <int>[];
   final playing = <int>{};
+  final playCalls = <int>[];
 
   @override
   Future<void> init() async {}
@@ -33,6 +36,7 @@ class FakeVideo extends VideoPlayerPlatform {
   Future<int?> createWithOptions(VideoCreationOptions options) async {
     await holdCreation?.future;
     final id = sources.length;
+    this.options.add(options);
     sources.add(options.dataSource);
     positions[id] = Duration.zero;
     streams[id] = StreamController<VideoEvent>()
@@ -55,6 +59,7 @@ class FakeVideo extends VideoPlayerPlatform {
 
   @override
   Future<void> play(int playerId) async {
+    playCalls.add(playerId);
     playing.add(playerId);
   }
 
@@ -71,6 +76,7 @@ class FakeVideo extends VideoPlayerPlatform {
   Future<void> setPlaybackSpeed(int playerId, double speed) async {}
   @override
   Future<void> seekTo(int playerId, Duration position) async {
+    await holdSeek?.future;
     positions[playerId] = position;
   }
 
@@ -118,6 +124,84 @@ void main() {
   );
 
   test(
+    'the host owns lifecycle and screen wake instead of plugin foreground auto-resume',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      final options = platform.options.single.videoPlayerOptions!;
+      expect(options.allowBackgroundPlayback, isTrue);
+      expect(options.preventsDisplaySleepDuringVideoPlayback, isFalse);
+      expect(options.mixWithOthers, isFalse);
+      native.dispose();
+    },
+  );
+
+  test(
+    'a background round trip while handoff seeks cannot resume playback',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      final held = platform.holdSeek = Completer<void>();
+      final activation = native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      await Future<void>.delayed(Duration.zero);
+      await native.setApplicationActive(false);
+      await native.setApplicationActive(true);
+      held.complete();
+      await activation;
+      expect(native.active, isTrue);
+      expect(native.state.paused, isTrue);
+      expect(platform.playCalls, isEmpty);
+      native.dispose();
+    },
+  );
+
+  test(
+    'pause received during a quality change prevents the replacement from playing',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      final held = platform.holdCreation = Completer<void>();
+      final changing = native.command('quality', 360);
+      await Future<void>.delayed(Duration.zero);
+      final pause = native.command('pause', null);
+      held.complete();
+      expect(await changing, isTrue);
+      expect(await pause, isTrue);
+      expect(platform.playCalls, [0]);
+      expect(native.state.paused, isTrue);
+      native.dispose();
+    },
+  );
+
+  test(
+    'exiting during a quality load releases both old and pending players',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      final held = platform.holdCreation = Completer<void>();
+      final changing = native.command('quality', 360);
+      await Future<void>.delayed(Duration.zero);
+      native.dispose();
+      held.complete();
+      expect(await changing, isFalse);
+      expect(native.video, isNull);
+      expect(platform.released.toSet(), {0, 1});
+      expect(platform.playCalls, [0]);
+    },
+  );
+
+  test(
     'native initial quality, handoff clock and later quality switches preserve user state',
     () async {
       final native = create();
@@ -147,7 +231,7 @@ void main() {
       expect(native.state.quality, 0);
       expect(await native.command('quality', 720), isFalse);
       native.dispose();
-      await Future<void>.delayed(Duration.zero);
+      await native.released;
       expect(platform.released.length, platform.sources.length);
     },
   );

@@ -36,6 +36,11 @@
     paused: c.media.paused, muted: c.media.muted
   };
   function suspend() {
+    if (nativePlayback?.active) {
+      lifecycleSuspended = true;
+      window.__bahaMediaSuspended = true;
+      return;
+    }
     const c = context();
     if (!lifecycleSuspended && c.matches && c.media && c.media.duration > 0) {
       suspendedTimeline = {...snapshot(c), paused: true};
@@ -65,6 +70,7 @@
   function resume() {
     lifecycleSuspended = false;
     window.__bahaMediaSuspended = false;
+    if (nativePlayback?.active) return;
     restoreSuspended(context());
     lastProgress = null;
     tick();
@@ -99,7 +105,7 @@
   }
   function diagnostics() {
     const c = context(), media = c.media;
-    const clock = androidNative?.active ? window.__bahaNativeTimeline : null;
+    const clock = nativePlayback?.active ? window.__bahaNativeTimeline : null;
     let start = 0, end = 0, ranges = 0;
     try {
       ranges = media?.buffered.length || 0;
@@ -109,7 +115,7 @@
     const canvases = [...document.querySelectorAll('canvas')];
     const heap = window.performance?.memory;
     return {
-      phase: c.phase, backend: androidNative?.active ? 'android-exoplayer' :
+      phase: c.phase, backend: nativePlayback?.active ? nativePlayback.backend :
         c.player?.tech?.(true)?.vhs ? 'vhs' : 'native-hls',
       position: finite(clock?.position ?? media?.currentTime), duration: finite(clock?.duration ?? media?.duration),
       paused: (clock || media)?.paused !== false, readyState: clock ? 4 : media?.readyState ?? 0,
@@ -193,6 +199,7 @@
     return { root, player, media, manager: controls?.danmuManager, phase, matches, contentAuthorized };
   }
   function applyDanmaku(c) {
+    if (nativePlayback?.active) return;
     if (!preferences || c.phase !== 'content') {
       appliedManager = null;
       return;
@@ -298,7 +305,7 @@
   }
   function tick() {
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
-    if (androidNative?.active) return;
+    if (nativePlayback?.active) return;
     const c = context();
     const restoringCheckpoint = restoreCheckpoint(c);
     if (!lifecycleSuspended) restoreSuspended(c);
@@ -373,7 +380,7 @@
   }
   async function command(ticket, action, value) {
     if (ticket !== nonce || window.__bahaDocumentNonce !== nonce ||
-        window.__bahaMediaSuspended === true) return false;
+        window.__bahaMediaSuspended === true || nativePlayback?.active) return false;
     if (action === 'quality') {
       const run = async () => {
         const c = context();
@@ -426,7 +433,7 @@
   }
   async function enableCache(ticket, source, base) {
     if (ticket !== nonce || window.__bahaDocumentNonce !== nonce || cachePlayer ||
-        !nativeQuality) return false;
+        window.__bahaNativeBackend || !nativeQuality) return false;
     if (nativeQuality.isSwitching()) return null;
     const c = context();
     if (!c.matches || c.phase !== 'content' || !c.media || !(c.media.duration > 0) ||
@@ -492,7 +499,7 @@
   }
   function dispose() {
     clearInterval(timer);
-    androidNative?.dispose();
+    nativePlayback?.dispose();
     nativeQuality?.dispose();
     document.removeEventListener('visibilitychange', visibilityChanged);
     try {
@@ -510,15 +517,21 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  const androidNative = window.__bahaCreateAndroidPlayback?.({
+  const nativePlayback = window.__bahaCreateNativePlayback?.({
     context, isCurrent: () => window.__bahaDocumentNonce === nonce
   });
   window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, diagnostics, dispose,
-    prepareNative: () => androidNative?.prepare(),
-    commitNative: () => androidNative?.commit() || null,
-    syncNative: value => androidNative?.sync(value) === true,
-    nativeDanmaku: () => androidNative?.danmaku() || [],
-    acknowledgeNativeDanmaku: ids => androidNative?.acknowledgeDanmaku(ids) === true };
+    prepareNative: () => !cachePlayer && !cacheRecovering && !suspendedTimeline &&
+      !nativeQuality?.isSwitching() ? nativePlayback?.prepare() : null,
+    commitNative: () => {
+      if (cachePlayer || cacheRecovering || suspendedTimeline || nativeQuality?.isSwitching()) return null;
+      const timeline = nativePlayback?.commit() || null;
+      if (timeline) nativeQuality?.dispose();
+      return timeline;
+    },
+    syncNative: value => nativePlayback?.sync(value) === true,
+    nativeDanmaku: () => nativePlayback?.danmaku() || [],
+    acknowledgeNativeDanmaku: ids => nativePlayback?.acknowledgeDanmaku(ids) === true };
   document.addEventListener('visibilitychange', visibilityChanged);
   try {
     navigator.mediaSession?.setActionHandler('play', () => command(nonce, 'play'));

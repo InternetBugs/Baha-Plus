@@ -2,6 +2,7 @@
 #import "GeneratedPluginRegistrant.h"
 #import <AVFAudio/AVFAudio.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <math.h>
 #import "Runner-Swift.h"
 
 @interface AppDelegate ()
@@ -11,12 +12,20 @@
 @property(nonatomic, strong) id remotePlayTarget;
 @property(nonatomic, strong) id remotePauseTarget;
 @property(nonatomic, strong) id remoteToggleTarget;
+@property(nonatomic, strong) id remoteSeekTarget;
 @property(nonatomic, copy) NSString *playbackDocument;
+@property(nonatomic, assign) BOOL nativePlayback;
 @end
 
 @implementation AppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+  [NSNotificationCenter.defaultCenter addObserver:self
+      selector:@selector(audioSessionInterrupted:)
+      name:AVAudioSessionInterruptionNotification object:nil];
+  [NSNotificationCenter.defaultCenter addObserver:self
+      selector:@selector(audioRouteChanged:)
+      name:AVAudioSessionRouteChangeNotification object:nil];
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
 }
 
@@ -43,7 +52,10 @@
       return;
     }
     owner.playbackDocument = arguments[@"document"];
+    owner.nativePlayback = [arguments[@"native"] boolValue];
     [owner installPlaybackControls];
+    MPRemoteCommandCenter.sharedCommandCenter.changePlaybackPositionCommand.enabled =
+        owner.nativePlayback && [arguments[@"duration"] doubleValue] > 0;
     MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = @{
       MPMediaItemPropertyTitle: arguments[@"title"] ?: @"Baha Plus",
       MPMediaItemPropertyAlbumTitle: arguments[@"episode"] ?: @"",
@@ -79,8 +91,9 @@
       result(FlutterMethodNotImplemented);
       return;
     }
-    // Dart unloads the web media first so WebKit cannot immediately publish
-    // the old session again. Deactivate only on exit, never on a normal pause.
+    // Dart releases the native player and unloads web media before exit.
+    // Deactivate only on exit, never on a normal pause or quality change.
+    [weakSelf clearPlaybackControls];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
     NSError *error = nil;
     BOOL released = [[AVAudioSession sharedInstance]
@@ -113,17 +126,53 @@
   self.remoteToggleTarget = [commands.togglePlayPauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
     return [weakSelf forwardPlaybackCommand:@"toggle"];
   }];
+  self.remoteSeekTarget = [commands.changePlaybackPositionCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
+    if (!weakSelf.nativePlayback ||
+        ![event isKindOfClass:MPChangePlaybackPositionCommandEvent.class]) {
+      return MPRemoteCommandHandlerStatusCommandFailed;
+    }
+    double position = ((MPChangePlaybackPositionCommandEvent *)event).positionTime;
+    if (!isfinite(position) || position < 0) return MPRemoteCommandHandlerStatusCommandFailed;
+    return [weakSelf forwardPlaybackCommand:@"seek" value:@(position)];
+  }];
 }
 
 - (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action {
+  return [self forwardPlaybackCommand:action value:nil];
+}
+
+- (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action value:(NSNumber *)value {
   NSString *document = self.playbackDocument;
   if (!document.length) return MPRemoteCommandHandlerStatusNoSuchContent;
   dispatch_async(dispatch_get_main_queue(), ^{
     if (![self.playbackDocument isEqualToString:document]) return;
+    NSMutableDictionary *arguments =
+        [@{@"document": document, @"action": action} mutableCopy];
+    if (value) arguments[@"value"] = value;
     [self.playbackEnvironmentChannel invokeMethod:@"remoteCommand"
-        arguments:@{@"document": document, @"action": action}];
+        arguments:arguments];
   });
   return MPRemoteCommandHandlerStatusSuccess;
+}
+
+- (void)audioSessionInterrupted:(NSNotification *)notification {
+  if ([notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] ==
+      AVAudioSessionInterruptionTypeBegan) {
+    [self pauseNativePlayback];
+  }
+}
+
+- (void)audioRouteChanged:(NSNotification *)notification {
+  if ([notification.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue] ==
+      AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+    [self pauseNativePlayback];
+  }
+}
+
+- (void)pauseNativePlayback {
+  // Calls, Siri and disconnected headphones latch pause through the same
+  // document-scoped control path. Interruption end never resumes playback.
+  if (self.nativePlayback) [self forwardPlaybackCommand:@"pause"];
 }
 
 - (void)clearPlaybackControls {
@@ -131,11 +180,15 @@
   if (self.remotePlayTarget) [commands.playCommand removeTarget:self.remotePlayTarget];
   if (self.remotePauseTarget) [commands.pauseCommand removeTarget:self.remotePauseTarget];
   if (self.remoteToggleTarget) [commands.togglePlayPauseCommand removeTarget:self.remoteToggleTarget];
+  if (self.remoteSeekTarget) [commands.changePlaybackPositionCommand removeTarget:self.remoteSeekTarget];
   self.remotePlayTarget = nil;
   self.remotePauseTarget = nil;
   self.remoteToggleTarget = nil;
+  self.remoteSeekTarget = nil;
+  commands.changePlaybackPositionCommand.enabled = NO;
   if (self.playbackDocument) MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = nil;
   self.playbackDocument = nil;
+  self.nativePlayback = NO;
 }
 
 - (void)application:(UIApplication *)application
