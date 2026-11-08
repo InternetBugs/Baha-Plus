@@ -202,7 +202,7 @@
       const root = document.querySelector('#video-container');
       const player = root?.querySelector('#ani_video,video-js,.video-js')?.player;
       const core = player?.usingPlugin?.('m3u8') ? player.m3u8() : null;
-      const media = root?.querySelector('video');
+      const media = window.__bahaNativeTimeline || root?.querySelector('video');
       if (window.__bahaMediaSuspended || location.pathname !== '/animeVideo.php' ||
           new URL(location.href).searchParams.get('sn') !== args.videoId ||
           core?.state?.playingVideo !== true || core.state.playingAd === true ||

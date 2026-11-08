@@ -42,14 +42,24 @@ class PlaybackEnvironment {
               ? 'play'
               : 'pause'
         : arguments['action'];
-    if (action != 'play' && action != 'pause') return false;
+    if (action != 'play' && action != 'pause' && action != 'seek') return false;
     if (!store.browserVisible ||
         !store.showsPlayer ||
         (!store.playback.value.canOperate &&
             !(action == 'pause' && store.playback.value.surfaceReady))) {
       return false;
     }
-    await store.controlPlayer(action as String);
+    if (action == 'seek') {
+      final value = arguments['value'];
+      if (!store.playback.value.canControl ||
+          value is! num ||
+          !value.isFinite) {
+        return false;
+      }
+      await store.controlPlayer('seek', value.toDouble());
+    } else {
+      await store.controlPlayer(action as String);
+    }
     return true;
   }
 
@@ -71,6 +81,7 @@ class PlaybackEnvironment {
         !state.ended;
     final body = <String, dynamic>{
       'active': active,
+      'native': store.usesNativePlayback,
       'document': store.operation.id,
       'keepAwake': playing,
       'playing': playing,

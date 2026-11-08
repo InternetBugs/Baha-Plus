@@ -20,8 +20,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   unorm_dart: ^0.3.3
   platform_proxy: 0.9.4
+  video_player: ^2.14.1
 
 dev_dependencies:
+  video_player_platform_interface: ^6.9.0
   integration_test:
     sdk: flutter
   flutter_test:

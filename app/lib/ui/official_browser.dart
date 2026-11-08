@@ -12,7 +12,9 @@ import '../core/community.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import '../data/ios_hls_cache.dart';
+import '../data/native_playback.dart';
 import 'player_page.dart';
+import 'native_video_surface.dart';
 
 /// One persistent native WebView owns the official login and player session.
 /// Only typed public/account projections cross the origin-restricted bridge.
@@ -24,6 +26,7 @@ class OfficialBrowser extends StatefulWidget {
 }
 
 class _OfficialBrowserState extends State<OfficialBrowser>
+    with WidgetsBindingObserver
     implements OfficialPortal {
   InAppWebViewController? _controller;
   // Keep the plugin delegate and its controller together across route and
@@ -45,6 +48,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   Timer? _healthTimer;
   bool _readingHealth = false;
   int? _terminatedGeneration;
+  NativePlayback? _nativePlayback;
+  String? _preparingNative, _nativeAttempted;
+  bool _syncingNative = false;
+  List<NativeDanmaku> _nativeDanmaku = const [];
+  Timer? _danmakuTimer;
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   AppStore get store => widget.store;
   bool get _shouldKeepAndroidMediaAlive =>
@@ -53,12 +61,23 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     store.addListener(_cacheSessionChanged);
     if (_diagnostics) {
       _healthTimer = Timer.periodic(
         const Duration(seconds: 10),
         (_) => unawaited(_samplePlaybackHealth()),
       );
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      unawaited(_nativePlayback?.setApplicationActive(false));
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_nativePlayback?.setApplicationActive(true));
     }
   }
 
@@ -73,6 +92,18 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   }
 
   void _cacheSessionChanged() {
+    final native = _nativePlayback;
+    if (native != null &&
+        (!store.showsPlayer ||
+            !store.browserVisible ||
+            native.document != store.operation.id)) {
+      _nativePlayback = null;
+      _nativeDanmaku = const [];
+      _danmakuTimer?.cancel();
+      native.dispose();
+    } else if (native != null && !store.applicationActive) {
+      unawaited(native.setApplicationActive(false));
+    }
     final document = _hlsCache.document;
     if (document != null &&
         (!store.showsPlayer ||
@@ -246,6 +277,11 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
     String action,
     double? value,
   ) async {
+    final native = _nativePlayback;
+    if (native?.active == true && native!.document == document) {
+      if (action == 'quality') await _syncInitialQualityScript();
+      return native.command(action, value);
+    }
     if (action == 'quality') await _syncInitialQualityScript();
     final result = await _controller?.callAsyncJavaScript(
       arguments: {'ticket': document, 'action': action, 'value': value},
@@ -467,6 +503,9 @@ try {
     _controller = controller;
     if (Platform.isAndroid) {
       _nativeAgent = await InAppWebViewController.getDefaultUserAgent();
+      if (_diagnostics) {
+        await InAppWebViewController.setWebContentsDebuggingEnabled(true);
+      }
     }
     final supported =
         !Platform.isAndroid ||
@@ -508,6 +547,9 @@ try {
               isMainFrame: isMainFrame,
             );
             if (body != null) unawaited(_syncHlsCache(body, requestId));
+            if (body != null) {
+              unawaited(_prepareNativePlayback(body, requestId));
+            }
           }
         },
       ),
@@ -686,6 +728,16 @@ try {
           );
         },
       ),
+      if (_nativePlayback?.active == true)
+        NativeVideoSurface(
+          key: ValueKey('native-video-${_nativePlayback!.document}'),
+          playback: _nativePlayback!,
+          danmaku: _nativeDanmaku,
+          settings: store.danmakuSettings,
+          errorLabel: store.t('playerPlaybackError'),
+          retryLabel: store.t('retry'),
+          onRetry: store.reloadBrowser,
+        ),
       if (store.browserError)
         ColoredBox(
           color: background,
@@ -713,11 +765,168 @@ try {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _healthTimer?.cancel();
+    _danmakuTimer?.cancel();
+    _nativePlayback?.dispose();
     store.removeListener(_cacheSessionChanged);
     final document = _hlsCache.document;
     if (document != null) unawaited(_hlsCache.stop(document));
     _progress.dispose();
     super.dispose();
+  }
+
+  Future<void> _prepareNativePlayback(Json body, String document) async {
+    if (!Platform.isAndroid ||
+        !AppStore.androidNativePlaybackEnabled ||
+        !mounted ||
+        !store.showsPlayer ||
+        !store.browserVisible ||
+        store.operation.id != document ||
+        body['type'] != 'player-state' ||
+        body['phase'] != 'content' ||
+        (body['duration'] as num? ?? 0) <= 0 ||
+        _preparingNative == document ||
+        _nativeAttempted == document ||
+        _nativePlayback?.active == true) {
+      return;
+    }
+    _preparingNative = document;
+    NativePlayback? candidate;
+    bool live() =>
+        mounted && store.operation.id == document && store.showsPlayer;
+    try {
+      final prepared = await _controller?.callAsyncJavaScript(
+        arguments: {'ticket': document},
+        functionBody: '''
+if (window.__bahaDocumentNonce !== ticket) return null;
+return JSON.stringify(await window.__bahaPlayerBridge?.prepareNative() ?? null);
+''',
+      );
+      if (!live() || prepared?.value is! String || prepared?.error != null) {
+        return;
+      }
+      final raw = jsonDecode(prepared!.value as String);
+      if (raw == null) return;
+      final source = NativePlaybackSource.fromJson(raw as Json);
+      candidate = NativePlayback(
+        document: document,
+        source: source,
+        userAgent: _nativeAgent ?? '',
+        onState: (value) {
+          if (!live()) return;
+          store.updateNativePlayback(document, value);
+          unawaited(_syncNativeClock());
+        },
+      );
+      await candidate.initialize(store.preferredQuality);
+      if (!live()) return;
+      final committed = await _controller?.callAsyncJavaScript(
+        arguments: {'ticket': document},
+        functionBody: '''
+if (window.__bahaDocumentNonce !== ticket) return null;
+return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
+''',
+      );
+      if (!live() || committed?.value is! String || committed?.error != null) {
+        return;
+      }
+      final timeline = jsonDecode(committed!.value as String);
+      if (timeline is! Json) return;
+      _nativePlayback = candidate;
+      _nativeAttempted = document;
+      await candidate.activate(
+        applicationActive: store.applicationActive,
+        timeline: timeline,
+      );
+      if (!live()) return;
+      setState(() {});
+      debugPrint('[BAHA_NATIVE] Android ExoPlayer handoff complete');
+      unawaited(_readNativeDanmaku());
+      _danmakuTimer?.cancel();
+      _danmakuTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => unawaited(_readNativeDanmaku()),
+      );
+    } catch (error) {
+      if (live()) {
+        _nativeAttempted = document;
+        if (candidate != null && _nativePlayback == candidate) {
+          await candidate.block(committed: true);
+          if (live()) setState(() {});
+        }
+        debugPrint(
+          '[BAHA_NATIVE] initialization unavailable: ${error.runtimeType}',
+        );
+      }
+    } finally {
+      if (_nativePlayback != candidate) candidate?.dispose();
+      if (_preparingNative == document) _preparingNative = null;
+    }
+  }
+
+  Future<void> _syncNativeClock() async {
+    final native = _nativePlayback;
+    if (!mounted || native?.active != true || _syncingNative) return;
+    _syncingNative = true;
+    try {
+      final result = await _controller?.callAsyncJavaScript(
+        arguments: {'ticket': native!.document, 'clock': native.clock},
+        functionBody: '''
+return window.__bahaDocumentNonce === ticket &&
+  window.__bahaPlayerBridge?.syncNative(clock) === true;
+''',
+      );
+      if (_nativePlayback == native && result?.value == false) {
+        await native!.block();
+      }
+    } catch (_) {
+      if (_nativePlayback == native) await native!.block();
+    } finally {
+      _syncingNative = false;
+    }
+  }
+
+  Future<void> _readNativeDanmaku() async {
+    final native = _nativePlayback;
+    if (!mounted || native?.active != true) return;
+    try {
+      final result = await _controller?.callAsyncJavaScript(
+        arguments: {'ticket': native!.document},
+        functionBody: '''
+if (window.__bahaDocumentNonce !== ticket) return null;
+return JSON.stringify(window.__bahaPlayerBridge?.nativeDanmaku() ?? []);
+''',
+      );
+      if (!mounted || _nativePlayback != native || result?.value is! String) {
+        return;
+      }
+      final raw = jsonDecode(result!.value as String) as List;
+      if (raw.isEmpty || raw.length > 20000) return;
+      final items = raw
+          .map((item) => NativeDanmaku.fromJson(item as Json))
+          .toList();
+      final merged = {for (final item in _nativeDanmaku) item.id: item};
+      for (final item in items) {
+        if (merged.length >= 20000 && !merged.containsKey(item.id)) break;
+        merged[item.id] = item;
+      }
+      final sorted = merged.values.toList()
+        ..sort((a, b) => a.time.compareTo(b.time));
+      setState(() => _nativeDanmaku = sorted);
+      await _controller?.callAsyncJavaScript(
+        arguments: {
+          'ticket': native!.document,
+          'ids': items.map((item) => item.id).toList(),
+        },
+        functionBody: '''
+return window.__bahaDocumentNonce === ticket &&
+  window.__bahaPlayerBridge?.acknowledgeNativeDanmaku(ids) === true;
+''',
+      );
+      debugPrint('[BAHA_NATIVE] native danmaku loaded: ${sorted.length}');
+    } catch (_) {
+      // A metadata refresh must never replace an already playing native video.
+    }
   }
 }

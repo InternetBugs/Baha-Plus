@@ -21,6 +21,10 @@ abstract interface class OfficialPortal {
 }
 
 class AppStore extends ChangeNotifier {
+  static const androidNativePlaybackEnabled = bool.fromEnvironment(
+    'BAHA_ANDROID_NATIVE',
+    defaultValue: true,
+  );
   AppStore({
     required this.storage,
     required this.dictionaries,
@@ -75,13 +79,15 @@ class AppStore extends ChangeNotifier {
       'media-compat',
       'native-hls',
       'initial-quality',
+      'android-playback',
       'community',
     ]) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
     // Install the native HLS helper and player bridge in the same document
     // evaluation, after the lifecycle pause guard has been initialized.
-    scripts['player'] = '${scripts['native-hls']}\n${scripts['player']}';
+    scripts['player'] =
+        '${scripts['native-hls']}\n${scripts['android-playback']}\n${scripts['player']}';
     String? language, appearance, danmaku, quality;
     try {
       language = await disk.read('baha.device.language');
@@ -169,6 +175,9 @@ class AppStore extends ChangeNotifier {
   Anime? playingAnime;
   AnimeDetail? playerDetail;
   String? playingVideoId;
+  String? nativePlaybackDocument;
+  bool get usesNativePlayback => nativePlaybackDocument == operation.id;
+  bool get applicationActive => _applicationActive;
   bool playerFullscreen = false;
   bool playerLocked = false;
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
@@ -1081,6 +1090,7 @@ window.__bahaDocumentNonce = ${jsonEncode(operation.id)};
 window.__bahaMediaSuspended = ${!_applicationActive};
 window.__bahaDanmakuPreferences = ${jsonEncode(danmakuSettings.toJson())};
 window.__bahaPreferredQuality = $_preferredQuality;
+window.__bahaAndroidNative = ${defaultTargetPlatform == TargetPlatform.android && androidNativePlaybackEnabled};
 window.__bahaPlaybackCheckpoint = ${jsonEncode(_playerCheckpoint)};
 ${_applicationActive ? '' : _suspendMedia} true;
 ''');
@@ -1209,7 +1219,7 @@ window.__bahaMediaSuspended = false; true;
           videoId: playingVideoId,
         );
       }
-      if (body['type'] == 'player-state') {
+      if (body['type'] == 'player-state' && !usesNativePlayback) {
         playback.value = PlaybackState.fromJson(body);
         if (playback.value.canControl && !playback.value.buffering) {
           _lastGoodPlayback = playback.value;
@@ -1220,7 +1230,7 @@ window.__bahaMediaSuspended = false; true;
           _processRecoveryDeadline?.cancel();
         }
         await _restorePreferredQuality();
-      } else {
+      } else if (body['type'] == 'player-detail') {
         playerDetail = AnimeDetail.fromJson(body['detail'] as Json);
         _emit();
       }
@@ -1368,6 +1378,7 @@ window.__bahaMediaSuspended = false; true;
   }
 
   void _begin(BrowserIntent intent) {
+    nativePlaybackDocument = null;
     _deadline?.cancel();
     _qualityRetryAfter = null;
     operation = BrowserRequest(
@@ -1491,6 +1502,20 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
 
   void _emit() {
     if (!_disposed) notifyListeners();
+  }
+
+  void updateNativePlayback(String document, PlaybackState value) {
+    if (_disposed ||
+        operation.id != document ||
+        !showsPlayer ||
+        !browserVisible) {
+      return;
+    }
+    final changedBackend = !usesNativePlayback;
+    nativePlaybackDocument = document;
+    playback.value = value;
+    if (value.canControl && !value.buffering) _lastGoodPlayback = value;
+    if (changedBackend) _emit();
   }
 
   @override

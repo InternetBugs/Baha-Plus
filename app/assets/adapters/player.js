@@ -99,20 +99,24 @@
   }
   function diagnostics() {
     const c = context(), media = c.media;
+    const clock = androidNative?.active ? window.__bahaNativeTimeline : null;
     let start = 0, end = 0, ranges = 0;
     try {
       ranges = media?.buffered.length || 0;
       if (ranges) {start = media.buffered.start(0); end = media.buffered.end(ranges - 1);}
     } catch (_) {}
+    if (clock) {start = clock.position; end = clock.buffered; ranges = end > start ? 1 : 0;}
     const canvases = [...document.querySelectorAll('canvas')];
     const heap = window.performance?.memory;
     return {
-      phase: c.phase, backend: c.player?.tech?.(true)?.vhs ? 'vhs' : 'native-hls',
-      position: finite(media?.currentTime), duration: finite(media?.duration),
-      paused: media?.paused !== false, readyState: media?.readyState ?? 0,
-      videoWidth: media?.videoWidth || 0, videoHeight: media?.videoHeight || 0,
-      bufferRanges: ranges, bufferBehind: finite((media?.currentTime || 0) - start),
-      bufferAhead: finite(end - (media?.currentTime || 0)),
+      phase: c.phase, backend: androidNative?.active ? 'android-exoplayer' :
+        c.player?.tech?.(true)?.vhs ? 'vhs' : 'native-hls',
+      position: finite(clock?.position ?? media?.currentTime), duration: finite(clock?.duration ?? media?.duration),
+      paused: (clock || media)?.paused !== false, readyState: clock ? 4 : media?.readyState ?? 0,
+      videoWidth: clock?.videoWidth || media?.videoWidth || 0,
+      videoHeight: clock?.videoHeight || media?.videoHeight || 0,
+      bufferRanges: ranges, bufferBehind: finite((clock?.position || media?.currentTime || 0) - start),
+      bufferAhead: finite(end - (clock?.position || media?.currentTime || 0)),
       domNodes: document.querySelectorAll('*').length,
       danmakuNodes: c.root?.querySelector('.vjs-danmu')?.querySelectorAll('*').length || 0,
       canvases: canvases.length, canvasPixels: canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0),
@@ -294,6 +298,7 @@
   }
   function tick() {
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
+    if (androidNative?.active) return;
     const c = context();
     const restoringCheckpoint = restoreCheckpoint(c);
     if (!lifecycleSuspended) restoreSuspended(c);
@@ -487,6 +492,7 @@
   }
   function dispose() {
     clearInterval(timer);
+    androidNative?.dispose();
     nativeQuality?.dispose();
     document.removeEventListener('visibilitychange', visibilityChanged);
     try {
@@ -504,7 +510,15 @@
     });
     if (window.__bahaPlayerBridge?.ticket === nonce) delete window.__bahaPlayerBridge;
   }
-  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, diagnostics, dispose };
+  const androidNative = window.__bahaCreateAndroidPlayback?.({
+    context, isCurrent: () => window.__bahaDocumentNonce === nonce
+  });
+  window.__bahaPlayerBridge = { ticket: nonce, command, configure, enableCache, suspend, resume, diagnostics, dispose,
+    prepareNative: () => androidNative?.prepare(),
+    commitNative: () => androidNative?.commit() || null,
+    syncNative: value => androidNative?.sync(value) === true,
+    nativeDanmaku: () => androidNative?.danmaku() || [],
+    acknowledgeNativeDanmaku: ids => androidNative?.acknowledgeDanmaku(ids) === true };
   document.addEventListener('visibilitychange', visibilityChanged);
   try {
     navigator.mediaSession?.setActionHandler('play', () => command(nonce, 'play'));
