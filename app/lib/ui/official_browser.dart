@@ -631,102 +631,112 @@ try {
   Widget _surface(Color background) => Stack(
     fit: StackFit.expand,
     children: [
-      _webView ??= InAppWebView(
-        key: _webViewKey,
-        initialSettings: _settingsForMode(_desktop),
-        initialUserScripts: UnmodifiableListView([
-          _initialQualityUserScript(),
-          if (Platform.isIOS)
-            UserScript(
-              source: store.scripts['media-compat']!,
-              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-              forMainFrameOnly: true,
-            ),
-        ]),
-        onWebViewCreated: _created,
-        onWebContentProcessDidTerminate: (controller) {
-          if (!mounted || _terminatedGeneration == _documentGeneration) return;
-          _terminatedGeneration = _documentGeneration;
-          _publicDocumentReady = false;
-          debugPrint('[BAHA_HEALTH] web-content-process-terminated');
-          unawaited(store.playerProcessTerminated());
-        },
-        onLoadStart: (controller, url) async {
-          _documentGeneration++;
-          _publicDocumentReady = false;
-          _progress.value = 1;
-          store.navigationStarted();
-          await _updateNavigation();
-        },
-        onPageCommitVisible: (controller, url) async {
-          final uri = url == null ? null : Uri.tryParse(url.toString());
-          _publicDocumentReady = uri != null && OfficialSite.trustedOrigin(uri);
-          await store.preparePlayerSurface(uri);
-        },
-        onLoadStop: (controller, url) async {
-          final uri = url == null ? null : Uri.tryParse(url.toString());
-          _publicDocumentReady = uri != null && OfficialSite.trustedOrigin(uri);
-          _progress.value = 100;
-          await _updateNavigation();
-          await store.navigationFinished(
-            url == null ? null : Uri.tryParse(url.toString()),
-          );
-        },
-        onUpdateVisitedHistory: (controller, url, isReload) =>
-            _updateNavigation(),
-        onProgressChanged: (controller, progress) => _progress.value = progress,
-        shouldOverrideUrlLoading: (controller, action) async {
-          if (action.isForMainFrame != true) {
-            return NavigationActionPolicy.ALLOW;
-          }
-          final raw = action.request.url;
-          if (raw == null || raw.toString() == 'about:blank') {
-            return NavigationActionPolicy.ALLOW;
-          }
-          final uri = Uri.tryParse(raw.toString());
-          if (uri == null || !OfficialSite.allowedNavigation(uri)) {
-            return NavigationActionPolicy.CANCEL;
-          }
-          if (OfficialSite.desktopPlayer(uri) != _desktop &&
-              (action.request.method ?? 'GET') == 'GET') {
-            // Apply the new mode after cancelling the old request.
-            // Changing an agent mid-navigation can reload the wrong URL.
-            unawaited(
-              Future<void>(() async {
-                await controller.stopLoading();
-                await load(uri);
-              }),
+      Offstage(
+        // The official session stays mounted for authorization and heartbeats.
+        // Once native playback covers it, exclude its texture from composition.
+        offstage: _nativePlayback?.active == true,
+        child: _webView ??= InAppWebView(
+          key: _webViewKey,
+          initialSettings: _settingsForMode(_desktop),
+          initialUserScripts: UnmodifiableListView([
+            _initialQualityUserScript(),
+            if (Platform.isIOS)
+              UserScript(
+                source: store.scripts['media-compat']!,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                forMainFrameOnly: true,
+              ),
+          ]),
+          onWebViewCreated: _created,
+          onWebContentProcessDidTerminate: (controller) {
+            if (!mounted || _terminatedGeneration == _documentGeneration) {
+              return;
+            }
+            _terminatedGeneration = _documentGeneration;
+            _publicDocumentReady = false;
+            debugPrint('[BAHA_HEALTH] web-content-process-terminated');
+            unawaited(store.playerProcessTerminated());
+          },
+          onLoadStart: (controller, url) async {
+            _documentGeneration++;
+            _publicDocumentReady = false;
+            _progress.value = 1;
+            store.navigationStarted();
+            await _updateNavigation();
+          },
+          onPageCommitVisible: (controller, url) async {
+            final uri = url == null ? null : Uri.tryParse(url.toString());
+            _publicDocumentReady =
+                uri != null && OfficialSite.trustedOrigin(uri);
+            await store.preparePlayerSurface(uri);
+          },
+          onLoadStop: (controller, url) async {
+            final uri = url == null ? null : Uri.tryParse(url.toString());
+            _publicDocumentReady =
+                uri != null && OfficialSite.trustedOrigin(uri);
+            _progress.value = 100;
+            await _updateNavigation();
+            await store.navigationFinished(
+              url == null ? null : Uri.tryParse(url.toString()),
             );
-            return NavigationActionPolicy.CANCEL;
-          }
-          return NavigationActionPolicy.ALLOW;
-        },
-        onReceivedError: (controller, request, error) {
-          if (request.isForMainFrame != true ||
-              error.description.contains('ERR_ABORTED')) {
-            return;
-          }
-          store.navigationFailed();
-        },
-        onPermissionRequest: (controller, request) async {
-          final origin = Uri.tryParse(request.origin.toString());
-          final resources = request.resources
-              .where(
-                (resource) =>
-                    resource == PermissionResourceType.PROTECTED_MEDIA_ID &&
-                    origin != null &&
-                    OfficialSite.trustedOrigin(origin) &&
-                    store.browserVisible &&
-                    store.browserIsPlayer,
-              )
-              .toList();
-          return PermissionResponse(
-            resources: resources,
-            action: resources.isEmpty
-                ? PermissionResponseAction.DENY
-                : PermissionResponseAction.GRANT,
-          );
-        },
+          },
+          onUpdateVisitedHistory: (controller, url, isReload) =>
+              _updateNavigation(),
+          onProgressChanged: (controller, progress) =>
+              _progress.value = progress,
+          shouldOverrideUrlLoading: (controller, action) async {
+            if (action.isForMainFrame != true) {
+              return NavigationActionPolicy.ALLOW;
+            }
+            final raw = action.request.url;
+            if (raw == null || raw.toString() == 'about:blank') {
+              return NavigationActionPolicy.ALLOW;
+            }
+            final uri = Uri.tryParse(raw.toString());
+            if (uri == null || !OfficialSite.allowedNavigation(uri)) {
+              return NavigationActionPolicy.CANCEL;
+            }
+            if (OfficialSite.desktopPlayer(uri) != _desktop &&
+                (action.request.method ?? 'GET') == 'GET') {
+              // Apply the new mode after cancelling the old request.
+              // Changing an agent mid-navigation can reload the wrong URL.
+              unawaited(
+                Future<void>(() async {
+                  await controller.stopLoading();
+                  await load(uri);
+                }),
+              );
+              return NavigationActionPolicy.CANCEL;
+            }
+            return NavigationActionPolicy.ALLOW;
+          },
+          onReceivedError: (controller, request, error) {
+            if (request.isForMainFrame != true ||
+                error.description.contains('ERR_ABORTED')) {
+              return;
+            }
+            store.navigationFailed();
+          },
+          onPermissionRequest: (controller, request) async {
+            final origin = Uri.tryParse(request.origin.toString());
+            final resources = request.resources
+                .where(
+                  (resource) =>
+                      resource == PermissionResourceType.PROTECTED_MEDIA_ID &&
+                      origin != null &&
+                      OfficialSite.trustedOrigin(origin) &&
+                      store.browserVisible &&
+                      store.browserIsPlayer,
+                )
+                .toList();
+            return PermissionResponse(
+              resources: resources,
+              action: resources.isEmpty
+                  ? PermissionResponseAction.DENY
+                  : PermissionResponseAction.GRANT,
+            );
+          },
+        ),
       ),
       if (_nativePlayback?.active == true)
         NativeVideoSurface(
