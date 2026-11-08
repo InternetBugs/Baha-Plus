@@ -22,6 +22,9 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> {
   AppStore get store => widget.store;
+  bool get _platformVideoBackdrop => !store.usesNativePlayback;
+  GlassQuality? get _videoGlassQuality =>
+      store.usesNativePlayback ? GlassQuality.standard : null;
   double? _scrub;
   bool _fullscreen = false;
   bool _controlsVisible = true;
@@ -434,7 +437,8 @@ class _PlayerPageState extends State<PlayerPage> {
           size: 36,
           iconSize: 19,
           useOwnLayer: true,
-          platformViewBackdrop: true,
+          platformViewBackdrop: _platformVideoBackdrop,
+          quality: _videoGlassQuality,
           settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
           semanticLabel: store.t('sendDanmaku'),
           icon: const Icon(CupertinoIcons.paperplane, color: Colors.white),
@@ -447,7 +451,8 @@ class _PlayerPageState extends State<PlayerPage> {
         size: 36,
         iconSize: 19,
         useOwnLayer: true,
-        platformViewBackdrop: true,
+        platformViewBackdrop: _platformVideoBackdrop,
+        quality: _videoGlassQuality,
         settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
         semanticLabel: store.t(enabled ? 'hideDanmaku' : 'showDanmaku'),
         icon: Icon(
@@ -468,7 +473,8 @@ class _PlayerPageState extends State<PlayerPage> {
         size: 32,
         iconSize: 18,
         useOwnLayer: true,
-        platformViewBackdrop: true,
+        platformViewBackdrop: _platformVideoBackdrop,
+        quality: _videoGlassQuality,
         settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
         semanticLabel: store.t(label),
         icon: Icon(icon, color: Colors.white),
@@ -556,8 +562,9 @@ class _PlayerPageState extends State<PlayerPage> {
       return GlassContainer(
         key: const ValueKey('video-glass-controls'),
         useOwnLayer: true,
-        platformViewBackdrop: fullscreen,
-        quality: fullscreen ? null : GlassQuality.standard,
+        platformViewBackdrop: fullscreen && _platformVideoBackdrop,
+        quality:
+            _videoGlassQuality ?? (fullscreen ? null : GlassQuality.standard),
         shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
         settings: settings,
         padding: EdgeInsets.symmetric(
@@ -829,7 +836,8 @@ class _PlayerPageState extends State<PlayerPage> {
                       GlassIconButton(
                         key: const ValueKey('player-fullscreen-close'),
                         useOwnLayer: true,
-                        platformViewBackdrop: true,
+                        platformViewBackdrop: _platformVideoBackdrop,
+                        quality: _videoGlassQuality,
                         settings: mediaGlass.copyWith(
                           backerColor: const Color(0x66000000),
                         ),
@@ -859,7 +867,8 @@ class _PlayerPageState extends State<PlayerPage> {
                       const SizedBox(width: 12),
                       GlassIconButton(
                         useOwnLayer: true,
-                        platformViewBackdrop: true,
+                        platformViewBackdrop: _platformVideoBackdrop,
+                        quality: _videoGlassQuality,
                         settings: mediaGlass.copyWith(
                           backerColor: const Color(0x66000000),
                         ),
@@ -905,7 +914,8 @@ class _PlayerPageState extends State<PlayerPage> {
                         store.playerLocked ? 'player-unlock' : 'player-lock',
                       ),
                       useOwnLayer: true,
-                      platformViewBackdrop: true,
+                      platformViewBackdrop: _platformVideoBackdrop,
+                      quality: _videoGlassQuality,
                       settings: mediaGlass.copyWith(
                         backerColor: const Color(0x66000000),
                       ),
