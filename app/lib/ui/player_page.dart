@@ -288,45 +288,32 @@ class _PlayerPageState extends State<PlayerPage> {
             if (detail != null && detail.metadata.isNotEmpty) ...[
               const SizedBox(height: 22),
               SectionHeading(store.t('metadata')),
-              const SizedBox(height: 14),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: secondary(context).withValues(alpha: .06),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
+              const SizedBox(height: 12),
+              for (final item in detail.metadata)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final item in detail.metadata)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 92,
-                                child: Text(
-                                  item.label,
-                                  style: TextStyle(
-                                    color: secondary(context),
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  item.value,
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                              ),
-                            ],
+                      SizedBox(
+                        width: 90,
+                        child: Text(
+                          item.label,
+                          style: TextStyle(
+                            color: secondary(context),
+                            fontSize: 13,
                           ),
                         ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          item.value,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ),
             ],
           ],
         ),
@@ -539,24 +526,40 @@ class _PlayerPageState extends State<PlayerPage> {
       final dark = Theme.of(context).brightness == Brightness.dark;
       final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
       final compact = !fullscreen && MediaQuery.sizeOf(context).width < 350;
-      final settings = fullscreen || dark
-          ? LiquidGlassSettings.ios27Dark
-          : LiquidGlassSettings.ios27Light;
+      final settings = fullscreen
+          ? LiquidGlassSettings.ios27Dark.copyWith(
+              backerColor: const Color(0x88101014),
+            )
+          : mediaGlass.copyWith(
+              glassColor: dark
+                  ? const Color(0x18ffffff)
+                  : const Color(0x168e8e93),
+              backerColor: dark ? const Color(0x301c1c1e) : Colors.transparent,
+              thickness: 16,
+              blur: 6,
+              lightIntensity: dark ? .35 : .25,
+              ambientStrength: .03,
+              chromaticAberration: .02,
+              shadow: const [
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: Color(0x06000000),
+                  blurRadius: 3,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            );
       return GlassContainer(
         key: const ValueKey('video-glass-controls'),
         useOwnLayer: true,
         platformViewBackdrop: fullscreen,
-        // The inline bar sits on the page's solid background, not the video.
-        quality: fullscreen ? null : GlassQuality.minimal,
+        quality: fullscreen ? null : GlassQuality.standard,
         shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
-        settings: settings.copyWith(
-          blur: fullscreen ? settings.blur : 0,
-          backerColor: fullscreen
-              ? const Color(0x88101014)
-              : dark
-              ? const Color(0x661c1c1e)
-              : const Color(0x66ffffff),
-        ),
+        settings: settings,
         padding: EdgeInsets.symmetric(
           horizontal: fullscreen ? 20 : 12,
           vertical: fullscreen ? 14 : 12,

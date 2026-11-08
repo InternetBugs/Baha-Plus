@@ -401,16 +401,10 @@ class _CommentsPageState extends State<CommentsPage> {
   Widget _thread(OfficialComment comment) => Padding(
     padding: const EdgeInsets.only(bottom: 18),
     child: DecoratedBox(
-      decoration: BoxDecoration(
+      decoration: communityCardDecoration(
+        context,
+        borderRadius: 26,
         color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: .04),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

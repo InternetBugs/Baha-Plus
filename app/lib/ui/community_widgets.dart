@@ -6,6 +6,38 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 
+BoxDecoration communityCardDecoration(
+  BuildContext context, {
+  double borderRadius = 22,
+  double tintAlpha = .05,
+  Color? color,
+}) {
+  final theme = Theme.of(context);
+  final dark = theme.brightness == Brightness.dark;
+  return BoxDecoration(
+    // Keep the surface opaque so its own shadow cannot darken the card body.
+    color:
+        color ??
+        Color.alphaBlend(
+          secondary(context).withValues(alpha: tintAlpha),
+          theme.scaffoldBackgroundColor,
+        ),
+    borderRadius: BorderRadius.circular(borderRadius),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: dark ? .32 : .10),
+        blurRadius: 20,
+        offset: const Offset(0, 8),
+      ),
+      BoxShadow(
+        color: Colors.black.withValues(alpha: dark ? .20 : .06),
+        blurRadius: 4,
+        offset: const Offset(0, 2),
+      ),
+    ],
+  );
+}
+
 String communityError(AppStore store, Object? error) {
   final code = error is CommunityException ? error.code : error;
   return store.t(switch (code) {
@@ -164,9 +196,10 @@ class RatingSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: secondary(context).withValues(alpha: .06),
-      borderRadius: BorderRadius.circular(20),
+    decoration: communityCardDecoration(
+      context,
+      borderRadius: 20,
+      tintAlpha: .06,
     ),
     child: Padding(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),

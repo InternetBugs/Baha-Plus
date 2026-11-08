@@ -137,6 +137,7 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
                 controller: _scroll,
                 scrollDirection: Axis.horizontal,
                 primary: false,
+                padding: const EdgeInsets.only(top: 12, bottom: 20),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -197,10 +198,7 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
       behavior: HitTestBehavior.opaque,
       onTap: _open,
       child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: secondary(context).withValues(alpha: .05),
-          borderRadius: BorderRadius.circular(22),
-        ),
+        decoration: communityCardDecoration(context),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
