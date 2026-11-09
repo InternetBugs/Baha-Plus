@@ -5,8 +5,14 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 
 class AccountPage extends StatelessWidget {
-  const AccountPage({required this.store, this.onNotifications, super.key});
+  const AccountPage({
+    required this.store,
+    required this.onCheckUpdates,
+    this.onNotifications,
+    super.key,
+  });
   final AppStore store;
+  final VoidCallback onCheckUpdates;
   final VoidCallback? onNotifications;
 
   void _connect(BuildContext context) {
@@ -16,7 +22,7 @@ class AccountPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
+    listenable: Listenable.merge([store, store.updates]),
     builder: (context, child) => GlassScaffold(
       extendBody: false,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
@@ -152,14 +158,21 @@ class AccountPage extends StatelessWidget {
           _sectionLabel(context, store.t('about')),
           const SizedBox(height: 8),
           _group(context, [
-            const Padding(
-              padding: EdgeInsets.all(18),
-              child: Row(
-                children: [
-                  Expanded(child: Text('Baha Plus')),
-                  Text('0.3.0', style: TextStyle(color: Colors.grey)),
-                ],
+            _row(
+              context,
+              'Baha Plus',
+              CupertinoIcons.info_circle,
+              store.updates.checking ? null : onCheckUpdates,
+              value: store.updates.currentVersion ?? '—',
+            ),
+            _row(
+              context,
+              store.t(
+                store.updates.checking ? 'checkingUpdates' : 'checkUpdates',
               ),
+              CupertinoIcons.arrow_clockwise,
+              store.updates.checking ? null : onCheckUpdates,
+              busy: store.updates.checking,
             ),
           ]),
           const SizedBox(height: 12),
@@ -213,14 +226,16 @@ class AccountPage extends StatelessWidget {
     BuildContext context,
     String title,
     IconData icon,
-    VoidCallback action, {
+    VoidCallback? action, {
     String? value,
     bool picker = false,
+    bool busy = false,
   }) => GestureDetector(
     behavior: HitTestBehavior.opaque,
     onTap: action,
     child: Semantics(
       button: true,
+      enabled: action != null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 19),
         child: Row(
@@ -238,13 +253,16 @@ class AccountPage extends StatelessWidget {
               ),
               const SizedBox(width: 8),
             ],
-            Icon(
-              picker
-                  ? CupertinoIcons.chevron_up_chevron_down
-                  : CupertinoIcons.chevron_right,
-              color: picker ? brandBlue : secondary(context),
-              size: 13,
-            ),
+            if (busy)
+              const CupertinoActivityIndicator(radius: 7)
+            else
+              Icon(
+                picker
+                    ? CupertinoIcons.chevron_up_chevron_down
+                    : CupertinoIcons.chevron_right,
+                color: picker ? brandBlue : secondary(context),
+                size: 13,
+              ),
           ],
         ),
       ),

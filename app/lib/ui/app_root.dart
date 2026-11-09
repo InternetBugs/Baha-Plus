@@ -39,6 +39,7 @@ class _AppRootState extends State<AppRoot>
   Route<void>? _favoritePortalRoute;
   Map<ScrollController, double>? _favoriteScrollOffsets;
   bool _favoritePresentationScheduled = false;
+  bool _updateCheckInProgress = false;
   double _tabDirection = 1;
   AppStore get store => widget.store;
   bool get _favoritePortalVisible =>
@@ -63,7 +64,100 @@ class _AppRootState extends State<AppRoot>
       _playbackEnvironment.setForeground(_mediaActive(state));
       unawaited(store.setApplicationActive(_mediaActive(state)));
     }
+    _scheduleUpdateCheck();
   }
+
+  void _scheduleUpdateCheck() =>
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_checkUpdates(automatic: true));
+      });
+
+  Future<void> _checkUpdates({bool automatic = false}) async {
+    if (_updateCheckInProgress) return;
+    _updateCheckInProgress = true;
+    final updates = store.updates;
+    try {
+      final release = await updates.check(automatic: automatic);
+      if (!mounted || store.updates != updates) return;
+      if (release == null) {
+        if (!automatic) await _updateMessage('noAvailableUpdates');
+        return;
+      }
+      final download = await showCupertinoDialog<bool>(
+        context: context,
+        builder: (dialog) => CupertinoAlertDialog(
+          title: Text(store.t('updateAvailable')),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(dialog).height * .45,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    store
+                        .t('updateVersionDetails')
+                        .replaceAll('{current}', updates.currentVersion!)
+                        .replaceAll('{latest}', '${release.version}'),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    store.t('updateNotes'),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    release.notes.trim().isEmpty
+                        ? store.t('noUpdateNotes')
+                        : release.notes.trim(),
+                    textAlign: TextAlign.left,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: Text(store.t('updateLater')),
+            ),
+            CupertinoDialogAction(
+              isDefaultAction: true,
+              onPressed: () => Navigator.pop(dialog, true),
+              child: Text(store.t('downloadUpdate')),
+            ),
+          ],
+        ),
+      );
+      if (download != true || !mounted) return;
+      try {
+        await updates.openDownloads();
+      } catch (_) {
+        if (mounted) await _updateMessage('updateDownloadFailed');
+      }
+    } catch (_) {
+      if (!automatic && mounted && store.updates == updates) {
+        await _updateMessage('updateCheckFailed');
+      }
+    } finally {
+      _updateCheckInProgress = false;
+    }
+  }
+
+  Future<void> _updateMessage(String message) => showCupertinoDialog<void>(
+    context: context,
+    builder: (dialog) => CupertinoAlertDialog(
+      title: Text(store.t('checkUpdates')),
+      content: Text(store.t(message)),
+      actions: [
+        CupertinoDialogAction(
+          onPressed: () => Navigator.pop(dialog),
+          child: Text(store.t('close')),
+        ),
+      ],
+    ),
+  );
 
   void _tabChanged() {
     if (_lastTab == store.tab) return;
@@ -164,6 +258,7 @@ class _AppRootState extends State<AppRoot>
   void didUpdateWidget(covariant AppRoot oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.store != store) {
+      oldWidget.store.updates.cancelCheck();
       _playbackEnvironment.dispose();
       _playbackEnvironment = PlaybackEnvironment(store);
       oldWidget.store.removeListener(_tabChanged);
@@ -172,6 +267,7 @@ class _AppRootState extends State<AppRoot>
       store.addListener(_favoritePresentationChanged);
       _lastTab = store.tab;
       _tabAnimation.value = 1;
+      _scheduleUpdateCheck();
     }
     _favoritePortalEntry?.markNeedsBuild();
     _favoritePresentationChanged();
@@ -202,7 +298,11 @@ class _AppRootState extends State<AppRoot>
     maintainContentGlass: false,
     expandedColor: const Color(0xfff2f2f7),
     expandedDarkColor: const Color(0xff111113),
-    builder: (_) => AccountPage(store: store, onNotifications: _notifications),
+    builder: (_) => AccountPage(
+      store: store,
+      onNotifications: _notifications,
+      onCheckUpdates: () => unawaited(_checkUpdates()),
+    ),
   );
 
   void _notifications() => Navigator.push(
@@ -472,6 +572,7 @@ class _AppRootState extends State<AppRoot>
 
   @override
   void dispose() {
+    store.updates.cancelCheck();
     _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_tabChanged);

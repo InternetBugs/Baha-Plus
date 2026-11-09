@@ -9,6 +9,7 @@ import '../core/playback_state.dart';
 import '../core/search_folding.dart';
 import 'device_storage.dart';
 import 'official_search.dart';
+import 'app_updates.dart';
 
 abstract interface class OfficialPortal {
   Future<void> load(Uri uri);
@@ -48,18 +49,21 @@ class AppStore extends ChangeNotifier {
     required this.folding,
     required this.scripts,
     AnimeSearch? animeSearch,
+    AppUpdates? updates,
     this.language = 'zh-Hant',
     this.appearance = 'system',
     this.catalog = const Catalog(),
   }) : searchService =
            animeSearch ??
            OfficialAnimeSearch(toTraditional: folding.toTraditional),
+       updates = updates ?? AppUpdates(),
        cache = CatalogCache(storage),
        catalogSource = catalog.items.isEmpty ? 'empty' : 'cache';
 
   static Future<AppStore> create({
     DeviceStorage? storage,
     AnimeSearch? animeSearch,
+    AppUpdates? updates,
   }) async {
     final disk = storage ?? PreferencesStorage();
     final dictionaries = <String, Map<String, String>>{};
@@ -119,6 +123,7 @@ class AppStore extends ChangeNotifier {
       dictionaries: dictionaries,
       folding: SearchFolding(folding, traditionalMapping: traditional),
       animeSearch: animeSearch,
+      updates: updates,
       scripts: scripts,
       language: const ['zh-Hans', 'zh-Hant'].contains(language)
           ? language!
@@ -173,6 +178,7 @@ class AppStore extends ChangeNotifier {
 
   final DeviceStorage storage;
   final AnimeSearch searchService;
+  final AppUpdates updates;
   final CatalogCache cache;
   final Map<String, Map<String, String>> dictionaries;
   final SearchFolding folding;
@@ -1696,6 +1702,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
     _searchGeneration++;
     _processRecoveryDeadline?.cancel();
     searchService.dispose();
+    updates.dispose();
     playback.dispose();
     super.dispose();
   }
