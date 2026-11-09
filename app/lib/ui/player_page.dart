@@ -336,7 +336,9 @@ class _PlayerPageState extends State<PlayerPage> {
         builder: (context, state, child) => Stack(
           fit: StackFit.expand,
           children: [
-            if (!state.surfaceReady && !store.browserError)
+            if (!state.surfaceReady &&
+                state.phase != PlaybackPhase.error &&
+                !store.browserError)
               const ColoredBox(color: Colors.black),
             if (state.canControl)
               GestureDetector(

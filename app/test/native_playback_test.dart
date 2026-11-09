@@ -22,6 +22,8 @@ Map<String, dynamic> sourceJson() => {
 class FakeVideo extends VideoPlayerPlatform {
   Completer<void>? holdCreation;
   Completer<void>? holdSeek;
+  Completer<Duration>? nextPositionResult;
+  int positionQueries = 0;
   final sources = <DataSource>[];
   final options = <VideoCreationOptions>[];
   final streams = <int, StreamController<VideoEvent>>{};
@@ -81,7 +83,14 @@ class FakeVideo extends VideoPlayerPlatform {
   }
 
   @override
-  Future<Duration> getPosition(int playerId) async => positions[playerId]!;
+  Future<Duration> getPosition(int playerId) async {
+    positionQueries++;
+    final pending = nextPositionResult;
+    nextPositionResult = null;
+    if (pending != null) return pending.future;
+    return positions[playerId]!;
+  }
+
   @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {}
   @override
@@ -103,6 +112,30 @@ void main() {
     userAgent: 'device agent',
     onState: (_) {},
   );
+
+  Future<void> withPlayingPluginTimer(
+    WidgetTester tester,
+    Future<void> Function(NativePlayback) body,
+  ) async {
+    final native = create();
+    try {
+      await tester.runAsync(() => native.initialize(0));
+      // Start playback in fake time so pump(100ms) runs the real video_player
+      // timer, rather than a test replacing controller.value by hand.
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      await body(native);
+    } finally {
+      // Initialization creates plugin futures in runAsync's real async zone.
+      // Finish their disposal there before Flutter checks for pending timers.
+      await tester.runAsync(() async {
+        native.dispose();
+        await native.released;
+      });
+    }
+  }
 
   test(
     'native sources reject foreign media, duplicate variants and invalid timelines',
@@ -275,6 +308,220 @@ void main() {
       expect(native.state.position, 42);
       native.dispose();
     },
+  );
+
+  test(
+    'temporary portal unavailability preserves the player and buffer and recovers paused',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      final controller = native.video!;
+      controller.value = controller.value.copyWith(
+        buffered: [
+          DurationRange(
+            const Duration(seconds: 30),
+            const Duration(seconds: 120),
+          ),
+        ],
+      );
+      await native.setAuthorizationAvailable(false);
+      expect(native.state.phase.name, 'error');
+      expect(native.state.paused, isTrue);
+      expect(await native.command('play', null), isFalse);
+      await native.setApplicationActive(false);
+      await native.setApplicationActive(true);
+      await native.setAuthorizationAvailable(true);
+      expect(identical(native.video, controller), isTrue);
+      expect(native.state.phase.name, 'content');
+      expect(native.state.paused, isTrue);
+      expect(native.state.position, 42);
+      expect(native.state.buffered, 120);
+      expect(platform.sources, hasLength(1));
+      expect(platform.released, isEmpty);
+      expect(platform.playCalls, [0]);
+      expect(await native.command('play', null), isTrue);
+      native.dispose();
+    },
+  );
+
+  test(
+    'native controller position notifications update the clock and only explicit seeks change its revision',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': true, 'rate': 1, 'muted': false},
+      );
+      final revision = native.seekRevision;
+      native.video!.value = native.video!.value.copyWith(
+        position: const Duration(milliseconds: 42500),
+      );
+      expect(native.state.position, 42.5);
+      expect(native.seekRevision, revision);
+      await native.command('pause', null);
+      expect(native.seekRevision, revision);
+      await native.command('seek', 42.6);
+      expect(native.seekRevision, revision + 1);
+      expect(native.state.position, 42.6);
+      expect(await native.command('seek', double.nan), isFalse);
+      expect(native.seekRevision, revision + 1);
+      native.dispose();
+    },
+  );
+
+  test(
+    'a pending paused seek publishes its revision with the target before old buffering events',
+    () async {
+      final native = create();
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 42, 'paused': true, 'rate': 1, 'muted': false},
+      );
+      final revision = native.seekRevision;
+      final samples = <(int, double)>[];
+      native.addListener(
+        () => samples.add((native.seekRevision, native.state.position)),
+      );
+      final held = platform.holdSeek = Completer<void>();
+      final seeking = native.command('seek', 42.1);
+      await Future<void>.delayed(Duration.zero);
+      native.video!.value = native.video!.value.copyWith(isBuffering: true);
+      expect(samples, isNotEmpty);
+      expect(samples, everyElement((revision + 1, 42.1)));
+      held.complete();
+      expect(await seeking, isTrue);
+      expect(native.state.position, 42.1);
+      expect(native.seekRevision, revision + 1);
+      native.dispose();
+    },
+  );
+
+  for (final paused in [true, false]) {
+    for (final (direction, target) in [
+      ('forward', 100.0),
+      ('backward', 10.0),
+      ('small forward', 42.1),
+      ('small backward', 41.9),
+    ]) {
+      testWidgets(
+        'plugin timer rejects late position after ${paused ? 'paused' : 'playing'} $direction seek',
+        (tester) => withPlayingPluginTimer(tester, (native) async {
+          final oldPosition = platform.nextPositionResult =
+              Completer<Duration>();
+          final queries = platform.positionQueries;
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(platform.positionQueries, queries + 1);
+          expect(oldPosition.isCompleted, isFalse);
+          if (paused) expect(await native.command('pause', null), isTrue);
+
+          final revision = native.seekRevision;
+          expect(await native.command('seek', target), isTrue);
+          final targetTime = Duration(milliseconds: (target * 1000).round());
+          expect(native.video!.value.position, targetTime);
+          expect(native.state.position, target);
+          expect(native.clock['position'], target);
+          expect(native.state.paused, paused);
+
+          final lateNotifications = <double>[];
+          void record() => lateNotifications.add(native.state.position);
+          native.addListener(record);
+          oldPosition.complete(const Duration(seconds: 42));
+          await tester.pump();
+          native.removeListener(record);
+
+          // Both the plugin's cached value and the host clock must retain the
+          // target. Guarding only NativePlayback._samplePosition is insufficient.
+          expect(native.video!.value.position, targetTime);
+          expect(native.state.position, target);
+          expect(native.clock['position'], target);
+          expect(native.seekRevision, revision + 1);
+          expect(native.state.paused, paused);
+          expect(lateNotifications, isEmpty);
+
+          // A later poll from the new epoch must still update normally.
+          final freshPosition = targetTime + const Duration(milliseconds: 125);
+          platform.positions[0] = freshPosition;
+          if (paused) expect(await native.command('play', null), isTrue);
+          final freshQueries = platform.positionQueries;
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(platform.positionQueries, freshQueries + 1);
+          expect(native.video!.value.position, freshPosition);
+          expect(native.state.position, closeTo(target + .125, .000001));
+          expect(native.seekRevision, revision + 1);
+        }),
+      );
+    }
+  }
+
+  testWidgets(
+    'plugin timer skips platform queries while a seek is pending',
+    (tester) => withPlayingPluginTimer(tester, (native) async {
+      await tester.pump(const Duration(milliseconds: 100));
+      final held = platform.holdSeek = Completer<void>();
+      final seeking = native.command('seek', 100);
+      await tester.pump();
+      final queries = platform.positionQueries;
+      expect(native.clock['seeking'], isTrue);
+      expect(native.state.position, 100);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(platform.positionQueries, queries);
+      expect(await native.video!.position, isNull);
+      expect(platform.positionQueries, queries);
+      held.complete();
+      expect(await seeking, isTrue);
+      expect(native.clock['seeking'], isFalse);
+      expect(native.video!.value.position, const Duration(seconds: 100));
+      expect(await native.video!.position, const Duration(seconds: 100));
+    }),
+  );
+
+  testWidgets(
+    'position queries wait for all overlapping controller seeks',
+    (tester) => withPlayingPluginTimer(tester, (native) async {
+      final controller = native.video!;
+      final firstHold = platform.holdSeek = Completer<void>();
+      final firstSeek = controller.seekTo(const Duration(seconds: 100));
+      await tester.pump();
+      final secondHold = platform.holdSeek = Completer<void>();
+      final secondSeek = controller.seekTo(const Duration(seconds: 200));
+      await tester.pump();
+      final queries = platform.positionQueries;
+
+      secondHold.complete();
+      await secondSeek;
+      expect(await controller.position, isNull);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(platform.positionQueries, queries);
+
+      firstHold.complete();
+      await firstSeek;
+      expect(await controller.position, const Duration(seconds: 100));
+    }),
+  );
+
+  testWidgets(
+    'a failed seek releases the position query guard',
+    (tester) => withPlayingPluginTimer(tester, (native) async {
+      final revision = native.seekRevision;
+      final held = platform.holdSeek = Completer<void>();
+      final seeking = native.command('seek', 100);
+      final rejected = expectLater(seeking, throwsStateError);
+      await tester.pump();
+      held.completeError(StateError('Platform seek failed'));
+      await rejected;
+      platform.holdSeek = null;
+      expect(native.state.position, 42);
+      expect(native.seekRevision, revision + 2);
+      expect(await native.video!.position, const Duration(seconds: 42));
+      expect(await native.command('seek', 42.1), isTrue);
+      expect(await native.video!.position, const Duration(milliseconds: 42100));
+    }),
   );
 
   testWidgets(

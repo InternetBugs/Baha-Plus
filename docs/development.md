@@ -12,6 +12,7 @@ app/ios/              iOS 平台工程
 app/test/             Dart 核心与界面测试
 tests/                官网 JavaScript 适配器离线测试
 tools/android-local.ps1
+tools/windows-debug.ps1
 ```
 
 ## 本地开发
@@ -60,6 +61,8 @@ npm run resources:check
 npm test
 npm run typecheck
 ```
+
+Windows 桌面 Debug 的工具要求、构建入口及本机验证方法见 [Windows 调试说明](windows-debug.md)。
 
 连接 Android 模拟器后，可单独运行真实网络集成测试：
 

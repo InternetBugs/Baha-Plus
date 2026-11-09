@@ -14,9 +14,15 @@ import 'seasonal_page.dart';
 import 'notifications_page.dart';
 
 class AppRoot extends StatefulWidget {
-  const AppRoot({required this.store, this.mountPortal = true, super.key});
+  const AppRoot({
+    required this.store,
+    this.mountPortal = true,
+    this.portalBuilder,
+    super.key,
+  });
   final AppStore store;
   final bool mountPortal;
+  final WidgetBuilder? portalBuilder;
   @override
   State<AppRoot> createState() => _AppRootState();
 }
@@ -28,8 +34,15 @@ class _AppRootState extends State<AppRoot>
   late final AnimationController _tabAnimation;
   late int _lastTab;
   late PlaybackEnvironment _playbackEnvironment;
+  final _officialSessionKey = GlobalKey(debugLabel: 'official-session');
+  OverlayEntry? _favoritePortalEntry;
+  Route<void>? _favoritePortalRoute;
+  Map<ScrollController, double>? _favoriteScrollOffsets;
+  bool _favoritePresentationScheduled = false;
   double _tabDirection = 1;
   AppStore get store => widget.store;
+  bool get _favoritePortalVisible =>
+      widget.mountPortal && store.browserVisible && store.canRetryFavorite;
 
   @override
   void initState() {
@@ -41,6 +54,8 @@ class _AppRootState extends State<AppRoot>
       value: 1,
     );
     store.addListener(_tabChanged);
+    store.addListener(_favoritePresentationChanged);
+    _favoritePresentationChanged();
     _playbackEnvironment = PlaybackEnvironment(store);
     WidgetsBinding.instance.addObserver(this);
     final state = WidgetsBinding.instance.lifecycleState;
@@ -61,6 +76,90 @@ class _AppRootState extends State<AppRoot>
     }
   }
 
+  Widget _officialPortal(BuildContext context) => KeyedSubtree(
+    key: _officialSessionKey,
+    child: widget.portalBuilder?.call(context) ?? OfficialBrowser(store: store),
+  );
+
+  void _favoritePresentationChanged() {
+    if (store.canRetryFavorite) {
+      _favoriteScrollOffsets ??= {
+        for (final title in _titles)
+          if (title.scrollController.hasClients)
+            title.scrollController: title.scrollController.offset,
+      };
+    }
+    if (_favoritePresentationScheduled) return;
+    _favoritePresentationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _favoritePresentationScheduled = false;
+      if (!mounted) return;
+      final navigator = Navigator.of(context);
+      final overlay = navigator.overlay!;
+      if (widget.mountPortal && _favoritePortalEntry == null) {
+        // Reparent the existing official session in the same frame as the
+        // root rebuild. A second WebView would lose the authenticated session.
+        _favoritePortalEntry = OverlayEntry(
+          maintainState: true,
+          builder: (context) => ListenableBuilder(
+            listenable: store,
+            builder: (context, child) => _favoritePortalVisible
+                ? Positioned.fill(child: _officialPortal(context))
+                : const SizedBox.shrink(),
+          ),
+        );
+        overlay.insert(_favoritePortalEntry!);
+      }
+      if (_favoritePortalVisible && _favoritePortalRoute == null) {
+        final route = RawDialogRoute<void>(
+          settings: const RouteSettings(name: 'favorite-official'),
+          barrierDismissible: false,
+          barrierColor: Colors.transparent,
+          transitionDuration: Duration.zero,
+          pageBuilder: (context, animation, secondaryAnimation) => PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, result) {
+              if (!didPop) unawaited(store.closeBrowser());
+            },
+            child: const SizedBox.shrink(),
+          ),
+        );
+        _favoritePortalRoute = route;
+        unawaited(
+          navigator.push(route).then((_) {
+            if (!mounted || _favoritePortalRoute != route) return;
+            _favoritePortalRoute = null;
+            if (_favoritePortalVisible) unawaited(store.closeBrowser());
+          }),
+        );
+        // The popup owns Back handling; the persistent portal paints above
+        // it and the still-mounted detail and source routes.
+        overlay.rearrange([_favoritePortalEntry!], below: _favoritePortalEntry);
+      } else if (!_favoritePortalVisible && _favoritePortalRoute != null) {
+        final route = _favoritePortalRoute!;
+        _favoritePortalRoute = null;
+        if (route.isActive) navigator.removeRoute(route);
+      }
+      // A guest response can temporarily empty the favorites tab. Restore its
+      // position after the account snapshot is available and laid out again.
+      if (!store.canRetryFavorite && !store.busy) {
+        final offsets = _favoriteScrollOffsets;
+        _favoriteScrollOffsets = null;
+        for (final entry
+            in offsets?.entries ?? <MapEntry<ScrollController, double>>[]) {
+          if (!entry.key.hasClients) continue;
+          final position = entry.key.position;
+          entry.key.jumpTo(
+            entry.value.clamp(
+              position.minScrollExtent,
+              position.maxScrollExtent,
+            ),
+          );
+        }
+      }
+    });
+  }
+
   @override
   void didUpdateWidget(covariant AppRoot oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -68,10 +167,14 @@ class _AppRootState extends State<AppRoot>
       _playbackEnvironment.dispose();
       _playbackEnvironment = PlaybackEnvironment(store);
       oldWidget.store.removeListener(_tabChanged);
+      oldWidget.store.removeListener(_favoritePresentationChanged);
       store.addListener(_tabChanged);
+      store.addListener(_favoritePresentationChanged);
       _lastTab = store.tab;
       _tabAnimation.value = 1;
     }
+    _favoritePortalEntry?.markNeedsBuild();
+    _favoritePresentationChanged();
   }
 
   @override
@@ -188,10 +291,9 @@ class _AppRootState extends State<AppRoot>
         key: const ValueKey('portal-layer'),
         child: Offstage(
           offstage: !store.browserVisible,
-          child: OfficialBrowser(
-            key: const ValueKey('official-session'),
-            store: store,
-          ),
+          child: _favoritePortalVisible
+              ? const SizedBox.shrink()
+              : _officialPortal(context),
         ),
       );
       return PopScope(
@@ -373,6 +475,18 @@ class _AppRootState extends State<AppRoot>
     _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_tabChanged);
+    store.removeListener(_favoritePresentationChanged);
+    final route = _favoritePortalRoute;
+    _favoritePortalRoute = null;
+    if (route != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (route.navigator?.mounted == true && route.isActive) {
+          route.navigator!.removeRoute(route);
+        }
+      });
+    }
+    _favoritePortalEntry?.remove();
+    _favoritePortalEntry?.dispose();
     _tabAnimation.dispose();
     _search.dispose();
     for (final title in _titles) {

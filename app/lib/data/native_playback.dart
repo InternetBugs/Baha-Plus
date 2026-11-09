@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../core/models.dart';
 import '../core/playback_state.dart';
@@ -66,6 +67,37 @@ class NativePlaybackSource {
   }
 }
 
+/// The plugin's timer also calls [position], independently of host sampling.
+/// Discard a query if any seek crosses it, including after that seek completes.
+class _SeekAwareVideoPlayerController extends VideoPlayerController {
+  _SeekAwareVideoPlayerController(
+    super.url, {
+    required super.httpHeaders,
+    required super.videoPlayerOptions,
+  }) : super.networkUrl(formatHint: VideoFormat.hls);
+
+  int _seekEpoch = 0, _pendingSeeks = 0;
+
+  @override
+  Future<Duration?> get position async {
+    if (_pendingSeeks > 0) return null;
+    final epoch = _seekEpoch;
+    final sampled = await super.position;
+    return epoch == _seekEpoch && _pendingSeeks == 0 ? sampled : null;
+  }
+
+  @override
+  Future<void> seekTo(Duration position) async {
+    _seekEpoch++;
+    _pendingSeeks++;
+    try {
+      await super.seekTo(position);
+    } finally {
+      _pendingSeeks--;
+    }
+  }
+}
+
 /// AVPlayer/ExoPlayer owns the video texture and actual media clock. The portal
 /// receives numeric state only; media URLs never enter logs or preferences.
 class NativePlayback extends ChangeNotifier {
@@ -80,16 +112,21 @@ class NativePlayback extends ChangeNotifier {
   final NativePlaybackSource source;
   final void Function(PlaybackState) onState;
   VideoPlayerController? video;
-  Timer? _clock;
   bool _disposed = false, _active = false, _polling = false, _blocked = false;
+  bool _seeking = false;
+  bool _authorizationAvailable = true;
   bool _foreground = true;
-  int _pauseVersion = 0;
+  int _pauseVersion = 0, _seekRevision = 0;
   int _generation = 0, _quality = 0;
   double _position = 0;
+  Duration? _lastVideoPosition;
+  String? failureStage, failureCode;
   Future<bool> _commands = Future.value(true);
   Future<void> _released = Future.value();
 
   bool get active => _active && !_disposed;
+  int get seekRevision => _seekRevision;
+  bool get authorizationAvailable => _authorizationAvailable;
   Future<void> get released => _released;
   int get quality => _quality;
   PlaybackState get state {
@@ -103,7 +140,7 @@ class NativePlayback extends ChangeNotifier {
       if (end > buffered) buffered = end;
     }
     return PlaybackState(
-      phase: _blocked || value?.hasError == true
+      phase: _blocked || !_authorizationAvailable || value?.hasError == true
           ? PlaybackPhase.error
           : value?.isInitialized == true
           ? PlaybackPhase.content
@@ -132,7 +169,7 @@ class NativePlayback extends ChangeNotifier {
     'rate': state.rate,
     'muted': state.muted,
     'ended': state.ended,
-    'seeking': false,
+    'seeking': _seeking,
     'videoWidth': video?.value.size.width.round() ?? 0,
     'videoHeight': video?.value.size.height.round() ?? 0,
   };
@@ -152,34 +189,41 @@ class NativePlayback extends ChangeNotifier {
     final pauseVersion = _pauseVersion;
     final previous = video;
     final old = state;
-    await previous?.pause();
-    final next = VideoPlayerController.networkUrl(
-      quality == 0 ? source.master : source.variants[quality]!,
-      formatHint: VideoFormat.hls,
-      httpHeaders: {
-        'Origin': 'https://ani.gamer.com.tw',
-        'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
-        if (userAgent.isNotEmpty) 'User-Agent': userAgent,
-      },
-      videoPlayerOptions: VideoPlayerOptions(
-        mixWithOthers: false,
-        // Our lifecycle guard owns pause intent, including source changes.
-        // Disable the plugin observer that otherwise resumes on foreground.
-        // This does not enable iOS background audio or add UIBackgroundModes.
-        allowBackgroundPlayback: true,
-        // PlaybackEnvironment is the sole owner of the app's idle timer.
-        preventsDisplaySleepDuringVideoPlayback: false,
-      ),
-    );
+    var stage = 'pause-previous';
+    final elapsed = Stopwatch()..start();
+    VideoPlayerController? next;
     try {
+      await previous?.pause();
+      stage = 'create';
+      next = _SeekAwareVideoPlayerController(
+        quality == 0 ? source.master : source.variants[quality]!,
+        httpHeaders: {
+          'Origin': 'https://ani.gamer.com.tw',
+          'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
+          if (userAgent.isNotEmpty) 'User-Agent': userAgent,
+        },
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: false,
+          // Our lifecycle guard owns pause intent, including source changes.
+          // Disable the plugin observer that otherwise resumes on foreground.
+          // This does not enable iOS background audio or add UIBackgroundModes.
+          allowBackgroundPlayback: true,
+          // PlaybackEnvironment is the sole owner of the app's idle timer.
+          preventsDisplaySleepDuringVideoPlayback: false,
+        ),
+      );
+      stage = 'initialize';
       await next.initialize().timeout(const Duration(seconds: 25));
       if (_disposed || generation != _generation) {
         await next.dispose();
         return false;
       }
       final position = initial ? source.position : old.position;
+      stage = 'seek';
       await next.seekTo(Duration(milliseconds: (position * 1000).round()));
+      stage = 'rate';
       await next.setPlaybackSpeed(initial ? source.rate : old.rate);
+      stage = 'volume';
       await next.setVolume((initial ? source.muted : old.muted) ? 0 : 1);
       if (_disposed || generation != _generation) {
         await next.dispose();
@@ -188,22 +232,60 @@ class NativePlayback extends ChangeNotifier {
       previous?.removeListener(_changed);
       video = next;
       _position = position;
+      _lastVideoPosition = next.value.position;
       _quality = quality;
+      failureStage = failureCode = null;
       next.addListener(_changed);
       notifyListeners();
-      await previous?.dispose();
+      stage = 'release-previous';
+      try {
+        await previous?.dispose();
+      } catch (_) {
+        // The replacement is ready; an old platform release failure must
+        // never send playback back to an already disposed controller.
+      }
       if (_active &&
+          _authorizationAvailable &&
           _foreground &&
           pauseVersion == _pauseVersion &&
           !old.paused) {
+        stage = 'play';
         await next.play();
       }
       _changed();
       return true;
-    } catch (_) {
-      await next.dispose();
-      if (!_disposed && generation == _generation && previous != null) {
+    } catch (error) {
+      failureStage = stage;
+      final code = error is PlatformException ? error.code : null;
+      failureCode = code != null && RegExp(r'^[\w.-]{1,64}$').hasMatch(code)
+          ? code
+          : error.runtimeType.toString();
+      if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
+        debugPrint(
+          '[BAHA_NATIVE] load-failed stage=$stage '
+          'elapsedMs=${elapsed.elapsedMilliseconds} code=$failureCode',
+        );
+      }
+      if (next != null && next == video) {
+        _blocked = true;
+        try {
+          await next.pause();
+        } catch (_) {}
+        _publish();
+      } else {
+        try {
+          await next?.dispose().timeout(const Duration(seconds: 5));
+        } catch (_) {
+          // Creation can finish after its initialization deadline. Its
+          // dispose future still releases it when the platform returns.
+        }
+      }
+      if (!_disposed &&
+          !_blocked &&
+          generation == _generation &&
+          previous != null) {
         if (_active &&
+            _authorizationAvailable &&
             _foreground &&
             pauseVersion == _pauseVersion &&
             !old.paused) {
@@ -222,16 +304,13 @@ class NativePlayback extends ChangeNotifier {
     _foreground = applicationActive;
     final pauseVersion = _pauseVersion;
     final position = (timeline['position'] as num).toDouble();
+    _seekRevision++;
     _position = position.clamp(0, state.duration);
     await video?.seekTo(Duration(milliseconds: (_position * 1000).round()));
     await video?.setPlaybackSpeed((timeline['rate'] as num).toDouble());
     await video?.setVolume(timeline['muted'] == true ? 0 : 1);
     if (_disposed) return;
     _active = true;
-    _clock = Timer.periodic(
-      const Duration(milliseconds: 250),
-      (_) => unawaited(_samplePosition()),
-    );
     if (timeline['paused'] == false &&
         _foreground &&
         pauseVersion == _pauseVersion) {
@@ -241,14 +320,18 @@ class NativePlayback extends ChangeNotifier {
   }
 
   Future<void> _samplePosition() async {
-    if (_disposed || !_active || _polling || video == null) return;
+    if (_disposed || !_active || _polling || _seeking || video == null) return;
     _polling = true;
     final current = video;
+    final revision = _seekRevision;
     try {
       final position = await current!.position;
-      if (!_disposed && current == video && position != null) {
+      if (!_disposed &&
+          current == video &&
+          revision == _seekRevision &&
+          position != null) {
         _position = position.inMilliseconds / 1000;
-        _changed();
+        _publish();
       }
     } catch (_) {
       // The next event/poll will carry the state after a source replacement.
@@ -258,6 +341,18 @@ class NativePlayback extends ChangeNotifier {
   }
 
   void _changed() {
+    if (_disposed) return;
+    final position = video?.value.position;
+    // video_player already publishes its native position every 100ms while
+    // playing. Reuse that clock instead of running another platform poll.
+    if (!_seeking && position != null && position != _lastVideoPosition) {
+      _lastVideoPosition = position;
+      _position = position.inMilliseconds / 1000;
+    }
+    _publish();
+  }
+
+  void _publish() {
     if (_disposed) return;
     if (active) onState(state);
     notifyListeners();
@@ -274,6 +369,7 @@ class NativePlayback extends ChangeNotifier {
     final current = video;
     if (!active ||
         _blocked ||
+        (!_authorizationAvailable && action != 'pause') ||
         current == null ||
         !current.value.isInitialized) {
       return false;
@@ -286,10 +382,27 @@ class NativePlayback extends ChangeNotifier {
         await current.pause();
       case 'seek':
         if (value == null || !value.isFinite) return false;
+        final previous = _position;
+        _seekRevision++;
         _position = value.clamp(0, state.duration);
-        await current.seekTo(
-          Duration(milliseconds: (_position * 1000).round()),
-        );
+        _seeking = true;
+        // Publish the new revision and its target as one change. A buffering
+        // notification during the platform seek must not consume that
+        // revision with the old media sample.
+        _publish();
+        try {
+          await current.seekTo(
+            Duration(milliseconds: (_position * 1000).round()),
+          );
+        } catch (_) {
+          _seekRevision++;
+          _position = previous;
+          _publish();
+          rethrow;
+        } finally {
+          _seeking = false;
+          _lastVideoPosition = current.value.position;
+        }
       case 'rate':
         if (!const [.5, .75, 1, 1.25, 1.5, 1.75, 2].contains(value)) {
           return false;
@@ -325,11 +438,19 @@ class NativePlayback extends ChangeNotifier {
     if (!value) await pause();
   }
 
+  Future<void> setAuthorizationAvailable(bool available) async {
+    if (_disposed || _blocked || _authorizationAvailable == available) return;
+    _authorizationAvailable = available;
+    // A suspended or temporarily unavailable portal must not destroy the
+    // AVPlayer or its buffer. A successful check restores controls, never play.
+    if (!available) await pause();
+    _publish();
+  }
+
   Future<void> block({bool committed = false}) async {
     if (_disposed || _blocked) return;
     if (committed) _active = true;
     _blocked = true;
-    _clock?.cancel();
     try {
       await pause();
     } catch (_) {
@@ -343,7 +464,6 @@ class NativePlayback extends ChangeNotifier {
     if (_disposed) return;
     _disposed = true;
     _generation++;
-    _clock?.cancel();
     final current = video;
     current?.removeListener(_changed);
     video = null;

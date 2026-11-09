@@ -15,6 +15,9 @@
 @property(nonatomic, strong) id remoteSeekTarget;
 @property(nonatomic, copy) NSString *playbackDocument;
 @property(nonatomic, assign) BOOL nativePlayback;
+@property(nonatomic, assign) BOOL playbackDiagnosticsEnabled;
+@property(nonatomic, assign) NSUInteger playbackCommandSequence;
+@property(nonatomic, assign) NSUInteger playbackControlGeneration;
 @end
 
 @implementation AppDelegate
@@ -44,6 +47,9 @@
       return;
     }
     NSDictionary *arguments = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
+    if ([arguments[@"diagnostics"] isKindOfClass:NSNumber.class]) {
+      owner.playbackDiagnosticsEnabled = [arguments[@"diagnostics"] boolValue];
+    }
     BOOL active = [arguments[@"active"] boolValue];
     UIApplication.sharedApplication.idleTimerDisabled = active && [arguments[@"keepAwake"] boolValue];
     if (!active) {
@@ -51,7 +57,9 @@
       result(nil);
       return;
     }
-    owner.playbackDocument = arguments[@"document"];
+    NSString *document = [arguments[@"document"] isKindOfClass:NSString.class] ? arguments[@"document"] : nil;
+    if (![owner.playbackDocument isEqualToString:document]) owner.playbackControlGeneration++;
+    owner.playbackDocument = document;
     owner.nativePlayback = [arguments[@"native"] boolValue];
     [owner installPlaybackControls];
     MPRemoteCommandCenter.sharedCommandCenter.changePlaybackPositionCommand.enabled =
@@ -111,12 +119,15 @@
 }
 
 - (void)installPlaybackControls {
-  if (self.remotePlayTarget) return;
-  __weak AppDelegate *weakSelf = self;
+  if (self.remotePlayTarget && !self.nativePlayback) return;
   MPRemoteCommandCenter *commands = MPRemoteCommandCenter.sharedCommandCenter;
+  // Reassert controls when taking ownership from the web Media Session, even
+  // when native targets were installed before handoff. Do not duplicate them.
   commands.playCommand.enabled = YES;
   commands.pauseCommand.enabled = YES;
   commands.togglePlayPauseCommand.enabled = YES;
+  if (self.remotePlayTarget) return;
+  __weak AppDelegate *weakSelf = self;
   self.remotePlayTarget = [commands.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {
     return [weakSelf forwardPlaybackCommand:@"play"];
   }];
@@ -138,41 +149,157 @@
 }
 
 - (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action {
-  return [self forwardPlaybackCommand:action value:nil];
+  return [self forwardPlaybackCommand:action value:nil source:@"remote-command"];
 }
 
 - (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action value:(NSNumber *)value {
+  return [self forwardPlaybackCommand:action value:value source:@"remote-command"];
+}
+
+- (void)recordPlaybackAudioEvent:(NSString *)stage fields:(NSDictionary *)fields {
+  if (!self.playbackDiagnosticsEnabled) return;
+  NSMutableDictionary *event = [fields mutableCopy];
+  event[@"stage"] = stage;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:event options:NSJSONWritingSortedKeys error:nil];
+  if (data) {
+    NSLog(@"[BAHA_AUDIO] %@", [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+  }
+}
+
+- (MPRemoteCommandHandlerStatus)forwardPlaybackCommand:(NSString *)action
+    value:(NSNumber *)value source:(NSString *)source {
   NSString *document = self.playbackDocument;
-  if (!document.length) return MPRemoteCommandHandlerStatusNoSuchContent;
+  NSUInteger generation = self.playbackControlGeneration;
+  NSNumber *requestId;
+  @synchronized (self) {
+    requestId = @(++self.playbackCommandSequence);
+  }
+  NSDictionary *context = @{
+    @"requestId": requestId, @"action": action, @"source": source,
+    @"native": @(self.nativePlayback)
+  };
+  if (!document.length || !self.playbackEnvironmentChannel) {
+    NSMutableDictionary *event = [context mutableCopy];
+    event[@"reason"] = !document.length ? @"no-content" : @"no-channel";
+    [self recordPlaybackAudioEvent:@"command-rejected" fields:event];
+    return !document.length ? MPRemoteCommandHandlerStatusNoSuchContent : MPRemoteCommandHandlerStatusCommandFailed;
+  }
+  [self recordPlaybackAudioEvent:@"command-queued" fields:context];
+  __weak AppDelegate *weakSelf = self;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (![self.playbackDocument isEqualToString:document]) return;
+    AppDelegate *owner = weakSelf;
+    if (!owner) return;
+    if (![owner.playbackDocument isEqualToString:document] ||
+        owner.playbackControlGeneration != generation ||
+        !owner.playbackEnvironmentChannel) {
+      NSMutableDictionary *event = [context mutableCopy];
+      event[@"reason"] = @"session-changed";
+      [owner recordPlaybackAudioEvent:@"command-discarded" fields:event];
+      return;
+    }
     NSMutableDictionary *arguments =
-        [@{@"document": document, @"action": action} mutableCopy];
+        [@{@"document": document, @"action": action, @"requestId": requestId, @"source": source} mutableCopy];
     if (value) arguments[@"value"] = value;
-    [self.playbackEnvironmentChannel invokeMethod:@"remoteCommand"
-        arguments:arguments];
+    __block BOOL replied = NO;
+    __block BOOL timedOut = NO;
+    [owner recordPlaybackAudioEvent:@"command-forwarded" fields:context];
+    [owner.playbackEnvironmentChannel invokeMethod:@"remoteCommand"
+        arguments:arguments result:^(id result) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        replied = YES;
+        AppDelegate *current = weakSelf;
+        if (!current) return;
+        NSMutableDictionary *event = [context mutableCopy];
+        event[@"late"] = @(timedOut);
+        event[@"documentCurrent"] = @(
+            [current.playbackDocument isEqualToString:document] &&
+            current.playbackControlGeneration == generation);
+        if ([result isKindOfClass:NSDictionary.class] &&
+            [result[@"requestId"] isEqual:requestId] &&
+            [result[@"accepted"] isKindOfClass:NSNumber.class]) {
+          event[@"accepted"] = @([result[@"accepted"] boolValue]);
+          // Only copy known, bounded diagnostics. Never log a document token,
+          // an arbitrary Flutter error message, or platform-channel payload.
+          NSArray *reasons = @[
+            @"disposed", @"unsupported-method", @"invalid-request-id",
+            @"stale-document", @"not-foreground", @"unsupported-action",
+            @"no-visible-player", @"not-operable", @"invalid-seek",
+            @"command-error", @"session-changed", @"session-inactive",
+            @"dispatched"
+          ];
+          event[@"reason"] = [reasons containsObject:result[@"reason"]] ? result[@"reason"] : @"unknown";
+          for (NSString *key in @[@"stateMatches", @"paused"]) {
+            if ([result[key] isKindOfClass:NSNumber.class]) event[key] = @([result[key] boolValue]);
+          }
+        } else if ([result isKindOfClass:NSNumber.class]) {
+          event[@"accepted"] = @([result boolValue]);
+          event[@"reason"] = @"legacy-reply";
+        } else {
+          event[@"accepted"] = @NO;
+          event[@"reason"] = [result isKindOfClass:FlutterError.class] ? @"flutter-error" : @"invalid-reply";
+        }
+        [current recordPlaybackAudioEvent:@"command-acknowledged" fields:event];
+      });
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+      if (replied) return;
+      timedOut = YES;
+      NSMutableDictionary *event = [context mutableCopy];
+      event[@"reason"] = @"no-flutter-reply";
+      [weakSelf recordPlaybackAudioEvent:@"command-timeout" fields:event];
+    });
   });
+  // MPRemoteCommand's handler is synchronous. Success here means delivery was
+  // queued; Flutter's result above reports acceptance and observed state.
+  // Blocking this thread for that result could deadlock Flutter's UI thread.
   return MPRemoteCommandHandlerStatusSuccess;
 }
 
 - (void)audioSessionInterrupted:(NSNotification *)notification {
-  if ([notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] ==
-      AVAudioSessionInterruptionTypeBegan) {
-    [self pauseNativePlayback];
+  NSNumber *type = notification.userInfo[AVAudioSessionInterruptionTypeKey];
+  NSNumber *options = notification.userInfo[AVAudioSessionInterruptionOptionKey];
+  [self recordPlaybackAudioEvent:@"audio-interruption" fields:@{
+    @"type": type ?: NSNull.null,
+    @"shouldResume": @((options.unsignedIntegerValue & AVAudioSessionInterruptionOptionShouldResume) != 0),
+    @"native": @(self.nativePlayback)
+  }];
+  if (type && type.unsignedIntegerValue == AVAudioSessionInterruptionTypeBegan) {
+    [self pauseNativePlaybackFromSource:@"audio-interruption"];
   }
+}
+
+- (NSArray<NSString *> *)audioPortTypes:(AVAudioSessionRouteDescription *)route {
+  NSMutableArray<NSString *> *types = [NSMutableArray array];
+  for (AVAudioSessionPortDescription *port in route.outputs) {
+    if (port.portType) [types addObject:port.portType];
+  }
+  return types;
 }
 
 - (void)audioRouteChanged:(NSNotification *)notification {
-  if ([notification.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue] ==
-      AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
-    [self pauseNativePlayback];
+  NSNumber *reason = notification.userInfo[AVAudioSessionRouteChangeReasonKey];
+  if (self.playbackDiagnosticsEnabled) {
+    AVAudioSessionRouteDescription *previous =
+        notification.userInfo[AVAudioSessionRouteChangePreviousRouteKey];
+    [self recordPlaybackAudioEvent:@"audio-route" fields:@{
+      @"reason": reason ?: NSNull.null, @"native": @(self.nativePlayback),
+      @"previousOutputs": [self audioPortTypes:previous],
+      @"currentOutputs": [self audioPortTypes:AVAudioSession.sharedInstance.currentRoute]
+    }];
+  }
+  if (reason && reason.unsignedIntegerValue == AVAudioSessionRouteChangeReasonOldDeviceUnavailable) {
+    [self pauseNativePlaybackFromSource:@"audio-route"];
   }
 }
 
-- (void)pauseNativePlayback {
+- (void)pauseNativePlaybackFromSource:(NSString *)source {
   // Calls, Siri and disconnected headphones latch pause through the same
   // document-scoped control path. Interruption end never resumes playback.
-  if (self.nativePlayback) [self forwardPlaybackCommand:@"pause"];
+  // A route notification does not prove that an AirPod was removed.
+  if (self.nativePlayback) {
+    [self forwardPlaybackCommand:@"pause" value:nil source:source];
+  }
 }
 
 - (void)clearPlaybackControls {
@@ -187,6 +314,7 @@
   self.remoteSeekTarget = nil;
   commands.changePlaybackPositionCommand.enabled = NO;
   if (self.playbackDocument) MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = nil;
+  self.playbackControlGeneration++;
   self.playbackDocument = nil;
   self.nativePlayback = NO;
 }

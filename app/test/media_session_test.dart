@@ -6,6 +6,7 @@ import 'package:baha_plus/core/browser_request.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
+import 'package:baha_plus/data/playback_environment.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -122,6 +123,41 @@ void main() {
       expect(calls, isEmpty);
     },
   );
+
+  test('a system pause preserves Now Playing and the loaded media', () async {
+    final portal = _MediaPortal();
+    final store = await playingStore(portal);
+    final environment = PlaybackEnvironment(store);
+    addTearDown(environment.dispose);
+    const environmentChannel = MethodChannel(
+      'app.bahaplus.mobile/playback_environment',
+    );
+    final receipt = Completer<dynamic>();
+    final before = portal.scripts.length;
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+          environmentChannel.name,
+          environmentChannel.codec.encodeMethodCall(
+            MethodCall('remoteCommand', {
+              'document': store.operation.id,
+              'action': 'pause',
+              'source': 'audio-interruption',
+              'requestId': 1,
+            }),
+          ),
+          (reply) =>
+              receipt.complete(environmentChannel.codec.decodeEnvelope(reply!)),
+        );
+    final response = await receipt.future as Map;
+    expect(response['accepted'], isTrue);
+    expect(response['action'], 'pause');
+    expect(response['reason'], 'dispatched');
+    expect(portal.scripts.skip(before).single, contains('"pause"'));
+    expect(portal.scripts.last, isNot(contains('media.load()')));
+    expect(calls, isEmpty);
+    expect(store.browserVisible, isTrue);
+    expect(store.showsPlayer, isTrue);
+  });
 
   test('a delayed exit cannot clear the next playback session', () async {
     final portal = _MediaPortal();

@@ -30,6 +30,7 @@
     return levels ? Array.from({ length: levels.length }, (_, i) => levels[i]) : [];
   }
   const nativeHls = c => !c.player?.tech?.(true)?.vhs && !!nativeQuality?.source(c.player, c.media);
+  const requiresNative = () => ['android-exoplayer', 'ios-avplayer', 'windows-mpv'].includes(window.__bahaNativeBackend);
   const sourceQuality = c => nativeHls(c) || nativeQuality?.hasInitialSelection(c.player, c.media);
   const snapshot = c => nativeQuality?.timeline() || {
     position: c.media.currentTime, rate: c.media.playbackRate,
@@ -41,6 +42,7 @@
       window.__bahaMediaSuspended = true;
       return;
     }
+    if (requiresNative()) nativePlayback?.hold(true);
     const c = context();
     if (!lifecycleSuspended && c.matches && c.media && c.media.duration > 0) {
       suspendedTimeline = {...snapshot(c), paused: true};
@@ -199,7 +201,7 @@
     return { root, player, media, manager: controls?.danmuManager, phase, matches, contentAuthorized };
   }
   function applyDanmaku(c) {
-    if (nativePlayback?.active) return;
+    if (nativePlayback?.active || requiresNative()) return;
     if (!preferences || c.phase !== 'content') {
       appliedManager = null;
       return;
@@ -307,10 +309,13 @@
     if (window.__bahaDocumentNonce !== nonce) { dispose(); return; }
     if (nativePlayback?.active) return;
     const c = context();
+    // A native host never silently continues a full episode on HTML media,
+    // including while preparing or after a failed AVPlayer initialization.
+    if (requiresNative() && c.phase === 'content') nativePlayback?.hold();
     const restoringCheckpoint = restoreCheckpoint(c);
     if (!lifecycleSuspended) restoreSuspended(c);
     const now = Date.now();
-    if (!lifecycleSuspended && !cacheRecovering && !nativeQuality?.isSwitching() &&
+    if (!requiresNative() && !lifecycleSuspended && !cacheRecovering && !nativeQuality?.isSwitching() &&
         c.phase === 'content' && c.media?.duration > 0) {
       cacheTimeline = snapshot(c);
       const frames = c.media.getVideoPlaybackQuality?.()?.totalVideoFrames ?? c.media.webkitDecodedFrameCount;
@@ -328,7 +333,7 @@
     } else lastProgress = null;
     const mediaError = c.media?.error?.code;
     const playerError = c.player?.error?.()?.code;
-    if (!lifecycleSuspended && c.matches && c.phase === 'error' &&
+    if (!requiresNative() && !lifecycleSuspended && c.matches && c.phase === 'error' &&
         [2, 3, 4].includes(mediaError || playerError) && !(playerError >= 1000) &&
         now >= recoveryAfter && recoveryCount < 2) {
       void recover(c);
@@ -350,9 +355,9 @@
       node.inert = nativeControls;
     });
     const levels = qualityLevels(c.player).filter(l => Number.isInteger(l.height) && l.height >= 144 && l.height <= 4320);
-    const native = sourceQuality(c) && c.matches &&
+    const native = !requiresNative() && sourceQuality(c) && c.matches &&
       c.phase === 'content' ? nativeQuality?.update(c.player, c.media) : null;
-    if (!native && requestedQuality !== null && c.phase === 'content' && levels[0] !== qualityList &&
+    if (!requiresNative() && !native && requestedQuality !== null && c.phase === 'content' && levels[0] !== qualityList &&
         (requestedQuality === 0 || levels.some(level => level.height === requestedQuality))) applyQuality(c, requestedQuality);
     const qualities = native?.qualities ||
       [...new Set(levels.map(l => l.height))].sort((a, b) => b - a);
@@ -376,11 +381,17 @@
       hasDanmaku: !!danmaku, danmaku: !!danmaku && getComputedStyle(danmaku).display !== 'none'
     };
     const serialized = JSON.stringify(body);
-    if (serialized !== last) { last = serialized; post(body); }
+    if (serialized !== last || (requiresNative() && c.phase === 'content')) {
+      last = serialized; post(body);
+    }
   }
   async function command(ticket, action, value) {
     if (ticket !== nonce || window.__bahaDocumentNonce !== nonce ||
         window.__bahaMediaSuspended === true || nativePlayback?.active) return false;
+    if (requiresNative() && context().phase === 'content') {
+      if (action === 'pause') return nativePlayback?.hold(true) === true;
+      return false;
+    }
     if (action === 'quality') {
       const run = async () => {
         const c = context();
@@ -502,10 +513,7 @@
     nativePlayback?.dispose();
     nativeQuality?.dispose();
     document.removeEventListener('visibilitychange', visibilityChanged);
-    try {
-      navigator.mediaSession?.setActionHandler('play', null);
-      navigator.mediaSession?.setActionHandler('pause', null);
-    } catch (_) {}
+    releaseMediaSession();
     cacheEnabled = false;
     if (cachePlayer && originalSourceSetter) cachePlayer.src = originalSourceSetter;
     delete window.__bahaCacheOriginalSource;
@@ -526,13 +534,37 @@
     commitNative: () => {
       if (cachePlayer || cacheRecovering || suspendedTimeline || nativeQuality?.isSwitching()) return null;
       const timeline = nativePlayback?.commit() || null;
-      if (timeline) nativeQuality?.dispose();
+      if (timeline) {
+        nativeQuality?.dispose();
+        clearInterval(timer);
+        releaseMediaSession();
+      }
       return timeline;
     },
+    failNative: () => {
+      if (!requiresNative() || nativePlayback?.active) return false;
+      nativePlayback?.hold(true);
+      clearInterval(timer);
+      releaseMediaSession();
+      return true;
+    },
     syncNative: value => nativePlayback?.sync(value) === true,
+    nativeStatus: () => nativePlayback?.status() || 'unavailable',
     nativeDanmaku: () => nativePlayback?.danmaku() || [],
     acknowledgeNativeDanmaku: ids => nativePlayback?.acknowledgeDanmaku(ids) === true };
   document.addEventListener('visibilitychange', visibilityChanged);
+  function releaseMediaSession() {
+    try {
+      for (const action of ['play', 'pause', 'stop', 'seekbackward', 'seekforward',
+        'seekto', 'previoustrack', 'nexttrack']) {
+        try { navigator.mediaSession?.setActionHandler(action, null); } catch (_) {}
+      }
+      if (navigator.mediaSession) {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      }
+    } catch (_) {}
+  }
   try {
     navigator.mediaSession?.setActionHandler('play', () => command(nonce, 'play'));
     navigator.mediaSession?.setActionHandler('pause', () => command(nonce, 'pause'));

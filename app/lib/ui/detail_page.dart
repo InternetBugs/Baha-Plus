@@ -137,12 +137,7 @@ class DetailPage extends StatelessWidget {
                                       : CupertinoIcons.bookmark,
                                   color: Colors.white,
                                 ),
-                                onPressed: () {
-                                  Navigator.of(
-                                    context,
-                                  ).popUntil((route) => route.isFirst);
-                                  store.toggleFavorite(anime);
-                                },
+                                onPressed: () => store.toggleFavorite(anime),
                               ),
                             ],
                           ),

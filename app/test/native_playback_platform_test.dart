@@ -16,6 +16,8 @@ void main() {
           'ios-avplayer',
         TargetPlatform.android when AppStore.androidNativePlaybackEnabled =>
           'android-exoplayer',
+        TargetPlatform.windows when AppStore.windowsNativePlaybackEnabled =>
+          'windows-mpv',
         _ => null,
       };
       final store = await AppStore.create(

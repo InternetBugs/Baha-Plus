@@ -29,11 +29,17 @@ class AppStore extends ChangeNotifier {
     'BAHA_IOS_NATIVE',
     defaultValue: true,
   );
+  // The desktop debug harness registers its own native video implementation.
+  // Mobile builds do not include or initialize the desktop player packages.
+  static const windowsNativePlaybackEnabled = bool.fromEnvironment(
+    'BAHA_WINDOWS_NATIVE',
+  );
 
   static String? get nativePlaybackBackend => switch (defaultTargetPlatform) {
     TargetPlatform.android when androidNativePlaybackEnabled =>
       'android-exoplayer',
     TargetPlatform.iOS when iosNativePlaybackEnabled => 'ios-avplayer',
+    TargetPlatform.windows when windowsNativePlaybackEnabled => 'windows-mpv',
     _ => null,
   };
   AppStore({
@@ -203,6 +209,10 @@ class AppStore extends ChangeNotifier {
   Uri? _pendingUri;
   Anime? _pendingAnime;
   bool _desiredFavorite = false, _disposed = false;
+  BrowserRequest? _playerFavoriteRequest;
+  Anime? _playerFavoriteAnime;
+  String? _playerFavoriteDocument;
+  Timer? _playerFavoriteDeadline;
   bool _applicationActive = true;
   Timer? _deadline;
   Timer? _searchDebounce;
@@ -895,14 +905,95 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> toggleFavorite(Anime anime) async {
+    if (_playerFavoriteRequest != null ||
+        (operation.intent == BrowserIntent.favorite && busy)) {
+      return;
+    }
+    if (showsPlayer &&
+        playingAnime?.id == anime.id &&
+        browserUri == OfficialSite.video(playingVideoId ?? '0')) {
+      await _togglePlayerFavorite(anime);
+      return;
+    }
     _pendingAnime = anime;
     _desiredFavorite = !isFavorite(anime);
     browserTitle = t('favorites');
     await _load(
       OfficialSite.search(anime.title),
       BrowserIntent.favorite,
-      visible: true,
+      visible: false,
     );
+  }
+
+  Future<void> _togglePlayerFavorite(Anime anime) async {
+    final request = BrowserRequest(
+      intent: BrowserIntent.favorite,
+      animeId: anime.id,
+      favoriteTarget: !isFavorite(anime),
+    );
+    final document = operation.id;
+    _playerFavoriteRequest = request;
+    _playerFavoriteAnime = anime;
+    _playerFavoriteDocument = document;
+    _playerFavoriteDeadline = Timer(const Duration(seconds: 30), () {
+      if (_playerFavoriteRequest != request) return;
+      _clearPlayerFavorite();
+      notice = t('accountSyncError');
+      _emit();
+    });
+    final source = scripts['favorite-action']
+        ?.replaceAll('%ANIME_ID%', anime.id)
+        .replaceAll(
+          '__BAHA_DESIRED__',
+          request.favoriteTarget! ? 'true' : 'false',
+        );
+    try {
+      if (source == null || _portal == null) {
+        throw StateError('Favorite session unavailable');
+      }
+      // A favorite has its own ticket without changing the player's nonce,
+      // authorization document or native playback ownership.
+      await _portal!.evaluate('''
+(function() {
+const documentTicket = ${jsonEncode(document)};
+const favoriteTicket = ${jsonEncode(request.id)};
+if (window.__bahaDocumentNonce !== documentTicket) return;
+function bahaPostJSON(raw) {
+  if (window.__bahaDocumentNonce !== documentTicket) return;
+  const body = JSON.parse(raw); body.requestId = favoriteTicket;
+  window.baha.postMessage(JSON.stringify(body));
+}
+if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running') ||
+    /^(Just a moment|Checking your browser)/i.test(document.title)) {
+  bahaPostJSON(JSON.stringify({type:'verification-required'})); return;
+}
+$source
+})(); true;
+''');
+    } catch (_) {
+      if (_playerFavoriteRequest == request) {
+        _clearPlayerFavorite();
+        notice = t('accountSyncError');
+        _emit();
+      }
+    }
+  }
+
+  void _clearPlayerFavorite() {
+    _playerFavoriteDeadline?.cancel();
+    _playerFavoriteDeadline = null;
+    _playerFavoriteRequest = null;
+    _playerFavoriteAnime = null;
+    _playerFavoriteDocument = null;
+  }
+
+  void _confirmFavorite(Anime anime, bool saved) {
+    favorites = [
+      if (saved && !isFavorite(anime)) anime,
+      ...favorites.where((item) => saved || item.id != anime.id),
+    ];
+    accountNeedsRefresh = true;
+    notice = t(saved ? 'added' : 'removed');
   }
 
   Future<void> play(Anime anime, {Episode? episode}) async {
@@ -1012,7 +1103,9 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     await _portal?.reload();
   }
 
-  Future<void> playerProcessTerminated() async {
+  Future<void> playerProcessTerminated({
+    bool allowAutomaticReload = true,
+  }) async {
     if (_disposed || _processRecoveryLoading) return;
     if (!showsPlayer || !browserVisible || playingVideoId == null) {
       if (browserVisible) navigationFailed();
@@ -1039,6 +1132,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
     );
     final automatic =
         content &&
+        allowAutomaticReload &&
         _applicationActive &&
         !current.paused &&
         _processRecoveries.length < 2;
@@ -1081,6 +1175,17 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> retryFavorite() async {
     if (!canRetryFavorite || _pendingAnime == null) return;
+    if (browserUri == null || !OfficialSite.trustedOrigin(browserUri!)) {
+      await _load(
+        OfficialSite.search(_pendingAnime!.title),
+        BrowserIntent.favorite,
+        visible: browserVisible,
+      );
+      return;
+    }
+    busy = true;
+    _armDeadline();
+    _emit();
     await _runScript('favorite-action', {
       '%ANIME_ID%': _pendingAnime!.id,
       '__BAHA_DESIRED__': _desiredFavorite ? 'true' : 'false',
@@ -1109,6 +1214,7 @@ ${_applicationActive ? '' : _suspendMedia} true;
   }
 
   void navigationStarted() {
+    _clearPlayerFavorite();
     if (operation.intent == BrowserIntent.accountRefresh &&
         _accountSyncDocument == operation.id) {
       _begin(BrowserIntent.accountRefresh);
@@ -1122,6 +1228,13 @@ ${_applicationActive ? '' : _suspendMedia} true;
   Future<void> navigationFinished(Uri? uri) async {
     browserUri = uri;
     if (uri == null || !OfficialSite.trustedOrigin(uri)) {
+      if (operation.intent == BrowserIntent.favorite &&
+          uri != null &&
+          OfficialSite.allowedNavigation(uri)) {
+        _deadline?.cancel();
+        browserVisible = true;
+        notice = t('favoritePending');
+      }
       busy = false;
       _emit();
       return;
@@ -1150,7 +1263,6 @@ ${_applicationActive ? '' : _suspendMedia} true;
         await syncAccount();
       case BrowserIntent.favorite:
         await retryFavorite();
-        busy = false;
       case BrowserIntent.idle:
         if (!browserVisible) await _portal?.evaluate('$_suspendMedia true;');
         busy = false;
@@ -1186,6 +1298,9 @@ window.__bahaMediaSuspended = false; true;
       detailLoading = false;
       detailFailed = true;
     }
+    if (operation.intent == BrowserIntent.favorite) {
+      notice = t('accountSyncError');
+    }
     _emit();
   }
 
@@ -1195,6 +1310,41 @@ window.__bahaMediaSuspended = false; true;
     required Uri source,
     required bool isMainFrame,
   }) async {
+    final playerFavorite = _playerFavoriteRequest;
+    if (playerFavorite != null &&
+        _playerFavoriteDocument == operation.id &&
+        showsPlayer &&
+        browserVisible &&
+        source == OfficialSite.video(playingVideoId ?? '0')) {
+      final favoriteBody = playerFavorite.accept(
+        raw,
+        origin: origin,
+        source: source,
+        isMainFrame: isMainFrame,
+      );
+      if (favoriteBody != null) {
+        final anime = _playerFavoriteAnime!;
+        _clearPlayerFavorite();
+        switch (favoriteBody['type']) {
+          case 'favorite-complete':
+            _confirmFavorite(anime, playerFavorite.favoriteTarget!);
+          case 'account-guest':
+          case 'verification-required':
+            _pendingAnime = anime;
+            _desiredFavorite = playerFavorite.favoriteTarget!;
+            browserTitle = t('favorites');
+            await _load(
+              OfficialSite.search(anime.title),
+              BrowserIntent.favorite,
+              visible: true,
+            );
+          default:
+            notice = t('accountSyncError');
+        }
+        _emit();
+        return;
+      }
+    }
     final completed = operation;
     final body = completed.accept(
       raw,
@@ -1321,7 +1471,10 @@ window.__bahaMediaSuspended = false; true;
         accountSynced = false;
         accountNeedsRefresh = false;
         unawaited(_saveAccountSnapshot(null));
-        if (browserVisible) {
+        if (completed.intent == BrowserIntent.favorite) {
+          browserVisible = true;
+          notice = t('favoritePending');
+        } else if (browserVisible) {
           notice = t('accountHint');
         } else {
           _begin(BrowserIntent.idle);
@@ -1330,10 +1483,14 @@ window.__bahaMediaSuspended = false; true;
       case 'favorite-error':
         notice = t('accountSyncError');
       case 'favorite-complete':
-        notice = t(_desiredFavorite ? 'added' : 'removed');
+        _confirmFavorite(_pendingAnime!, completed.favoriteTarget!);
+        browserVisible = false;
         await syncAccount();
       case 'verification-required':
         verificationRequired = true;
+        if (completed.intent == BrowserIntent.favorite) {
+          browserVisible = true;
+        }
         if (showsPlayer) {
           playback.value = const PlaybackState(
             phase: PlaybackPhase.verification,
@@ -1389,6 +1546,7 @@ window.__bahaMediaSuspended = false; true;
   }
 
   void _begin(BrowserIntent intent) {
+    _clearPlayerFavorite();
     nativePlaybackDocument = null;
     _deadline?.cancel();
     _qualityRetryAfter = null;
@@ -1532,6 +1690,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
   @override
   void dispose() {
     _disposed = true;
+    _clearPlayerFavorite();
     _deadline?.cancel();
     _searchDebounce?.cancel();
     _searchGeneration++;

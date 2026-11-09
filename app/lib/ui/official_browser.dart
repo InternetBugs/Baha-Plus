@@ -10,9 +10,11 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/browser_presentation.dart';
 import '../core/community.dart';
 import '../core/models.dart';
+import '../core/playback_state.dart';
 import '../data/app_store.dart';
 import '../data/ios_hls_cache.dart';
 import '../data/native_playback.dart';
+import '../data/windows_official_bridge.dart';
 import 'player_page.dart';
 import 'native_video_surface.dart';
 
@@ -51,7 +53,12 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   NativePlayback? _nativePlayback;
   Future<void> _nativeRelease = Future.value();
   String? _preparingNative, _nativeAttempted;
+  String? _nativeFailureDocument;
   bool _syncingNative = false;
+  bool _readingNativeDanmaku = false;
+  int _lifecycleRevision = 0;
+  Timer? _nativeClockTimer;
+  DateTime? _lastNativeSync;
   List<NativeDanmaku> _nativeDanmaku = const [];
   Timer? _danmakuTimer;
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
@@ -76,9 +83,19 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
+      _lifecycleRevision++;
       unawaited(_nativePlayback?.setApplicationActive(false));
     } else if (state == AppLifecycleState.resumed) {
+      _lifecycleRevision++;
+      _lastNativeSync = null;
       unawaited(_nativePlayback?.setApplicationActive(true));
+      unawaited(_syncNativeClock());
+    }
+    if (_diagnostics) {
+      debugPrint(
+        '[BAHA_NATIVE] lifecycle=${state.name} '
+        'active=${_nativePlayback?.active == true}',
+      );
     }
   }
 
@@ -101,6 +118,8 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       _nativePlayback = null;
       _nativeDanmaku = const [];
       _danmakuTimer?.cancel();
+      _nativeClockTimer?.cancel();
+      _lastNativeSync = null;
       native.dispose();
       _nativeRelease = Future.wait([_nativeRelease, native.released])
           .then<void>((_) {})
@@ -109,6 +128,9 @@ class _OfficialBrowserState extends State<OfficialBrowser>
           });
     } else if (native != null && !store.applicationActive) {
       unawaited(native.setApplicationActive(false));
+    }
+    if (_nativeFailureDocument != store.operation.id) {
+      _nativeFailureDocument = null;
     }
     final document = _hlsCache.document;
     if (document != null &&
@@ -126,6 +148,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         !mounted ||
         !store.showsPlayer ||
         !store.browserVisible ||
+        !store.applicationActive ||
         store.operation.id != document ||
         body['type'] != 'player-state') {
       return;
@@ -293,8 +316,16 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   ) async {
     final native = _nativePlayback;
     if (native?.active == true && native!.document == document) {
-      if (action == 'quality') await _syncInitialQualityScript();
-      return native.command(action, value);
+      final accepted = await native.command(action, value);
+      if (accepted) unawaited(_syncNativeClock());
+      return accepted;
+    }
+    if (AppStore.nativePlaybackBackend != null &&
+        (store.usesNativePlayback ||
+            store.playback.value.phase == PlaybackPhase.content ||
+            _preparingNative == document ||
+            _nativeAttempted == document)) {
+      return false;
     }
     if (action == 'quality') await _syncInitialQualityScript();
     final result = await _controller?.callAsyncJavaScript(
@@ -357,6 +388,14 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
     }
     _readingHealth = true;
     try {
+      final native = _nativePlayback;
+      if (native?.active == true) {
+        final state = native!.state;
+        debugPrint(
+          '[BAHA_HEALTH] ${jsonEncode({'backend': AppStore.nativePlaybackBackend, 'phase': state.phase.name, ...native.clock, 'bufferAhead': (state.buffered - state.position).clamp(0, state.duration), 'authorizationAvailable': native.authorizationAvailable})}',
+        );
+        return;
+      }
       final result = await _controller!
           .callAsyncJavaScript(
             functionBody:
@@ -531,44 +570,57 @@ try {
       store.navigationFailed();
       return;
     }
-    await controller.addWebMessageListener(
-      WebMessageListener(
-        jsObjectName: 'baha',
-        allowedOriginRules: {'https://ani.gamer.com.tw'},
-        onPostMessage: (message, sourceOrigin, isMainFrame, replyProxy) async {
-          final raw = message?.data;
-          if (raw is! String || sourceOrigin == null || !isMainFrame) return;
-          final requestId = store.operation.id;
-          final nativeUrl = await controller.getUrl();
-          if (!mounted ||
-              nativeUrl == null ||
-              store.operation.id != requestId) {
-            return;
-          }
-          final origin = Uri.tryParse(sourceOrigin.toString());
-          final source = Uri.tryParse(nativeUrl.toString());
-          if (origin != null && source != null) {
-            final body = store.operation.accept(
-              raw,
-              origin: origin,
-              source: source,
-              isMainFrame: isMainFrame,
-            );
-            await store.receive(
-              raw,
-              origin: origin,
-              source: source,
-              isMainFrame: isMainFrame,
-            );
-            if (body != null) unawaited(_syncHlsCache(body, requestId));
-            if (body != null) {
-              unawaited(_prepareNativePlayback(body, requestId));
-            }
-          }
-        },
-      ),
-    );
+    if (defaultTargetPlatform == TargetPlatform.windows &&
+        AppStore.windowsNativePlaybackEnabled) {
+      await attachWindowsOfficialBridge(
+        controller,
+        (raw) => _receiveOfficialMessage(controller, raw, OfficialSite.home),
+      );
+    } else {
+      await controller.addWebMessageListener(
+        WebMessageListener(
+          jsObjectName: 'baha',
+          allowedOriginRules: {'https://ani.gamer.com.tw'},
+          onPostMessage:
+              (message, sourceOrigin, isMainFrame, replyProxy) async {
+                final raw = message?.data;
+                if (raw is! String || sourceOrigin == null || !isMainFrame) {
+                  return;
+                }
+                final origin = Uri.tryParse(sourceOrigin.toString());
+                if (origin != null) {
+                  await _receiveOfficialMessage(controller, raw, origin);
+                }
+              },
+        ),
+      );
+    }
     await store.attach(this);
+  }
+
+  Future<void> _receiveOfficialMessage(
+    InAppWebViewController controller,
+    String raw,
+    Uri origin,
+  ) async {
+    final requestId = store.operation.id;
+    final nativeUrl = await controller.getUrl();
+    if (!mounted || nativeUrl == null || store.operation.id != requestId) {
+      return;
+    }
+    final source = Uri.tryParse(nativeUrl.toString());
+    if (source == null) return;
+    final body = store.operation.accept(
+      raw,
+      origin: origin,
+      source: source,
+      isMainFrame: true,
+    );
+    await store.receive(raw, origin: origin, source: source, isMainFrame: true);
+    if (body != null) {
+      unawaited(_syncHlsCache(body, requestId));
+      unawaited(_prepareNativePlayback(body, requestId));
+    }
   }
 
   @override
@@ -669,10 +721,15 @@ try {
             _terminatedGeneration = _documentGeneration;
             _publicDocumentReady = false;
             debugPrint('[BAHA_HEALTH] web-content-process-terminated');
-            // Native playback still depends on this document's authorization.
-            // Stop it synchronously before process recovery can replace it.
+            // Losing the official session requires a pause, but must not
+            // automatically reload an otherwise valid native media buffer.
+            final native = _nativePlayback;
             unawaited(_nativePlayback?.pause());
-            unawaited(store.playerProcessTerminated());
+            unawaited(
+              store.playerProcessTerminated(
+                allowAutomaticReload: native?.active != true,
+              ),
+            );
             unawaited(_nativePlayback?.block());
           },
           onLoadStart: (controller, url) async {
@@ -766,6 +823,29 @@ try {
           retryLabel: store.t('retry'),
           onRetry: store.reloadBrowser,
         ),
+      if (_nativeFailureDocument == store.operation.id)
+        ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  store.t('playerPlaybackError'),
+                  style: const TextStyle(color: Colors.white),
+                ),
+                const SizedBox(height: 20),
+                GlassButton.custom(
+                  shape: const LiquidRoundedRectangle(borderRadius: 22),
+                  onTap: store.reloadBrowser,
+                  width: 116,
+                  height: 44,
+                  child: Text(store.t('retry')),
+                ),
+              ],
+            ),
+          ),
+        ),
       if (store.browserError)
         ColoredBox(
           color: background,
@@ -797,6 +877,7 @@ try {
     _healthTimer?.cancel();
     _danmakuTimer?.cancel();
     _nativePlayback?.dispose();
+    _nativeClockTimer?.cancel();
     store.removeListener(_cacheSessionChanged);
     final document = _hlsCache.document;
     if (document != null) unawaited(_hlsCache.stop(document));
@@ -810,6 +891,7 @@ try {
         !mounted ||
         !store.showsPlayer ||
         !store.browserVisible ||
+        !store.applicationActive ||
         store.operation.id != document ||
         body['type'] != 'player-state' ||
         body['phase'] != 'content' ||
@@ -820,6 +902,7 @@ try {
       return;
     }
     _preparingNative = document;
+    final lifecycle = _lifecycleRevision;
     NativePlayback? candidate;
     bool live() =>
         mounted &&
@@ -827,19 +910,24 @@ try {
         store.showsPlayer &&
         store.browserVisible;
     try {
-      final prepared = await _controller?.callAsyncJavaScript(
-        arguments: {'ticket': document},
-        functionBody: '''
+      final prepared = await _controller
+          ?.callAsyncJavaScript(
+            arguments: {'ticket': document},
+            functionBody: '''
 if (window.__bahaDocumentNonce !== ticket) return null;
 const source = await window.__bahaPlayerBridge?.prepareNative();
 return JSON.stringify(source ? {...source, userAgent: navigator.userAgent} : null);
 ''',
-      );
-      if (!live() || prepared?.value is! String || prepared?.error != null) {
-        return;
+          )
+          .timeout(const Duration(seconds: 15));
+      if (!live()) return;
+      if (prepared?.value is! String || prepared?.error != null) {
+        throw StateError('Native source preparation unavailable');
       }
       final raw = jsonDecode(prepared!.value as String);
-      if (raw == null) return;
+      if (raw == null) {
+        throw StateError('Native source preparation unavailable');
+      }
       final source = NativePlaybackSource.fromJson(raw as Json);
       // Desktop content mode may change WKWebView's agent. Use the agent of
       // the actual authorized document, rather than a separate default view.
@@ -857,32 +945,48 @@ return JSON.stringify(source ? {...source, userAgent: navigator.userAgent} : nul
         onState: (value) {
           if (!live()) return;
           store.updateNativePlayback(document, value);
-          unawaited(_syncNativeClock());
         },
+      );
+      store.updateNativePlayback(
+        document,
+        const PlaybackState(phase: PlaybackPhase.loading),
       );
       await candidate.initialize(store.preferredQuality);
       if (!live()) return;
-      final committed = await _controller?.callAsyncJavaScript(
-        arguments: {'ticket': document},
-        functionBody: '''
+      final committed = await _controller
+          ?.callAsyncJavaScript(
+            arguments: {'ticket': document},
+            functionBody: '''
 if (window.__bahaDocumentNonce !== ticket) return null;
 return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
 ''',
-      );
-      if (!live() || committed?.value is! String || committed?.error != null) {
-        return;
+          )
+          .timeout(const Duration(seconds: 5));
+      if (!live()) return;
+      if (committed?.value is! String || committed?.error != null) {
+        throw StateError('Native handoff unavailable');
       }
       final timeline = jsonDecode(committed!.value as String);
-      if (timeline is! Json) return;
+      if (timeline is! Json) throw StateError('Native handoff unavailable');
       _nativePlayback = candidate;
       _nativeAttempted = document;
       await candidate.activate(
         applicationActive: store.applicationActive,
-        timeline: timeline,
+        timeline: {
+          ...timeline,
+          'paused':
+              timeline['paused'] != false || lifecycle != _lifecycleRevision,
+        },
       );
       if (!live()) return;
       setState(() {});
       debugPrint('[BAHA_NATIVE] $backend handoff complete');
+      _nativeClockTimer?.cancel();
+      _nativeClockTimer = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => unawaited(_syncNativeClock()),
+      );
+      unawaited(_syncNativeClock());
       unawaited(_readNativeDanmaku());
       _danmakuTimer?.cancel();
       _danmakuTimer = Timer.periodic(
@@ -895,9 +999,25 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
         if (candidate != null && _nativePlayback == candidate) {
           await candidate.block(committed: true);
           if (live()) setState(() {});
+        } else {
+          store.updateNativePlayback(
+            document,
+            const PlaybackState(phase: PlaybackPhase.error),
+          );
+          setState(() => _nativeFailureDocument = document);
+          unawaited(
+            _controller?.callAsyncJavaScript(
+              arguments: {'ticket': document},
+              functionBody: '''
+if (window.__bahaDocumentNonce === ticket) window.__bahaPlayerBridge?.failNative();
+''',
+            ),
+          );
         }
         debugPrint(
-          '[BAHA_NATIVE] initialization unavailable: ${error.runtimeType}',
+          '[BAHA_NATIVE] initialization unavailable: ${error.runtimeType} '
+          'stage=${candidate?.failureStage ?? 'handoff'} '
+          'code=${candidate?.failureCode ?? 'unavailable'}',
         );
       }
     } finally {
@@ -908,28 +1028,51 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
 
   Future<void> _syncNativeClock() async {
     final native = _nativePlayback;
-    if (!mounted || native?.active != true || _syncingNative) return;
+    if (!mounted ||
+        native?.active != true ||
+        _syncingNative ||
+        !store.applicationActive) {
+      return;
+    }
+    final now = DateTime.now();
+    if (native!.state.paused &&
+        native.authorizationAvailable &&
+        _lastNativeSync != null &&
+        now.difference(_lastNativeSync!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastNativeSync = now;
     _syncingNative = true;
+    final lifecycle = _lifecycleRevision;
     try {
       final result = await _controller
           ?.callAsyncJavaScript(
-            arguments: {'ticket': native!.document, 'clock': native.clock},
+            arguments: {'ticket': native.document, 'clock': native.clock},
             functionBody: '''
-return window.__bahaDocumentNonce === ticket &&
-  window.__bahaPlayerBridge?.syncNative(clock) === true;
+if (window.__bahaDocumentNonce !== ticket) return 'unavailable';
+const bridge = window.__bahaPlayerBridge;
+if (bridge?.nativeStatus() === 'denied') return 'denied';
+return bridge?.syncNative(clock) === true ? 'ok' : 'unavailable';
 ''',
           )
           .timeout(const Duration(seconds: 5));
       if (_nativePlayback == native &&
-          store.applicationActive &&
-          (result?.error != null || result?.value != true)) {
-        await native!.block();
+          lifecycle == _lifecycleRevision &&
+          store.applicationActive) {
+        if (result?.error == null && result?.value == 'denied') {
+          _nativeClockTimer?.cancel();
+          await native.block();
+        } else {
+          await native.setAuthorizationAvailable(
+            result?.error == null && result?.value == 'ok',
+          );
+        }
       }
     } catch (_) {
-      // WKWebView may be suspended along with the app. A foreground session
-      // must still stop if its official authorization clock is unavailable.
-      if (_nativePlayback == native && store.applicationActive) {
-        await native!.block();
+      if (_nativePlayback == native &&
+          lifecycle == _lifecycleRevision &&
+          store.applicationActive) {
+        await native.setAuthorizationAvailable(false);
       }
     } finally {
       _syncingNative = false;
@@ -938,15 +1081,23 @@ return window.__bahaDocumentNonce === ticket &&
 
   Future<void> _readNativeDanmaku() async {
     final native = _nativePlayback;
-    if (!mounted || native?.active != true) return;
+    if (!mounted ||
+        native?.active != true ||
+        !store.applicationActive ||
+        _readingNativeDanmaku) {
+      return;
+    }
+    _readingNativeDanmaku = true;
     try {
-      final result = await _controller?.callAsyncJavaScript(
-        arguments: {'ticket': native!.document},
-        functionBody: '''
+      final result = await _controller
+          ?.callAsyncJavaScript(
+            arguments: {'ticket': native!.document},
+            functionBody: '''
 if (window.__bahaDocumentNonce !== ticket) return null;
 return JSON.stringify(window.__bahaPlayerBridge?.nativeDanmaku() ?? []);
 ''',
-      );
+          )
+          .timeout(const Duration(seconds: 5));
       if (!mounted || _nativePlayback != native || result?.value is! String) {
         return;
       }
@@ -976,6 +1127,8 @@ return window.__bahaDocumentNonce === ticket &&
       debugPrint('[BAHA_NATIVE] native danmaku loaded: ${sorted.length}');
     } catch (_) {
       // A metadata refresh must never replace an already playing native video.
+    } finally {
+      _readingNativeDanmaku = false;
     }
   }
 }

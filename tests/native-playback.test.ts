@@ -49,7 +49,7 @@ function fixture(backend: string | null = 'android-exoplayer') {
     rejectPolicy: () => {policyError = true;}};
 }
 
-for (const backend of ['android-exoplayer', 'ios-avplayer']) {
+for (const backend of ['android-exoplayer', 'ios-avplayer', 'windows-mpv']) {
 test(`${backend}: handoff is gated by the official ad/age/content state`, async () => {
   const f = fixture(backend);
   for (const phase of ['advertisement', 'age', 'verification', 'error']) {
@@ -72,7 +72,7 @@ test(`${backend}: handoff unloads web media and animations, retaining account/ep
   const handoff = f.bridge.commit();
   assert.equal(handoff.position, 42);
   assert.equal(f.media.getAttribute('src'), null);
-  assert.equal(f.vhsDisposed(), backend === 'android-exoplayer');
+  assert.equal(f.vhsDisposed(), backend !== 'ios-avplayer');
   assert.equal(f.manager.enabled, false);
   assert.equal(f.document.querySelector('iframe'), null);
   assert.equal(f.document.querySelector('section'), null);
@@ -80,6 +80,19 @@ test(`${backend}: handoff unloads web media and animations, retaining account/ep
   assert.ok(f.document.querySelector('.anime_name'));
   assert.ok(f.document.querySelector('.video'), 'official policy-error target remains available');
   assert.equal(f.document.querySelector('.vjs-danmu')!.children.length, 0);
+});
+
+test(`${backend}: pending handoff holds HTML content and preserves pause intent across screen lock`, async () => {
+  const f = fixture(backend);
+  assert.equal(f.bridge.hold(), true);
+  assert.equal(f.media.paused, true);
+  f.media.paused = false;
+  f.media.dispatchEvent(new f.document.defaultView.Event('play'));
+  assert.equal(f.media.paused, true);
+  assert.equal((await f.bridge.prepare()).paused, false);
+  assert.equal(f.bridge.hold(true), true);
+  assert.equal(f.bridge.commit().paused, true);
+  f.bridge.dispose();
 });
 
 test(`${backend}: official callbacks read the native clock and reject policy errors and stale documents`, async () => {

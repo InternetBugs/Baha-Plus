@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'app_store.dart';
@@ -19,6 +20,7 @@ class PlaybackEnvironment {
 
   final AppStore store;
   final MethodChannel _channel;
+  static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   bool _foreground = true, _disposed = false;
   String _last = '';
   Future<void> _updates = Future<void>.value();
@@ -30,37 +32,114 @@ class PlaybackEnvironment {
   }
 
   Future<dynamic> _remoteCommand(MethodCall call) async {
-    if (_disposed || call.method != 'remoteCommand' || !_foreground) {
-      return false;
-    }
     final arguments = call.arguments;
-    if (arguments is! Map || arguments['document'] != store.operation.id) {
-      return false;
-    }
-    final action = arguments['action'] == 'toggle'
+    final document = arguments is Map ? arguments['document'] : null;
+    final rawRequestId = arguments is Map ? arguments['requestId'] : null;
+    final requestId = rawRequestId is int && rawRequestId > 0
+        ? rawRequestId
+        : null;
+    final rawSource = arguments is Map ? arguments['source'] : null;
+    final source =
+        const [
+          'remote-command',
+          'audio-interruption',
+          'audio-route',
+        ].contains(rawSource)
+        ? rawSource as String
+        : 'unknown';
+    final rawAction = arguments is Map ? arguments['action'] : null;
+    final action = rawAction == 'toggle' && !_disposed
         ? store.playback.value.paused
               ? 'play'
               : 'pause'
-        : arguments['action'];
-    if (action != 'play' && action != 'pause' && action != 'seek') return false;
-    if (!store.browserVisible ||
-        !store.showsPlayer ||
-        (!store.playback.value.canOperate &&
-            !(action == 'pause' && store.playback.value.surfaceReady))) {
-      return false;
+        : rawAction;
+    final validAction = const ['play', 'pause', 'seek'].contains(action);
+
+    dynamic reply(bool accepted, String reason, {bool? stateMatches}) {
+      final current =
+          !_disposed && document is String && document == store.operation.id;
+      final state = current ? store.playback.value : null;
+      final receipt = <String, dynamic>{
+        'requestId': ?requestId,
+        'accepted': accepted,
+        'reason': reason,
+        'action': validAction ? action : 'unknown',
+        'stateMatches': stateMatches,
+        if (state != null) 'paused': state.paused,
+        if (state != null) 'position': state.position,
+      };
+      if (_diagnostics) {
+        final event = {
+          ...receipt,
+          'stage': 'flutter-reply',
+          'source': source,
+          'documentCurrent': current,
+          'foreground': _foreground,
+          if (!_disposed) 'applicationActive': store.applicationActive,
+          if (state != null) 'native': store.usesNativePlayback,
+          if (state != null) 'phase': state.phase.name,
+        };
+        debugPrint('[BAHA_AUDIO] ${jsonEncode(event)}');
+      }
+      // Older hosts did not request a receipt and expect a boolean reply.
+      return requestId == null ? accepted : receipt;
     }
+
+    if (_disposed) return reply(false, 'disposed');
+    if (call.method != 'remoteCommand') {
+      return reply(false, 'unsupported-method');
+    }
+    if (rawRequestId != null && requestId == null) {
+      return reply(false, 'invalid-request-id');
+    }
+    if (document is! String || document != store.operation.id) {
+      return reply(false, 'stale-document');
+    }
+    if (!_foreground || !store.applicationActive) {
+      return reply(false, 'not-foreground');
+    }
+    if (!validAction) return reply(false, 'unsupported-action');
+    if (!store.browserVisible || !store.showsPlayer) {
+      return reply(false, 'no-visible-player');
+    }
+    final state = store.playback.value;
+    if (!state.canOperate && !(action == 'pause' && state.surfaceReady)) {
+      return reply(false, 'not-operable');
+    }
+    double? seekPosition;
     if (action == 'seek') {
       final value = arguments['value'];
-      if (!store.playback.value.canControl ||
-          value is! num ||
-          !value.isFinite) {
-        return false;
+      if (!state.canControl || value is! num || !value.isFinite || value < 0) {
+        return reply(false, 'invalid-seek');
       }
-      await store.controlPlayer('seek', value.toDouble());
-    } else {
-      await store.controlPlayer(action as String);
+      seekPosition = value.toDouble();
     }
-    return true;
+    try {
+      await store.controlPlayer(action as String, seekPosition);
+    } catch (_) {
+      return reply(false, 'command-error');
+    }
+    if (_disposed || document != store.operation.id) {
+      return reply(false, 'session-changed');
+    }
+    if (!_foreground ||
+        !store.applicationActive ||
+        !store.browserVisible ||
+        !store.showsPlayer) {
+      return reply(false, 'session-inactive');
+    }
+    final after = store.playback.value;
+    final stateMatches = switch (action) {
+      'pause' => after.paused,
+      'play' => !after.paused && !after.ended,
+      'seek' =>
+        (after.position - seekPosition!.clamp(0, after.duration)).abs() <= .5,
+      _ => false,
+    };
+    // AppStore currently returns void and may swallow a backend rejection.
+    // This acknowledges dispatch and reports the observed state separately;
+    // stateMatches must not be interpreted as proof of a hardware event.
+    return reply(true, 'dispatched', stateMatches: stateMatches);
   }
 
   void _sync() {
@@ -81,6 +160,7 @@ class PlaybackEnvironment {
         !state.ended;
     final body = <String, dynamic>{
       'active': active,
+      'diagnostics': _diagnostics,
       'native': store.usesNativePlayback,
       'document': store.operation.id,
       'keepAwake': playing,

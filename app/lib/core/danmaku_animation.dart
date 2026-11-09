@@ -2,7 +2,9 @@
 ///
 /// A buffer/volume notification carrying the same media position must not
 /// rewind an animation. Small decoder/IPC timing differences are corrected
-/// gradually; an actual seek still takes effect immediately.
+/// gradually. Pausing freezes the presentation clock even if the notification
+/// still carries an older native sample. Explicit seeks use `discontinuity`
+/// rather than a distance threshold, including small seeks while paused.
 class DanmakuAnimationClock {
   DanmakuAnimationClock({required Duration Function() now}) : _now = now;
   final Duration Function() _now;
@@ -35,17 +37,19 @@ class DanmakuAnimationClock {
     required double position,
     required double rate,
     required bool running,
+    bool discontinuity = false,
   }) {
     _advance();
     final changed = _lastReported != position;
     final difference = position - _position;
-    if (_lastReported == null ||
-        !running ||
-        (!_running && running) ||
-        (changed && difference.abs() > .75)) {
+    if (_lastReported == null || discontinuity) {
       _position = position;
       _correction = 0;
-    } else if (changed) {
+    } else if (!running) {
+      // Final native position samples may arrive after the paused event.
+      // Keep both the horizontal position and existing lane decisions frozen.
+      _correction = 0;
+    } else if (changed || !_running) {
       _correction = difference;
     }
     _lastReported = position;

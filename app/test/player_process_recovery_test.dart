@@ -119,6 +119,25 @@ void main() {
   );
 
   test(
+    'native process recovery never reloads the media session without an explicit retry',
+    () async {
+      final portal = _ProcessPortal();
+      final store = await launch(portal);
+      await report(store);
+      final document = store.operation.id;
+      final visits = portal.visited.length;
+      await store.playerProcessTerminated(allowAutomaticReload: false);
+      expect(store.operation.id, document);
+      expect(portal.visited, hasLength(visits));
+      expect(portal.reloads, 0);
+      expect(store.playback.value.phase, PlaybackPhase.error);
+      await store.reloadBrowser();
+      expect(portal.visited, hasLength(visits + 1));
+      expect(portal.visited.last.queryParameters['t'], '506');
+    },
+  );
+
+  test(
     'advertisements cannot reuse a content checkpoint or automatically restart',
     () async {
       final portal = _ProcessPortal();

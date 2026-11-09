@@ -646,17 +646,58 @@ test('iOS AVPlayer handoff owns the clock, disables web recovery and excludes th
   f.bridge.dispose();
 });
 
-test('an in-flight iOS web quality switch delays native commit until the source is settled', async () => {
+test('pending iOS handoff rejects web quality and playback commands without changing the HTML source', async () => {
   const f = playerFixture(true, 'ios-avplayer');
   await new Promise(resolve => setImmediate(resolve));
-  await f.bridge.prepareNative();
-  const selecting = f.bridge.command('ticket', 'quality', 720);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.bridge.commitNative(), null);
-  f.emit('loadedmetadata');
-  assert.equal(await selecting, true);
+  assert.equal(f.media.paused, true);
+  assert.equal(await f.bridge.command('ticket', 'quality', 720), false);
+  assert.equal(await f.bridge.command('ticket', 'play'), false);
+  assert.equal(await f.bridge.command('ticket', 'seek', 50), false);
+  assert.deepEqual(f.sources, []);
   assert.equal((await f.bridge.prepareNative()).duration, 1200);
+  assert.equal(f.bridge.commitNative().paused, false,
+    'holding HTML media must preserve the original native play intent');
+  f.bridge.dispose();
+});
+
+test('failed native handoff stays paused and cannot enter web recovery', async () => {
+  const f = playerFixture(true, 'ios-avplayer');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.bridge.failNative(), true);
+  assert.equal(f.media.paused, true);
+  assert.equal(f.stopped(), true);
+  for (const action of ['play', 'seek', 'quality']) {
+    assert.equal(await f.bridge.command('ticket', action, 720), false);
+  }
+  f.advance(90000);
+  f.fault.code = 3;
+  f.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sources, []);
+  f.bridge.dispose();
+});
+
+test('native handoff releases every web Media Session handler and stops its polling timer', async () => {
+  const f = playerFixture(true, 'ios-avplayer');
+  const handlers = new Map<string, unknown>();
+  const session = {
+    metadata: {title: 'Old web title'} as object | null,
+    playbackState: 'playing',
+    setActionHandler: (action: string, handler: unknown) => handlers.set(action, handler),
+  };
+  f.context.navigator = {mediaSession: session};
+  await f.bridge.prepareNative();
   assert.ok(f.bridge.commitNative());
+  for (const action of ['play', 'pause', 'stop', 'seekbackward', 'seekforward',
+    'seekto', 'previoustrack', 'nexttrack']) {
+    assert.equal(handlers.get(action), null);
+  }
+  assert.equal(session.metadata, null);
+  assert.equal(session.playbackState, 'none');
+  assert.equal(f.stopped(), true);
+  assert.equal(f.bridge.nativeStatus(), 'ok');
+  f.fault.code = 1014;
+  assert.equal(f.bridge.nativeStatus(), 'denied');
   f.bridge.dispose();
 });
 
@@ -1453,6 +1494,33 @@ test('favorite checks the current official identity instead of a stale login men
     assert.equal(fixture.messages.at(-1)?.type, id ? 'favorite-complete' : 'account-guest');
     assert.equal(clicks, id ? 1 : 0);
   }
+});
+
+test('Windows session transport exposes the official top frame only and forwards raw messages unchanged', () => {
+  const dart = fs.readFileSync('app/lib/data/windows_official_bridge.dart', 'utf8');
+  const script = dart.match(/source:\s*'''([\s\S]*?)'''/)![1]
+    .replaceAll('$windowsOfficialMessageHandler', 'bahaOfficialSession');
+  const calls: any[] = [];
+  const main: any = {flutter_inappwebview: {callHandler(...args: any[]) {
+    calls.push(args);
+    return Promise.resolve(null);
+  }}};
+  main.top = main;
+  vm.runInNewContext(script, {window: main, location: new URL('https://ani.gamer.com.tw/')});
+  const raw = JSON.stringify({requestId: 'current', type: 'player-state'});
+  main.baha.postMessage(raw);
+  main.baha.postMessage({type: 'player-state'});
+  assert.deepEqual(calls, [['bahaOfficialSession', raw]]);
+  assert.equal(Object.isFrozen(main.baha), true);
+  for (const origin of ['https://ani.gamer.com.tw.evil.example', 'http://ani.gamer.com.tw', 'https://example.com']) {
+    const foreign: any = {top: null};
+    foreign.top = foreign;
+    vm.runInNewContext(script, {window: foreign, location: new URL(origin)});
+    assert.equal(foreign.baha, undefined);
+  }
+  const child: any = {top: {}};
+  vm.runInNewContext(script, {window: child, location: new URL('https://ani.gamer.com.tw/')});
+  assert.equal(child.baha, undefined);
 });
 
 test('Flutter resources contain both locales, a valid test fixture and no account snapshots', () => {

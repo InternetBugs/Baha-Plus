@@ -4,8 +4,8 @@
   // entitlement, ads, device locks, CSRF and the official progress callbacks.
   window.__bahaCreateNativePlayback = function ({ context, isCurrent }) {
     const backend = window.__bahaNativeBackend;
-    let active = false, disposed = false, prepared = null, clock = null;
-    let player = null, manager = null, media = null, original = new Map();
+    let active = false, disposed = false, prepared = null, clock = null, held = null;
+    let player = null, manager = null, media = null, heldMedia = null, original = new Map();
     const live = () => !disposed && isCurrent();
     function source(raw) {
       try {
@@ -19,9 +19,27 @@
       return live() && c.matches && c.contentAuthorized &&
         c.phase === 'content' && c.player && c.media && !c.player.isDisposed?.();
     }
+    function hold(paused = false) {
+      const c = context();
+      if (!['android-exoplayer', 'ios-avplayer', 'windows-mpv'].includes(backend) ||
+          active || !authorized(c) || !(c.media.duration > 0)) return false;
+      held ??= {position: c.media.currentTime, duration: c.media.duration,
+        paused: c.media.paused, muted: c.media.muted, rate: c.media.playbackRate};
+      if (heldMedia !== c.media) {
+        heldMedia?.removeEventListener('play', preventWebContent);
+        heldMedia = c.media;
+        heldMedia.addEventListener('play', preventWebContent);
+      }
+      if (paused) held.paused = true;
+      if (!c.media.paused) { c.player.pause(); c.media.pause?.(); }
+      return true;
+    }
+    function preventWebContent() {
+      if (!active && live()) hold();
+    }
     async function prepare() {
       const c = context();
-      if (!['android-exoplayer', 'ios-avplayer'].includes(backend) || !authorized(c) ||
+      if (!['android-exoplayer', 'ios-avplayer', 'windows-mpv'].includes(backend) || !authorized(c) ||
           !(c.media.duration > 0)) return null;
       const current = source(c.player.currentSource?.()?.src || c.media.currentSrc);
       if (!current) return null;
@@ -47,7 +65,7 @@
         Number.isInteger(height) && height >= 144 && height <= 4320 && source(url))
         .map(([height, url]) => ({height, url}));
       prepared = {master, variants, position: c.media.currentTime, duration: c.media.duration,
-        paused: c.media.paused, muted: c.media.muted, rate: c.media.playbackRate};
+        paused: held?.paused ?? c.media.paused, muted: c.media.muted, rate: c.media.playbackRate};
       return prepared;
     }
     function replace(name, getter) {
@@ -60,7 +78,7 @@
       if (!prepared || !authorized(c)) return false;
       player = c.player; manager = c.manager; media = c.media;
       const handoff = {...prepared, position: media.currentTime, duration: media.duration,
-        paused: media.paused, rate: media.playbackRate, muted: media.muted};
+        paused: held?.paused ?? media.paused, rate: media.playbackRate, muted: media.muted};
       // The official player is paused before its clock is delegated, so there
       // can never be two active audio/video pipelines.
       player.pause(); media.pause();
@@ -102,6 +120,13 @@
       document.body.replaceChildren(...retained);
       window.__bahaNativeTimeline = clock;
       return handoff;
+    }
+    function status() {
+      if (!active || !live()) return 'unavailable';
+      const c = context();
+      if (!c.matches || !c.contentAuthorized || player?.isDisposed?.() ||
+          player?.error?.()) return 'denied';
+      return 'ok';
     }
     function sync(value) {
       if (!active || !live() || !value || player.isDisposed?.()) return false;
@@ -152,7 +177,9 @@
       }
       disposed = true; active = false;
       if (player) for (const [name, value] of original) player[name] = value;
-      original.clear(); clock = null; prepared = null;
+      original.clear(); clock = null; prepared = null; held = null;
+      heldMedia?.removeEventListener('play', preventWebContent);
+      heldMedia = null;
       delete window.__bahaNativeTimeline;
       player = manager = media = null;
     }
@@ -170,7 +197,7 @@
       selected.danmuList = remaining;
       return true;
     }
-    return {prepare, commit, sync, danmaku, acknowledgeDanmaku, dispose, backend,
+    return {prepare, hold, commit, sync, status, danmaku, acknowledgeDanmaku, dispose, backend,
       get active() {return active;}};
   };
 })(); true;
