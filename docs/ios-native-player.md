@@ -42,15 +42,21 @@ flutter build ios --release --no-codesign \
   --dart-define=BAHA_IOS_NATIVE=false
 ```
 
-Android 的 `BAHA_ANDROID_NATIVE` 独立保留。两端开关互不影响。测试 IPA 仍需签名后才能安装。**Manual test build** 选择本分支和 `ios`，并通过 `ios_build_mode` 选择 `release`（默认）或 `debug`；两种模式均启用诊断。IPA 文件名和 `build-info.json` 记录实际构建模式，Debug 附件名称另带 `ios-debug`。测试构建不创建版本标签或正式发布。
+Android 的 `BAHA_ANDROID_NATIVE` 独立保留。两端开关互不影响。测试 IPA 仍需签名后才能安装。**Manual test build** 选择本分支和 `ios`，并通过 `ios_build_mode` 选择 `release`（默认）、`profile` 或 `debug`；三种模式均启用诊断。IPA 文件名和 `build-info.json` 记录实际构建模式，Profile 和 Debug 附件名称分别另带 `ios-profile`、`ios-debug`。测试构建不创建版本标签或正式发布。
 
-需要真正的 Debug 包时，本地命令改用 `flutter build ios --debug --no-codesign --dart-define=BAHA_DIAGNOSTICS=true`。Debug 与启用诊断的 Release 是两种不同构建；真机独立启动与调试器要求应在安装时核对。
+Windows 配合 Feather 签名安装并做真机性能测试时，可选择 Profile 包；其 Dart 代码使用 AOT 编译，签名安装后可从桌面启动，保留本项目诊断和性能分析能力。对应的 macOS 构建命令为：
+
+```sh
+flutter build ios --profile --no-codesign --dart-define=BAHA_DIAGNOSTICS=true
+```
+
+需要真正的 Debug 包时，本地命令改用 `flutter build ios --debug --no-codesign --dart-define=BAHA_DIAGNOSTICS=true`。iOS Debug 包需要调试器启动及签名的 `get-task-allow` 权限；仅开启系统开发者模式不能补齐签名权限。Profile 与 Release 不提供 Debug 的热重载。
 
 接管成功日志为 `[BAHA_NATIVE] ios-avplayer handoff complete`；诊断包的 `[BAHA_HEALTH]` 应出现 `backend: "ios-avplayer"`，原生前的网页 HLS 后端可能显示 `native-hls`，两者含义不同。日志不应包含签名媒体 URL、Cookie 或账号令牌。
 
 ## iPhone 验收
 
-优先使用开启诊断的 Release 包，对照以下操作：
+使用开启诊断的 Profile 或 Release 包，对照以下操作：
 
 1. 正常完成官网年龄确认和广告，确认原生正片有画面和声音、弹幕跟随进度；广告和确认界面不提前被原生层遮住。
 2. 暂停、继续、拖动、快进／后退、倍速、静音，切换官方实际提供的画质和自动模式；全屏及留言／简介二级页面往返保持同一播放会话。

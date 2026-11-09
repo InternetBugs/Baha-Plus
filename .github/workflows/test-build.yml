@@ -23,6 +23,7 @@ on:
         type: choice
         options:
           - release
+          - profile
           - debug
 
 permissions:
@@ -147,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$IOS_BUILD_MODE" in
-            release|debug) ;;
+            release|profile|debug) ;;
             *) echo "::error::Unsupported iOS build mode"; exit 1 ;;
           esac
           flutter pub get --enforce-lockfile
@@ -273,7 +274,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: BahaPlus-test-build-${{ needs.validate.outputs.version }}${{ inputs.platform != 'android' && inputs.ios_build_mode == 'debug' && '-ios-debug' || '' }}
+          name: BahaPlus-test-build-${{ needs.validate.outputs.version }}${{ inputs.platform != 'android' && (inputs.ios_build_mode == 'debug' || inputs.ios_build_mode == 'profile') && format('-ios-{0}', inputs.ios_build_mode) || '' }}
           path: test-package/*
           if-no-files-found: error
           retention-days: 14

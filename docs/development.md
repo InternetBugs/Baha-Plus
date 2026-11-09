@@ -78,7 +78,7 @@ Android 日常开发、打包、模拟器验证均在本地完成。GitHub Actio
 
 GitHub Actions 的 **Manual test build** 默认只构建 iOS 测试包并运行 iPhone 模拟器原生 XCTest；`platform` 可选择 `ios`、`android` 或 `both`。先在所选提交运行 JavaScript、Python 和 Flutter 回归及静态检查，再构建所选平台：Android 为正式 Android 密钥签名的 Release APK，iOS 为未签名 IPA。全部所选检查成功后，`BahaPlus-test-build-版本号` 附件提供对应安装包、SHA-256 校验文件和记录平台、源码提交及运行地址的 `build-info.json`，保留 14 天。未选的平台跳过，不会阻塞最终附件汇总。
 
-测试版本复用现有版本选择规则，默认选择高于现有标签的下一个版本，也可手动指定更高版本。测试构建不创建版本标签或 GitHub Release，不修改 `pubspec.yaml`。Android 使用与正式包相同的签名便于覆盖安装；iOS IPA 仍须另行签名后安装。iOS 的 `ios_build_mode` 可选择 `release`（默认）或真正的 `debug`，文件名和 `build-info.json` 均记录模式；Android 保持 Release。测试构建开启 `BAHA_DIAGNOSTICS`：允许检查 WebView，并每十秒输出不含媒体 URL 的播放健康信息，包括后端类型、缓冲范围、DOM／弹幕节点和画布像素数；正式发布默认关闭。云端编译和模拟器测试完成后，播放、系统控制中心及后台缓存仍需真机验收。
+测试版本复用现有版本选择规则，默认选择高于现有标签的下一个版本，也可手动指定更高版本。测试构建不创建版本标签或 GitHub Release，不修改 `pubspec.yaml`。Android 使用与正式包相同的签名便于覆盖安装；iOS IPA 仍须另行签名后安装。iOS 的 `ios_build_mode` 可选择 `release`（默认）、`profile` 或真正的 `debug`，文件名和 `build-info.json` 均记录模式；Android 保持 Release。Profile 适合签名后独立启动及真机性能测试；Debug 需要调试器启动和签名的 `get-task-allow` 权限。测试构建开启 `BAHA_DIAGNOSTICS`：允许检查 WebView，并每十秒输出不含媒体 URL 的播放健康信息，包括后端类型、缓冲范围、DOM／弹幕节点和画布像素数；正式发布默认关闭。云端编译和模拟器测试完成后，播放、系统控制中心及后台缓存仍需真机验收。
 
 ### 首次配置 Android 签名
 
