@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（例如 0.4.0；留空则自动递增）"
+        description: "版本号（例如 0.5.0；留空则自动递增）"
+        required: false
+        type: string
+      release_notes:
+        description: "整理好的更新内容（支持 Markdown；留空则列出原始提交标题）"
         required: false
         type: string
 
@@ -39,10 +43,11 @@ jobs:
             exit 1
           fi
           python3 tools/release_version.py
-      - name: Translate release notes
+      - name: Prepare release notes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         shell: bash
         run: |
           set -euo pipefail
