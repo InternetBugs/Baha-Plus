@@ -20,6 +20,24 @@ class AccountPage extends StatelessWidget {
     store.connectAccount();
   }
 
+  Future<void> _logout(BuildContext context) async {
+    final success = await store.logoutAccount();
+    if (success || !context.mounted) return;
+    await showCupertinoDialog<void>(
+      context: context,
+      builder: (dialog) => CupertinoAlertDialog(
+        title: Text(store.t('logout')),
+        content: Text(store.t('logoutFailed')),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text(store.t('close')),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: Listenable.merge([store, store.updates]),
@@ -47,7 +65,9 @@ class AccountPage extends StatelessWidget {
         children: [
           _group(context, [
             GestureDetector(
-              onTap: () => _connect(context),
+              onTap: store.hasAccount || store.loggingOut
+                  ? null
+                  : () => _connect(context),
               behavior: HitTestBehavior.opaque,
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -89,15 +109,24 @@ class AccountPage extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Icon(
-                      CupertinoIcons.chevron_right,
-                      color: secondary(context),
-                      size: 14,
-                    ),
+                    if (!store.hasAccount)
+                      Icon(
+                        CupertinoIcons.chevron_right,
+                        color: secondary(context),
+                        size: 14,
+                      ),
                   ],
                 ),
               ),
             ),
+            if (store.hasAccount)
+              _row(
+                context,
+                store.t('logout'),
+                CupertinoIcons.square_arrow_right,
+                store.loggingOut ? null : () => _logout(context),
+                busy: store.loggingOut,
+              ),
           ]),
           const SizedBox(height: 22),
           _group(context, [
@@ -118,10 +147,6 @@ class AccountPage extends StatelessWidget {
               Navigator.pop(context);
               store.selectTab(2, filter: 'favorites');
             }, value: store.accountSynced ? '${store.favorites.length}' : null),
-            _row(context, store.t('openOfficial'), CupertinoIcons.globe, () {
-              Navigator.pop(context);
-              store.openOfficial();
-            }),
             if (store.verificationRequired)
               _row(
                 context,

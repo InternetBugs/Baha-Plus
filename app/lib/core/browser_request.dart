@@ -10,6 +10,7 @@ enum BrowserIntent {
   detail,
   account,
   accountRefresh,
+  logout,
   favorite,
   play,
   browse,
@@ -90,6 +91,11 @@ class BrowserRequest {
           }
         case BrowserIntent.account:
         case BrowserIntent.accountRefresh:
+        case BrowserIntent.logout:
+          if (intent == BrowserIntent.logout &&
+              source.path != '/mygather.php') {
+            return null;
+          }
           if (type == 'account-authenticated') {
             AccountProfile.fromJson(body['profile'] as Json);
           } else if (type == 'account-synced') {

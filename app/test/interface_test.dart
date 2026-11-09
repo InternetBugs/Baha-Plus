@@ -200,6 +200,8 @@ void main() {
     expect(find.text(store.t('officialAccount')), findsOneWidget);
     expect(find.text(store.t('localProfile')), findsOneWidget);
     expect(find.text(store.t('connectAccount')), findsOneWidget);
+    expect(find.text(store.t('openOfficial')), findsNothing);
+    expect(find.text(store.t('logout')), findsNothing);
     expect(find.text(store.t('syncAccount')), findsNothing);
     expect(find.text(store.t('favorites')), findsOneWidget);
     expect(find.text(store.t('manageAccount')), findsNothing);
@@ -208,6 +210,25 @@ void main() {
     await tester.tap(find.bySemanticsLabel(store.t('close')));
     await frames(tester);
     expect(find.byType(GlassModalSheet), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('guest account keeps the original login entry and hides logout', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    final portal = FakePortal();
+    await store.attach(portal);
+    await tester.tap(find.byType(AccountAvatar).hitTestable());
+    await frames(tester);
+    expect(find.text(store.t('connectAccount')), findsOneWidget);
+    expect(find.text(store.t('logout')), findsNothing);
+    expect(find.text(store.t('openOfficial')), findsNothing);
+    await tester.tap(find.text(store.t('connectAccount')));
+    await frames(tester);
+    expect(find.byType(GlassModalSheet), findsNothing);
+    expect(store.browserVisible, isTrue);
+    expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
     expect(tester.takeException(), isNull);
   });
 
@@ -560,10 +581,11 @@ void main() {
   );
 
   testWidgets(
-    'account card and header use the official profile and clear after logout',
+    'signed-in account is inert with logout below its portrait and username',
     (tester) async {
       final store = await launch(tester);
-      await store.attach(FakePortal());
+      final portal = FakePortal();
+      await store.attach(portal);
       store.updateNavigation(
         OfficialSite.home.resolve('mygather.php'),
         canGoBack: false,
@@ -599,15 +621,102 @@ void main() {
       expect(find.text('測試暱稱'), findsOneWidget);
       expect(find.text('@fixture-user'), findsOneWidget);
       expect(find.text(store.t('localProfile')), findsNothing);
-      await store.syncAccount();
-      await send({'type': 'account-guest'});
+      expect(find.text(store.t('connectAccount')), findsNothing);
+      expect(find.text(store.t('openOfficial')), findsNothing);
+      final logout = find.text(store.t('logout'));
+      final sheetPortrait = find.descendant(
+        of: find.byType(GlassModalSheet),
+        matching: find.byType(AccountPortrait),
+      );
+      expect(logout, findsOneWidget);
+      expect(
+        tester.getTopLeft(logout).dy,
+        greaterThan(tester.getBottomLeft(sheetPortrait).dy),
+      );
+      expect(
+        tester.getTopLeft(logout).dy,
+        greaterThan(tester.getBottomLeft(find.text('@fixture-user')).dy),
+      );
+      final navigations = portal.visited.length;
+      final request = store.operation.id;
+      await tester.tap(find.text('測試暱稱'));
+      await tester.tap(find.text('@fixture-user'));
+      await tester.tap(sheetPortrait);
       await frames(tester);
+      expect(find.byType(GlassModalSheet), findsOneWidget);
+      expect(store.operation.id, request);
+      expect(portal.visited.length, navigations);
+      expect(store.accountProfile?.id, 'fixture-user');
+      await tester.tap(logout);
+      await frames(tester);
+      expect(portal.visited.last, OfficialSite.logout);
+      expect(store.loggingOut, isTrue);
+      expect(find.text('測試暱稱'), findsOneWidget);
+      await store.navigationFinished(OfficialSite.logout);
+      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
+      final confirmed = send({'type': 'account-guest'});
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await frames(tester);
+      await confirmed;
       expect(find.text('測試暱稱'), findsNothing);
       expect(find.text('@fixture-user'), findsNothing);
       expect(find.text(store.t('localProfile')), findsOneWidget);
+      expect(find.text(store.t('connectAccount')), findsOneWidget);
+      expect(find.text(store.t('logout')), findsNothing);
+      expect(find.byType(GlassModalSheet), findsOneWidget);
+      expect(store.loggingOut, isFalse);
+      await tester.tap(find.text(store.t('connectAccount')));
+      await frames(tester);
+      expect(store.browserVisible, isTrue);
+      expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
+      expect(find.byType(GlassModalSheet), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('failed logout keeps the account and offers another attempt', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    final portal = FakePortal();
+    await store.attach(portal);
+    portal.loadError = StateError('unavailable');
+    store.accountProfile = const AccountProfile(
+      id: 'fixture-user',
+      displayName: '測試暱稱',
+    );
+    await tester.tap(find.byType(AccountAvatar).hitTestable());
+    await frames(tester);
+    expect(find.text(store.t('connectAccount')), findsNothing);
+    await tester.tap(find.text(store.t('logout')));
+    await frames(tester);
+    expect(find.text(store.t('logoutFailed')), findsOneWidget);
+    expect(store.accountProfile?.id, 'fixture-user');
+    await tester.tap(
+      find.widgetWithText(CupertinoDialogAction, store.t('close')),
+    );
+    await frames(tester);
+    portal.loadError = null;
+    await tester.tap(find.text(store.t('logout')));
+    await frames(tester);
+    expect(portal.visited.last, OfficialSite.logout);
+    await store.navigationFinished(OfficialSite.logout);
+    final accountPage = OfficialSite.home.resolve('mygather.php');
+    await store.navigationFinished(accountPage);
+    final confirmed = store.receive(
+      jsonEncode({'type': 'account-guest', 'requestId': store.operation.id}),
+      origin: OfficialSite.home,
+      source: accountPage,
+      isMainFrame: true,
+    );
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await frames(tester);
+    await confirmed;
+    expect(find.text(store.t('connectAccount')), findsOneWidget);
+    expect(find.text(store.t('logout')), findsNothing);
+    expect(store.hasAccount, isFalse);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'the entire playback page is native and controls follow the current official episode',

@@ -4,6 +4,7 @@ typedef Json = Map<String, dynamic>;
 
 class OfficialSite {
   static final home = Uri.parse('https://ani.gamer.com.tw/');
+  static final logout = Uri.parse('https://user.gamer.com.tw/logout.php');
   static final _id = RegExp(r'^[0-9]{1,10}$');
 
   static bool validId(String value) => _id.hasMatch(value);

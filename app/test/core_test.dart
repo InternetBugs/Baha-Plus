@@ -39,6 +39,7 @@ class MemoryStorage implements DeviceStorage {
 }
 
 class FakePortal implements OfficialPortal {
+  Object? loadError;
   final communityRequests = <Json>[];
   Json communityResponse = {'ok': false, 'code': 'unavailable'};
   Completer<Json>? communityPending;
@@ -65,7 +66,11 @@ class FakePortal implements OfficialPortal {
   }
 
   @override
-  Future<void> load(Uri uri) async => visited.add(uri);
+  Future<void> load(Uri uri) async {
+    if (loadError case final error?) throw error;
+    visited.add(uri);
+  }
+
   @override
   Future<dynamic> evaluate(String script) async {
     scripts.add(script);
@@ -262,6 +267,192 @@ void main() {
       expect(portal.scripts.last, contains('"play"'));
     },
   );
+
+  test(
+    'logout visits the official endpoint and clears caches only after a verified guest response',
+    () async {
+      final disk = MemoryStorage();
+      final store = await _createStore(storage: disk);
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      store.updateNavigation(OfficialSite.home, canGoBack: false);
+      await store.syncAccount();
+      final account = {
+        'type': 'account-synced',
+        'requestId': store.operation.id,
+        'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
+        'favorites': [catalog.items.first.toJson()],
+        'history': [
+          {
+            'anime': catalog.items.first.toJson(),
+            'videoId': '20',
+            'episodeLabel': '1',
+          },
+        ],
+      };
+      Future<void> send(Json body) => store.receive(
+        jsonEncode(body),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      await send(account);
+      await Future<void>.delayed(Duration.zero);
+      expect(await AccountCache(disk).load(), isNotNull);
+      expect(store.accountProfile?.id, 'fixture-user');
+
+      await store.syncAccount();
+      final staleAccount = {...account, 'requestId': store.operation.id};
+      final logout = store.logoutAccount();
+      expect(store.loggingOut, isTrue);
+      await store.syncAccount();
+      await send(staleAccount);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.operation.intent, BrowserIntent.logout);
+      expect(portal.visited.last, OfficialSite.logout);
+      expect(await store.logoutAccount(), isFalse);
+      expect(store.accountProfile?.id, 'fixture-user');
+      expect(await AccountCache(disk).load(), isNotNull);
+      await store.navigationFinished(Uri.parse('https://www.gamer.com.tw/'));
+      final accountPage = OfficialSite.home.resolve('mygather.php');
+      expect(portal.visited.last, accountPage);
+      await store.navigationFinished(accountPage);
+      expect(portal.scripts.last, contains('const watch = false'));
+      final guest = {'type': 'account-guest', 'requestId': store.operation.id};
+      await store.receive(
+        jsonEncode(guest),
+        origin: OfficialSite.home,
+        source: OfficialSite.home,
+        isMainFrame: true,
+      );
+      expect(store.hasAccount, isTrue);
+      await store.receive(
+        jsonEncode(guest),
+        origin: OfficialSite.home,
+        source: accountPage,
+        isMainFrame: false,
+      );
+      expect(store.hasAccount, isTrue);
+      await store.receive(
+        jsonEncode(guest),
+        origin: OfficialSite.home,
+        source: accountPage,
+        isMainFrame: true,
+      );
+      expect(await logout, isTrue);
+      await send(staleAccount);
+      expect(store.loggingOut, isFalse);
+      expect(store.hasAccount, isFalse);
+      expect(store.accountProfile, isNull);
+      expect(store.accountSynced, isFalse);
+      expect(store.accountNeedsRefresh, isFalse);
+      expect(store.favorites, isEmpty);
+      expect(store.history, isEmpty);
+      expect(store.notifications, isEmpty);
+      expect(store.browserVisible, isFalse);
+      expect(portal.visited.last, accountPage);
+      expect(await AccountCache(disk).load(), isNull);
+      final restored = await _createStore(storage: disk);
+      addTearDown(restored.dispose);
+      expect(restored.hasAccount, isFalse);
+    },
+  );
+
+  test(
+    'failed logout preserves the account and allows another attempt',
+    () async {
+      final store = await _createStore();
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      portal.loadError = StateError('unavailable');
+      store.accountProfile = const AccountProfile(
+        id: 'fixture-user',
+        displayName: '測試暱稱',
+      );
+      store.accountSynced = true;
+      store.favorites = [catalog.items.first];
+      expect(await store.logoutAccount(), isFalse);
+      expect(store.loggingOut, isFalse);
+      expect(store.hasAccount, isTrue);
+      expect(store.accountProfile?.id, 'fixture-user');
+      expect(store.favorites, hasLength(1));
+      portal.loadError = null;
+      final retry = store.logoutAccount();
+      await Future<void>.delayed(Duration.zero);
+      await store.navigationFinished(OfficialSite.logout);
+      final accountPage = OfficialSite.home.resolve('mygather.php');
+      await store.navigationFinished(accountPage);
+      await store.receive(
+        jsonEncode({'type': 'account-guest', 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: accountPage,
+        isMainFrame: true,
+      );
+      expect(await retry, isTrue);
+      expect(store.hasAccount, isFalse);
+      expect(portal.visited, contains(OfficialSite.logout));
+    },
+  );
+
+  for (final response in [
+    {
+      'type': 'account-authenticated',
+      'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
+    },
+    {'type': 'account-error'},
+    {'type': 'verification-required'},
+  ]) {
+    test(
+      'official logout preserves the account on ${response['type']}',
+      () async {
+        final store = await _createStore();
+        addTearDown(store.dispose);
+        await store.attach(FakePortal());
+        store.accountProfile = const AccountProfile(
+          id: 'fixture-user',
+          displayName: '測試暱稱',
+        );
+        final logout = store.logoutAccount();
+        await Future<void>.delayed(Duration.zero);
+        await store.navigationFinished(OfficialSite.logout);
+        final accountPage = OfficialSite.home.resolve('mygather.php');
+        await store.navigationFinished(accountPage);
+        await store.receive(
+          jsonEncode({...response, 'requestId': store.operation.id}),
+          origin: OfficialSite.home,
+          source: accountPage,
+          isMainFrame: true,
+        );
+        expect(await logout, isFalse);
+        expect(store.loggingOut, isFalse);
+        expect(store.accountProfile?.id, 'fixture-user');
+      },
+    );
+  }
+
+  testWidgets('official logout times out without clearing the account', (
+    tester,
+  ) async {
+    final store = (await tester.runAsync(_createStore))!;
+    addTearDown(store.dispose);
+    final portal = FakePortal();
+    await store.attach(portal);
+    store.accountProfile = const AccountProfile(
+      id: 'fixture-user',
+      displayName: '測試暱稱',
+    );
+    final logout = store.logoutAccount();
+    await tester.pump();
+    expect(portal.visited.last, OfficialSite.logout);
+    await tester.pump(const Duration(seconds: 31));
+    expect(await logout, isFalse);
+    expect(store.loggingOut, isFalse);
+    expect(store.accountProfile?.id, 'fixture-user');
+  });
 
   test(
     'account sync returns from the login site to the official account origin',

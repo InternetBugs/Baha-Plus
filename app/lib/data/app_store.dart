@@ -190,6 +190,8 @@ class AppStore extends ChangeNotifier {
   List<WatchEntry> history = [];
   AccountProfile? accountProfile;
   bool accountSynced = false, accountNeedsRefresh = false;
+  bool get loggingOut => _logoutResult != null;
+  bool get hasAccount => accountProfile != null || accountSynced;
   bool searching = false, searchFailed = false;
   int tab = 0;
   String libraryFilter = 'all', _query = '', searchedQuery = '';
@@ -226,6 +228,8 @@ class AppStore extends ChangeNotifier {
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
+  Completer<bool>? _logoutResult;
+  bool _logoutVerifying = false;
   Future<void> _accountCacheWrite = Future<void>.value();
   int _preferredQuality = 0;
   String? _qualityRestoredDocument;
@@ -896,6 +900,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> connectAccount() async {
+    if (loggingOut) return;
     _resetNotifications();
     accountProfile = null;
     favorites = [];
@@ -908,6 +913,57 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       BrowserIntent.account,
       visible: true,
     );
+  }
+
+  Future<bool> logoutAccount() async {
+    if (loggingOut || _portal == null || _disposed) return false;
+    final result = Completer<bool>();
+    _logoutResult = result;
+    _logoutVerifying = false;
+    browserTitle = t('logout');
+    try {
+      await _load(OfficialSite.logout, BrowserIntent.logout, visible: false);
+      return await result.future;
+    } catch (_) {
+      if (_logoutResult == result) _finishLogout(false);
+      return false;
+    }
+  }
+
+  void _finishLogout(bool success) {
+    final result = _logoutResult;
+    if (result == null) return;
+    _logoutResult = null;
+    _logoutVerifying = false;
+    _accountSyncDocument = null;
+    _begin(BrowserIntent.idle);
+    busy = false;
+    result.complete(success);
+    _emit();
+  }
+
+  Future<void> _receiveLogout(Json body) async {
+    final result = _logoutResult;
+    if (result == null) return;
+    if (!_logoutVerifying || _accountSyncDocument != operation.id) return;
+    if (body['type'] != 'account-guest') {
+      if (body['type'] == 'verification-required') {
+        verificationRequired = true;
+      }
+      _finishLogout(false);
+      return;
+    }
+    _resetNotifications();
+    accountProfile = null;
+    favorites = [];
+    history = [];
+    accountSynced = false;
+    accountNeedsRefresh = false;
+    browserVisible = false;
+    browserCanGoBack = false;
+    _pendingUri = null;
+    await _saveAccountSnapshot(null);
+    if (_logoutResult == result) _finishLogout(true);
   }
 
   Future<void> toggleFavorite(Anime anime) async {
@@ -1153,7 +1209,8 @@ $source
   Future<void> goBack() async => _portal?.goBack();
 
   Future<void> syncAccount() async {
-    if (showsPlayer ||
+    if (loggingOut ||
+        showsPlayer ||
         (busy &&
             operation.intent == BrowserIntent.accountRefresh &&
             _accountSyncDocument == operation.id)) {
@@ -1221,9 +1278,10 @@ ${_applicationActive ? '' : _suspendMedia} true;
 
   void navigationStarted() {
     _clearPlayerFavorite();
-    if (operation.intent == BrowserIntent.accountRefresh &&
+    if ((operation.intent == BrowserIntent.accountRefresh ||
+            operation.intent == BrowserIntent.logout) &&
         _accountSyncDocument == operation.id) {
-      _begin(BrowserIntent.accountRefresh);
+      _begin(operation.intent);
       _accountSyncDocument = null;
       busy = true;
       _armDeadline();
@@ -1233,6 +1291,31 @@ ${_applicationActive ? '' : _suspendMedia} true;
 
   Future<void> navigationFinished(Uri? uri) async {
     browserUri = uri;
+    if (operation.intent == BrowserIntent.logout) {
+      try {
+        if (uri == null || !OfficialSite.allowedNavigation(uri)) {
+          _finishLogout(false);
+        } else if (!_logoutVerifying) {
+          // The official endpoint can redirect to another Bahamut page.
+          // Verify the resulting session in a fresh Anime account document.
+          _logoutVerifying = true;
+          await _load(
+            OfficialSite.home.resolve('mygather.php'),
+            BrowserIntent.logout,
+            visible: false,
+          );
+        } else if (OfficialSite.trustedOrigin(uri) &&
+            uri.path == '/mygather.php') {
+          _accountSyncDocument = operation.id;
+          await _runScript('account-sync', {'__BAHA_WATCH_ACCOUNT__': 'false'});
+        } else {
+          _finishLogout(false);
+        }
+      } catch (_) {
+        _finishLogout(false);
+      }
+      return;
+    }
     if (uri == null || !OfficialSite.trustedOrigin(uri)) {
       if (operation.intent == BrowserIntent.favorite &&
           uri != null &&
@@ -1267,6 +1350,8 @@ ${_applicationActive ? '' : _suspendMedia} true;
       case BrowserIntent.account:
       case BrowserIntent.accountRefresh:
         await syncAccount();
+      case BrowserIntent.logout:
+        break;
       case BrowserIntent.favorite:
         await retryFavorite();
       case BrowserIntent.idle:
@@ -1286,6 +1371,10 @@ window.__bahaMediaSuspended = false; true;
   }
 
   void navigationFailed() {
+    if (operation.intent == BrowserIntent.logout) {
+      _finishLogout(false);
+      return;
+    }
     final failed = operation;
     _deadline?.cancel();
     operation = BrowserRequest(
@@ -1359,6 +1448,10 @@ window.__bahaMediaSuspended = false; true;
       isMainFrame: isMainFrame,
     );
     if (body == null) return;
+    if (completed.intent == BrowserIntent.logout) {
+      await _receiveLogout(body);
+      return;
+    }
     if (body['type'] == 'account-authenticated') {
       final profile = AccountProfile.fromJson(body['profile'] as Json);
       if (accountProfile?.id.toLowerCase() != profile.id.toLowerCase()) {
@@ -1552,6 +1645,7 @@ window.__bahaMediaSuspended = false; true;
   }
 
   void _begin(BrowserIntent intent) {
+    if (loggingOut && intent != BrowserIntent.logout) _finishLogout(false);
     _clearPlayerFavorite();
     nativePlaybackDocument = null;
     _deadline?.cancel();
@@ -1696,6 +1790,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
   @override
   void dispose() {
     _disposed = true;
+    _finishLogout(false);
     _clearPlayerFavorite();
     _deadline?.cancel();
     _searchDebounce?.cancel();
