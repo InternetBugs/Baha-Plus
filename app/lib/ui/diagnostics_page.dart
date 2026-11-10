@@ -97,6 +97,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     await Navigator.of(context).push<void>(
       CupertinoPageRoute(
         builder: (context) => GlassScaffold(
+          extendBody: false,
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
           appBar: GlassAppBar(
             title: Text(store.t('diagnosticsPreview')),
@@ -107,7 +108,12 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
             ),
           ),
           body: ListView.builder(
-            padding: const EdgeInsets.all(20),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              20,
+              20,
+              MediaQuery.paddingOf(context).bottom + 20,
+            ),
             itemCount: lines.length,
             itemBuilder: (context, index) => Padding(
               padding: const EdgeInsets.only(bottom: 8),
@@ -151,6 +157,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     builder: (context, _) {
       final diagnostics = store.diagnostics;
       return GlassScaffold(
+        extendBody: false,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
         appBar: GlassAppBar(
           title: Text(store.t('diagnosticsTitle')),
@@ -161,7 +168,12 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           ),
         ),
         body: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            20,
+            20,
+            MediaQuery.paddingOf(context).bottom + 40,
+          ),
           children: [
             DecoratedBox(
               decoration: BoxDecoration(
@@ -171,7 +183,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       children: [
@@ -195,6 +207,14 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                         if (_busy) const CupertinoActivityIndicator(),
                       ],
                     ),
+                    const SizedBox(height: 16),
+                    _action(
+                      diagnostics.enabled
+                          ? 'diagnosticsStop'
+                          : 'diagnosticsStart',
+                      _toggle,
+                      enabled: !_busy,
+                    ),
                     const SizedBox(height: 14),
                     Text(
                       store.t('diagnosticsInstructions'),
@@ -209,14 +229,6 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                         ),
                       ),
                     ],
-                    const SizedBox(height: 16),
-                    _action(
-                      diagnostics.enabled
-                          ? 'diagnosticsStop'
-                          : 'diagnosticsStart',
-                      _toggle,
-                      enabled: !_busy,
-                    ),
                   ],
                 ),
               ),
@@ -295,6 +307,8 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           child: Opacity(
             opacity: enabled ? 1 : .45,
             child: GlassButton.custom(
+              // Keep the glass above the opaque capture-status card.
+              useOwnLayer: true,
               shape: const LiquidRoundedRectangle(borderRadius: 22),
               height: 48,
               onTap: action,
