@@ -29,13 +29,37 @@ function Invoke-Flutter {
     }
 }
 
+function Copy-WindowsSources {
+    param([string]$Origin, [string]$Destination)
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    foreach ($entry in Get-ChildItem -LiteralPath $Origin -Force) {
+        # Flutter owns ephemeral files and plugin symlinks in the derived
+        # project. Following them can copy the shared pub cache onto itself.
+        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $entry.Name -eq 'ephemeral' -or
+            $entry.Name -in @('generated_plugin_registrant.cc', 'generated_plugin_registrant.h', 'generated_plugins.cmake')) {
+            continue
+        }
+        $target = Join-Path $Destination $entry.Name
+        if ($entry.PSIsContainer) {
+            Copy-WindowsSources -Origin $entry.FullName -Destination $target
+        } else {
+            Copy-Item -LiteralPath $entry.FullName -Destination $target -Force
+        }
+    }
+}
+
 New-Item -ItemType Directory -Path $debugSource -Force | Out-Null
 foreach ($directory in @('lib', 'assets', 'windows')) {
     $origin = Join-Path $projectRoot "app\$directory"
     if (-not (Test-Path -LiteralPath $origin)) {
         throw "Missing desktop build input: $origin"
     }
-    Copy-Item -LiteralPath $origin -Destination $debugSource -Recurse -Force
+    if ($directory -eq 'windows') {
+        Copy-WindowsSources -Origin $origin -Destination (Join-Path $debugSource $directory)
+    } else {
+        Copy-Item -LiteralPath $origin -Destination $debugSource -Recurse -Force
+    }
 }
 foreach ($filename in @('pubspec.lock', 'analysis_options.yaml')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "app\$filename") -Destination $debugSource -Force

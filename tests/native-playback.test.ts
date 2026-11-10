@@ -95,6 +95,20 @@ test(`${backend}: pending handoff holds HTML content and preserves pause intent 
   f.bridge.dispose();
 });
 
+test(`${backend}: recovery resumes the saved intent while HTML content stays paused`, async () => {
+  const f = fixture(backend);
+  f.media.paused = true;
+  f.win.__bahaPlaybackCheckpoint = {videoId: '20', paused: false};
+  assert.equal(f.bridge.hold(), true);
+  assert.equal(f.media.paused, true);
+  assert.equal((await f.bridge.prepare()).paused, false);
+  // A pause arriving during recovery must override the saved playing intent.
+  f.bridge.hold(true);
+  f.bridge.hold();
+  assert.equal(f.bridge.commit().paused, true);
+  f.bridge.dispose();
+});
+
 test(`${backend}: official callbacks read the native clock and reject policy errors and stale documents`, async () => {
   const f = fixture(backend);
   await f.bridge.prepare(); f.bridge.commit();

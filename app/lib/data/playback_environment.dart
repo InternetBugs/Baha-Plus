@@ -68,6 +68,14 @@ class PlaybackEnvironment {
         if (state != null) 'paused': state.paused,
         if (state != null) 'position': state.position,
       };
+      store.diagnostics.record('player.remote-command', {
+        'accepted': accepted,
+        'reason': reason,
+        'action': validAction ? action : 'unknown',
+        'stateMatches': stateMatches,
+        'foreground': _foreground,
+        if (state != null) 'phase': state.phase.name,
+      });
       if (_diagnostics) {
         final event = {
           ...receipt,

@@ -313,6 +313,7 @@ void main() {
       expect(portal.visited.length, navigations + 1);
       expect(portal.visited.last, OfficialSite.video('20'));
       expect(tester.takeException(), isNull);
+      store.detach(portal);
     },
   );
 
@@ -927,6 +928,7 @@ void main() {
       expect(portal.visited.last, OfficialSite.video('21'));
       expect(store.playerDetail!.episodes.length, 2);
       expect(tester.takeException(), isNull);
+      store.detach(portal);
     },
   );
   testWidgets('player menus remove their barrier promptly when dismissed', (
@@ -1068,6 +1070,7 @@ void main() {
           findsNothing,
         );
         expect(tester.takeException(), isNull);
+        store.detach(portal);
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }

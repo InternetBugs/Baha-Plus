@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import '../core/models.dart';
 import '../core/playback_state.dart';
+import 'app_diagnostics.dart';
 
 class NativePlaybackSource {
   NativePlaybackSource.fromJson(Json json)
@@ -106,8 +107,10 @@ class NativePlayback extends ChangeNotifier {
     required this.source,
     required this.userAgent,
     required this.onState,
-  });
+    AppDiagnostics? diagnostics,
+  }) : diagnostics = diagnostics ?? AppDiagnostics.instance;
 
+  final AppDiagnostics diagnostics;
   final String document, userAgent;
   final NativePlaybackSource source;
   final void Function(PlaybackState) onState;
@@ -127,6 +130,7 @@ class NativePlayback extends ChangeNotifier {
   bool get active => _active && !_disposed;
   int get seekRevision => _seekRevision;
   bool get authorizationAvailable => _authorizationAvailable;
+  bool get recoverable => !_blocked && _authorizationAvailable;
   Future<void> get released => _released;
   int get quality => _quality;
   PlaybackState get state {
@@ -135,9 +139,14 @@ class NativePlayback extends ChangeNotifier {
         ? value!.duration.inMilliseconds / 1000
         : source.duration;
     var buffered = 0.0;
+    final bufferedRanges = <PlaybackBufferRange>[];
     for (final range in value?.buffered ?? const <DurationRange>[]) {
+      final start = (range.start.inMilliseconds / 1000).clamp(0.0, duration);
       final end = range.end.inMilliseconds / 1000;
       if (end > buffered) buffered = end;
+      if (end > start) {
+        bufferedRanges.add((start: start, end: end.clamp(0.0, duration)));
+      }
     }
     return PlaybackState(
       phase: _blocked || !_authorizationAvailable || value?.hasError == true
@@ -153,6 +162,7 @@ class NativePlayback extends ChangeNotifier {
       position: _position.clamp(0, duration),
       duration: duration,
       buffered: buffered.clamp(0, duration),
+      bufferedRanges: List.unmodifiable(bufferedRanges),
       rate: value?.playbackSpeed ?? source.rate,
       qualities: source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
       quality: _quality,
@@ -260,6 +270,11 @@ class NativePlayback extends ChangeNotifier {
       failureCode = code != null && RegExp(r'^[\w.-]{1,64}$').hasMatch(code)
           ? code
           : error.runtimeType.toString();
+      diagnostics.record('player.native-load-failed', {
+        'stage': stage,
+        'elapsedMs': elapsed.elapsedMilliseconds,
+        'code': failureCode,
+      });
       if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
         debugPrint(
           '[BAHA_NATIVE] load-failed stage=$stage '

@@ -343,8 +343,16 @@
     metadata();
     const duration = finite(c.media?.duration);
     const position = Math.min(duration, finite(suspendedTimeline?.position ?? c.media?.currentTime));
-    let buffered = 0;
-    try { if (c.media?.buffered.length) buffered = Math.min(duration, finite(c.media.buffered.end(c.media.buffered.length - 1))); } catch (_) {}
+    const bufferedRanges = [];
+    try {
+      const ranges = c.media?.buffered;
+      for (let i = 0; i < (ranges?.length || 0); i++) {
+        const start = Math.min(duration, finite(ranges.start(i)));
+        const end = Math.min(duration, finite(ranges.end(i)));
+        if (end > start) bufferedRanges.push([start, end]);
+      }
+    } catch (_) {}
+    const buffered = bufferedRanges.reduce((end, range) => Math.max(end, range[1]), 0);
     // Preserve official prompts until there is a timeline native controls can
     // actually operate. This also keeps the official error UI accessible.
     const nativeControls = c.matches && !!c.root && duration > 0 &&
@@ -370,7 +378,7 @@
       type: 'player-state', phase: cacheRecovering || restoringCheckpoint ? 'loading' : c.phase, surfaceReady: !!c.root && c.matches,
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
-      position, duration, buffered, rate: c.media?.playbackRate || 1,
+      position, duration, buffered, bufferedRanges, rate: c.media?.playbackRate || 1,
       qualities, quality,
       mediaSource: c.phase === 'content' && !c.player?.tech?.(true)?.vhs
         ? nativeQuality?.source(c.player, c.media) || null : null,
@@ -378,6 +386,8 @@
       cacheActive: cacheEnabled,
       cacheFailed,
       checkpointRestored,
+      recoverable: c.phase === 'error' && [2, 3, 4].includes(mediaError || playerError) &&
+        !(playerError >= 1000),
       hasDanmaku: !!danmaku, danmaku: !!danmaku && getComputedStyle(danmaku).display !== 'none'
     };
     const serialized = JSON.stringify(body);

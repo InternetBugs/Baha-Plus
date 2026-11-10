@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:baha_plus/core/community.dart';
+import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/native_playback.dart';
 import 'package:baha_plus/ui/native_video_surface.dart';
 import 'package:flutter/material.dart';
@@ -41,7 +42,7 @@ class FakeVideo extends VideoPlayerPlatform {
     this.options.add(options);
     sources.add(options.dataSource);
     positions[id] = Duration.zero;
-    streams[id] = StreamController<VideoEvent>()
+    streams[id] = StreamController<VideoEvent>(onCancel: () async {})
       ..add(
         VideoEvent(
           eventType: VideoEventType.initialized,
@@ -307,6 +308,49 @@ void main() {
       expect(native.state.paused, isTrue);
       expect(native.state.position, 42);
       native.dispose();
+    },
+  );
+
+  test(
+    'native buffer events publish separate cached ranges and clear on source replacement',
+    () async {
+      final states = <PlaybackState>[];
+      final native = NativePlayback(
+        document: 'current',
+        source: NativePlaybackSource.fromJson(sourceJson()),
+        userAgent: 'device agent',
+        onState: states.add,
+      );
+      addTearDown(native.dispose);
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 620, 'paused': true, 'rate': 1, 'muted': false},
+      );
+      platform.streams[0]!.add(
+        VideoEvent(
+          eventType: VideoEventType.bufferingUpdate,
+          buffered: [
+            DurationRange(
+              const Duration(seconds: 30),
+              const Duration(seconds: 90),
+            ),
+            DurationRange(
+              const Duration(seconds: 600),
+              const Duration(seconds: 750),
+            ),
+          ],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(states.last.buffered, 750);
+      expect(states.last.bufferRanges, [
+        (start: 30.0, end: 90.0),
+        (start: 600.0, end: 750.0),
+      ]);
+      expect(await native.command('quality', 1080), isTrue);
+      expect(native.state.buffered, 0);
+      expect(native.state.bufferRanges, isEmpty);
     },
   );
 

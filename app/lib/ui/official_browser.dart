@@ -35,7 +35,9 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   // layout rebuilds, as well as retaining the native view with the GlobalKey.
   InAppWebView? _webView;
   final _progress = ValueNotifier<int>(0);
-  final _webViewKey = GlobalKey(debugLabel: 'official-video-session');
+  GlobalKey _webViewKey = GlobalKey(debugLabel: 'official-video-session');
+  bool _webViewNeedsRecreation = false;
+  Completer<void>? _recreatedWebViewReady;
   bool _desktop = false;
   bool _keepsAndroidMediaAlive = false;
   bool _publicDocumentReady = false;
@@ -63,6 +65,8 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   Timer? _danmakuTimer;
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   AppStore get store => widget.store;
+  bool _isCurrentController(InAppWebViewController controller) =>
+      identical(controller.platform, _controller?.platform);
   bool get _shouldKeepAndroidMediaAlive =>
       defaultTargetPlatform == TargetPlatform.android && store.showsPlayer;
 
@@ -71,7 +75,14 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     store.addListener(_cacheSessionChanged);
-    if (_diagnostics) {
+    store.diagnostics.addListener(_diagnosticCaptureChanged);
+    _diagnosticCaptureChanged();
+  }
+
+  void _diagnosticCaptureChanged() {
+    _healthTimer?.cancel();
+    _healthTimer = null;
+    if (_diagnostics || store.diagnostics.enabled) {
       _healthTimer = Timer.periodic(
         const Duration(seconds: 10),
         (_) => unawaited(_samplePlaybackHealth()),
@@ -104,7 +115,10 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.store != store) {
       oldWidget.store.removeListener(_cacheSessionChanged);
+      oldWidget.store.diagnostics.removeListener(_diagnosticCaptureChanged);
       store.addListener(_cacheSessionChanged);
+      store.diagnostics.addListener(_diagnosticCaptureChanged);
+      _diagnosticCaptureChanged();
       _cacheSessionChanged();
     }
   }
@@ -231,6 +245,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
     // A scrolling hybrid view otherwise requires separate Android overlay
     // surfaces for the controls drawn above the official player.
     useHybridComposition: false,
+    useOnRenderProcessGone: true,
     javaScriptEnabled: true,
     javaScriptCanOpenWindowsAutomatically: false,
     useShouldOverrideUrlLoading: true,
@@ -278,9 +293,15 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
   @override
   Future<void> load(Uri uri) async {
     if (!OfficialSite.allowedNavigation(uri)) return;
-    await _nativeRelease;
+    final document = store.operation.id;
+    await _nativeRelease.timeout(const Duration(seconds: 10));
+    if (!mounted || store.operation.id != document) return;
+    await _recreateWebViewIfNeeded();
+    if (!mounted || store.operation.id != document) return;
     await _syncInitialQualityScript();
+    if (!mounted || store.operation.id != document) return;
     await _configureMode(uri);
+    if (!mounted || store.operation.id != document) return;
     await _controller?.loadUrl(
       urlRequest: URLRequest(url: WebUri(uri.toString())),
     );
@@ -288,9 +309,35 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
 
   @override
   Future<void> reload() async {
-    await _nativeRelease;
+    if (_webViewNeedsRecreation) {
+      await load(
+        store.showsPlayer && store.playingVideoId != null
+            ? OfficialSite.video(store.playingVideoId!)
+            : store.browserUri ?? OfficialSite.home,
+      );
+      return;
+    }
+    final document = store.operation.id;
+    await _nativeRelease.timeout(const Duration(seconds: 10));
+    if (!mounted || store.operation.id != document) return;
     await _syncInitialQualityScript();
+    if (!mounted || store.operation.id != document) return;
     await _controller?.reload();
+  }
+
+  Future<void> _recreateWebViewIfNeeded() async {
+    if (_webViewNeedsRecreation) {
+      _webViewNeedsRecreation = false;
+      _controller = null;
+      _queuedInitialQuality = null;
+      _initialQualityWrite = Future.value();
+      _recreatedWebViewReady = Completer<void>();
+      setState(() {
+        _webView = null;
+        _webViewKey = GlobalKey(debugLabel: 'official-video-session');
+      });
+    }
+    await _recreatedWebViewReady?.future.timeout(const Duration(seconds: 15));
   }
 
   @override
@@ -391,6 +438,16 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
       final native = _nativePlayback;
       if (native?.active == true) {
         final state = native!.state;
+        store.diagnostics.record('player.health', {
+          'backend': AppStore.nativePlaybackBackend,
+          'phase': state.phase.name,
+          ...native.clock,
+          'bufferAhead': (state.buffered - state.position).clamp(
+            0,
+            state.duration,
+          ),
+          'authorized': native.authorizationAvailable,
+        });
         debugPrint(
           '[BAHA_HEALTH] ${jsonEncode({'backend': AppStore.nativePlaybackBackend, 'phase': state.phase.name, ...native.clock, 'bufferAhead': (state.buffered - state.position).clamp(0, state.duration), 'authorizationAvailable': native.authorizationAvailable})}',
         );
@@ -406,6 +463,34 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
           result?.error == null &&
           result?.value is String &&
           result!.value != 'null') {
+        // The bridge's diagnostics projection contains metrics only; never
+        // sample page HTML, JavaScript console messages or network payloads.
+        final body = jsonDecode(result.value as String);
+        if (body is Map<String, dynamic>) {
+          store.diagnostics.record('player.health', {
+            for (final entry in body.entries)
+              if (entry.value is num || entry.value is bool)
+                entry.key: entry.value,
+            if (const [
+              'loading',
+              'content',
+              'advertisement',
+              'age',
+              'verification',
+              'official',
+              'error',
+            ].contains(body['phase']))
+              'phase': body['phase'],
+            if (const [
+              'vhs',
+              'native-hls',
+              'android-exoplayer',
+              'ios-avplayer',
+              'windows-mpv',
+            ].contains(body['backend']))
+              'backend': body['backend'],
+          });
+        }
         debugPrint('[BAHA_HEALTH] ${result.value}');
       }
     } catch (_) {
@@ -595,7 +680,37 @@ try {
         ),
       );
     }
-    await store.attach(this);
+    if (!mounted || !_isCurrentController(controller)) return;
+    final recreated = _recreatedWebViewReady;
+    if (recreated != null) {
+      _recreatedWebViewReady = null;
+      recreated.complete();
+    } else {
+      await store.attach(this);
+    }
+  }
+
+  void _playerProcessTerminated(
+    InAppWebViewController controller, {
+    bool recreate = false,
+  }) {
+    if (!mounted ||
+        !_isCurrentController(controller) ||
+        _terminatedGeneration == _documentGeneration) {
+      return;
+    }
+    _terminatedGeneration = _documentGeneration;
+    _publicDocumentReady = false;
+    _webViewNeedsRecreation |= recreate;
+    store.diagnostics.record('browser.process-terminated', {
+      'recreate': recreate,
+    });
+    debugPrint('[BAHA_HEALTH] web-content-process-terminated');
+    final native = _nativePlayback;
+    // Capture the timeline before pausing or blocking changes playback intent.
+    // Reloading also disposes the native decoder before creating another one.
+    unawaited(store.playerProcessTerminated());
+    unawaited(native?.block());
   }
 
   Future<void> _receiveOfficialMessage(
@@ -603,9 +718,13 @@ try {
     String raw,
     Uri origin,
   ) async {
+    if (!mounted || !_isCurrentController(controller)) return;
     final requestId = store.operation.id;
     final nativeUrl = await controller.getUrl();
-    if (!mounted || nativeUrl == null || store.operation.id != requestId) {
+    if (!mounted ||
+        !_isCurrentController(controller) ||
+        nativeUrl == null ||
+        store.operation.id != requestId) {
       return;
     }
     final source = Uri.tryParse(nativeUrl.toString());
@@ -714,25 +833,11 @@ try {
               ),
           ]),
           onWebViewCreated: _created,
-          onWebContentProcessDidTerminate: (controller) {
-            if (!mounted || _terminatedGeneration == _documentGeneration) {
-              return;
-            }
-            _terminatedGeneration = _documentGeneration;
-            _publicDocumentReady = false;
-            debugPrint('[BAHA_HEALTH] web-content-process-terminated');
-            // Losing the official session requires a pause, but must not
-            // automatically reload an otherwise valid native media buffer.
-            final native = _nativePlayback;
-            unawaited(_nativePlayback?.pause());
-            unawaited(
-              store.playerProcessTerminated(
-                allowAutomaticReload: native?.active != true,
-              ),
-            );
-            unawaited(_nativePlayback?.block());
-          },
+          onWebContentProcessDidTerminate: _playerProcessTerminated,
+          onRenderProcessGone: (controller, detail) =>
+              _playerProcessTerminated(controller, recreate: true),
           onLoadStart: (controller, url) async {
+            if (!mounted || !_isCurrentController(controller)) return;
             _documentGeneration++;
             _publicDocumentReady = false;
             _progress.value = 1;
@@ -740,12 +845,14 @@ try {
             await _updateNavigation();
           },
           onPageCommitVisible: (controller, url) async {
+            if (!mounted || !_isCurrentController(controller)) return;
             final uri = url == null ? null : Uri.tryParse(url.toString());
             _publicDocumentReady =
                 uri != null && OfficialSite.trustedOrigin(uri);
             await store.preparePlayerSurface(uri);
           },
           onLoadStop: (controller, url) async {
+            if (!mounted || !_isCurrentController(controller)) return;
             final uri = url == null ? null : Uri.tryParse(url.toString());
             _publicDocumentReady =
                 uri != null && OfficialSite.trustedOrigin(uri);
@@ -786,11 +893,26 @@ try {
             return NavigationActionPolicy.ALLOW;
           },
           onReceivedError: (controller, request, error) {
-            if (request.isForMainFrame != true ||
+            if (!_isCurrentController(controller) ||
+                request.isForMainFrame != true ||
                 error.description.contains('ERR_ABORTED')) {
               return;
             }
-            store.navigationFailed();
+            store.diagnostics.record('browser.network-error', {
+              'code': error.type.toNativeValue(),
+            });
+            if (store.showsPlayer) {
+              unawaited(store.playerProcessTerminated());
+            } else {
+              store.navigationFailed();
+            }
+          },
+          onReceivedHttpError: (controller, request, response) {
+            if (request.isForMainFrame == true) {
+              store.diagnostics.record('browser.http-error', {
+                'status': response.statusCode,
+              });
+            }
           },
           onPermissionRequest: (controller, request) async {
             final origin = Uri.tryParse(request.origin.toString());
@@ -879,6 +1001,8 @@ try {
     _nativePlayback?.dispose();
     _nativeClockTimer?.cancel();
     store.removeListener(_cacheSessionChanged);
+    store.detach(this);
+    store.diagnostics.removeListener(_diagnosticCaptureChanged);
     final document = _hlsCache.document;
     if (document != null) unawaited(_hlsCache.stop(document));
     _progress.dispose();
@@ -939,19 +1063,26 @@ return JSON.stringify(source ? {...source, userAgent: navigator.userAgent} : nul
         throw const FormatException('Invalid native media user agent');
       }
       candidate = NativePlayback(
+        diagnostics: store.diagnostics,
         document: document,
         source: source,
         userAgent: userAgent,
         onState: (value) {
           if (!live()) return;
-          store.updateNativePlayback(document, value);
+          store.updateNativePlayback(
+            document,
+            value,
+            recoverable: candidate?.recoverable == true,
+          );
         },
       );
       store.updateNativePlayback(
         document,
         const PlaybackState(phase: PlaybackPhase.loading),
       );
-      await candidate.initialize(store.preferredQuality);
+      await candidate
+          .initialize(store.preferredQuality)
+          .timeout(const Duration(seconds: 40));
       if (!live()) return;
       final committed = await _controller
           ?.callAsyncJavaScript(
@@ -970,17 +1101,21 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
       if (timeline is! Json) throw StateError('Native handoff unavailable');
       _nativePlayback = candidate;
       _nativeAttempted = document;
-      await candidate.activate(
-        applicationActive: store.applicationActive,
-        timeline: {
-          ...timeline,
-          'paused':
-              timeline['paused'] != false || lifecycle != _lifecycleRevision,
-        },
-      );
+      await candidate
+          .activate(
+            applicationActive: store.applicationActive,
+            timeline: {
+              ...timeline,
+              'paused':
+                  timeline['paused'] != false ||
+                  lifecycle != _lifecycleRevision,
+            },
+          )
+          .timeout(const Duration(seconds: 15));
       if (!live()) return;
       setState(() {});
       debugPrint('[BAHA_NATIVE] $backend handoff complete');
+      store.diagnostics.record('player.native-handoff', {'backend': backend});
       _nativeClockTimer?.cancel();
       _nativeClockTimer = Timer.periodic(
         const Duration(seconds: 1),
@@ -998,11 +1133,19 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
         _nativeAttempted = document;
         if (candidate != null && _nativePlayback == candidate) {
           await candidate.block(committed: true);
-          if (live()) setState(() {});
+          if (live()) {
+            store.updateNativePlayback(
+              document,
+              candidate.state,
+              recoverable: true,
+            );
+            setState(() {});
+          }
         } else {
           store.updateNativePlayback(
             document,
             const PlaybackState(phase: PlaybackPhase.error),
+            recoverable: true,
           );
           setState(() => _nativeFailureDocument = document);
           unawaited(
@@ -1019,6 +1162,11 @@ if (window.__bahaDocumentNonce === ticket) window.__bahaPlayerBridge?.failNative
           'stage=${candidate?.failureStage ?? 'handoff'} '
           'code=${candidate?.failureCode ?? 'unavailable'}',
         );
+        store.diagnostics.record('player.native-failed', {
+          'type': error.runtimeType.toString(),
+          'stage': candidate?.failureStage ?? 'handoff',
+          'code': candidate?.failureCode ?? 'unavailable',
+        });
       }
     } finally {
       if (_nativePlayback != candidate) candidate?.dispose();

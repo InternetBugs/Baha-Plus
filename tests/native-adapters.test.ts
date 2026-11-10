@@ -553,7 +553,7 @@ function playerFixture(nativeHls = false, backend?: string) {
   Object.defineProperties(media, Object.fromEntries(Object.entries({
     duration: 1200, currentTime: 37, paused: false, ended: false, muted: false,
     playbackRate: 1, readyState: 4, error: null,
-    buffered: { length: 1, end: () => 90 },
+    buffered: { length: 1, start: () => 0, end: () => 90 },
   }).map(([key, value]) => [key, { value, writable: true, configurable: true }])));
   (fixture.document.querySelector('#ani_video') as any).player = {
     usingPlugin: (name: string) => ['m3u8', 'animePlayer'].includes(name),
@@ -1064,6 +1064,28 @@ test('a stalled cache without a media error falls back to the official source', 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.messages.at(-1).cacheFailed, true);
   assert.equal(f.media.currentTime, 37);
+  f.bridge.dispose();
+});
+
+test('player reports buffered intervals, preserves seek gaps and clears an empty buffer', () => {
+  const f = playerFixture();
+  const state = () => f.messages.filter(m => m.type === 'player-state').at(-1);
+  assert.equal(state().buffered, 90);
+  assert.deepEqual(JSON.parse(JSON.stringify(state().bufferedRanges)), [[0, 90]]);
+  const ranges = [[30, 90], [600, 750]];
+  f.media.currentTime = 620;
+  f.media.buffered = {
+    length: ranges.length,
+    start: (i: number) => ranges[i][0],
+    end: (i: number) => ranges[i][1],
+  };
+  f.tick();
+  assert.equal(state().buffered, 750);
+  assert.deepEqual(JSON.parse(JSON.stringify(state().bufferedRanges)), ranges);
+  f.media.buffered = {length: 0};
+  f.tick();
+  assert.equal(state().buffered, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(state().bufferedRanges)), []);
   f.bridge.dispose();
 });
 

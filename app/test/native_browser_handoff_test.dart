@@ -679,7 +679,108 @@ void main() {
   );
 
   testWidgets(
-    'WebContent termination pauses native content and exposes retry without automatically reloading',
+    'native decoder errors recover with the last content checkpoint',
+    (tester) async {
+      final host = await _mountHost(tester);
+      await host.content();
+      final document = host.store.operation.id;
+      host.video.streams[0]!.addError(
+        PlatformException(
+          code: 'decoder-disconnected',
+          message: 'The decoder is unavailable',
+        ),
+      );
+      await host.flush();
+      expect(host.store.playback.value.phase, PlaybackPhase.error);
+      await host.advance(const Duration(seconds: 3));
+      expect(host.store.operation.id, isNot(document));
+      expect(host.controller.loads, hasLength(2));
+      expect(
+        Uri.parse(
+          host.controller.loads.last.url.toString(),
+        ).queryParameters['t'],
+        '42',
+      );
+      expect(host.video.released, [0]);
+      await host.content();
+      expect(host.store.playback.value.phase, PlaybackPhase.content);
+      expect(host.video.playCalls, [0, 1]);
+    },
+    variant: _nativeHosts,
+  );
+
+  testWidgets(
+    'paused native content waits for explicit retry after process termination',
+    (tester) async {
+      final host = await _mountHost(tester);
+      await host.content();
+      await host.store.controlPlayer('pause');
+      await host.flush();
+      final document = host.store.operation.id;
+      final view = host.webViews.views.single;
+      final controller = view.controllerFromPlatform<InAppWebViewController>(
+        host.controller,
+      );
+      view.params.onWebContentProcessDidTerminate!(controller);
+      await host.advance(const Duration(seconds: 35));
+      expect(host.store.operation.id, document);
+      expect(host.controller.loads, hasLength(1));
+      expect(host.store.playback.value.phase, PlaybackPhase.error);
+      expect(host.native.state.paused, isTrue);
+    },
+    variant: _nativeHosts,
+  );
+
+  testWidgets(
+    'Android renderer loss recreates the WebView and rejects the old instance',
+    (tester) async {
+      final host = await _mountHost(tester);
+      await host.content();
+      final oldView = host.webViews.views.single;
+      final oldController = oldView
+          .controllerFromPlatform<InAppWebViewController>(host.controller);
+      expect(oldView.params.initialSettings!.useOnRenderProcessGone, isTrue);
+      oldView.params.onRenderProcessGone!(
+        oldController,
+        RenderProcessGoneDetail(didCrash: false),
+      );
+      await host.flush();
+      expect(host.webViews.views, hasLength(2));
+      expect(host.webViews.disposals, 1);
+      final replacement = _HandoffController();
+      final view = host.webViews.views.last;
+      final controller = view.controllerFromPlatform<InAppWebViewController>(
+        replacement,
+      );
+      view.params.onWebViewCreated!(controller);
+      await host.flush();
+      expect(replacement.loads, hasLength(1));
+      expect(
+        Uri.parse(replacement.loads.single.url.toString()).queryParameters['t'],
+        '42',
+      );
+      view.params.onLoadStart!(controller, replacement.url);
+      view.params.onPageCommitVisible!(controller, replacement.url);
+      await host.flush();
+      final recoveredDocument = host.store.operation.id;
+      host.controller.publishContent(host.store);
+      oldView.params.onWebContentProcessDidTerminate!(oldController);
+      oldView.params.onLoadStop!(oldController, host.controller.url);
+      await host.flush();
+      expect(host.store.operation.id, recoveredDocument);
+      expect(replacement.preparations, 0);
+      replacement.publishContent(host.store);
+      await host.flush();
+      expect(host.store.playback.value.phase, PlaybackPhase.content);
+      expect(replacement.commits, 1);
+      expect(host.video.sources, hasLength(2));
+      expect(host.video.released, [0]);
+    },
+    variant: TargetPlatformVariant({TargetPlatform.android}),
+  );
+
+  testWidgets(
+    'WebContent termination reloads once and restores native content',
     (tester) async {
       final host = await _mountHost(tester);
       await host.content();
@@ -697,12 +798,29 @@ void main() {
       view.params.onWebContentProcessDidTerminate!(controller);
       await host.advance(const Duration(seconds: 6));
 
-      expect(original.state.paused, isTrue);
-      expect(host.store.playback.value.phase, PlaybackPhase.error);
-      expect(find.text(host.store.t('retry')), findsOneWidget);
+      expect(host.store.operation.id, isNot(document));
+      expect(host.controller.loads, hasLength(2));
+      expect(
+        Uri.parse(
+          host.controller.loads.last.url.toString(),
+        ).queryParameters['t'],
+        '42',
+      );
+      expect(host.store.playback.value.phase, PlaybackPhase.loading);
+      expect(host.video.released, [0]);
       expect(host.video.playCalls, [0]);
       expect(await host.portal.playerCommand(document, 'play', null), isFalse);
-      host.expectSessionRetained(original, document);
+      expect(find.byType(NativeVideoSurface), findsNothing);
+      expect(host.webViews.views, hasLength(1));
+      expect(original.active, isFalse);
+      await host.content();
+      await host.waitFor(
+        () => host.store.playback.value.phase == PlaybackPhase.content,
+        reason: 'Recovery must complete the new native handoff',
+      );
+      expect(host.video.sources, hasLength(2));
+      expect(host.video.playCalls, [0, 1]);
+      expect(host.controller.loads, hasLength(2));
     },
     variant: _nativeHosts,
   );

@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart'
+    show DragStartBehavior, HorizontalDragGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/playback_state.dart';
 import '../data/app_store.dart';
+import 'buffered_playback_track.dart';
 import 'chrome.dart';
 import 'comments_preview.dart';
 import 'danmaku_panel.dart';
@@ -23,6 +26,12 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> {
   AppStore get store => widget.store;
   double? _scrub;
+  String? _scrubDocument;
+  int _scrubRevision = 0;
+  double? _swipeStartPosition;
+  double _swipeLastX = 0;
+  double _swipeSecondsPerPixel = 0;
+  Size? _swipeViewport;
   bool _fullscreen = false;
   bool _controlsVisible = true;
   String _controlState = '';
@@ -40,6 +49,10 @@ class _PlayerPageState extends State<PlayerPage> {
 
   void _playbackChanged() {
     final state = store.playback.value;
+    if (_scrub != null &&
+        (!state.canControl || _scrubDocument != store.operation.id)) {
+      _cancelScrub();
+    }
     if (store.playerLocked &&
         state.phase != PlaybackPhase.content &&
         state.phase != PlaybackPhase.loading) {
@@ -55,7 +68,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _hideTimer?.cancel();
     if (!_controlsVisible && mounted) setState(() => _controlsVisible = true);
     final state = store.playback.value;
-    if (store.playerFullscreen &&
+    if (_scrub == null &&
+        store.playerFullscreen &&
         (store.playerLocked ||
             (state.phase == PlaybackPhase.content && !state.paused))) {
       _hideTimer = Timer(const Duration(seconds: 3), () {
@@ -92,10 +106,128 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   void _syncFullscreen() {
+    if (_scrub != null &&
+        (store.playerLocked ||
+            _scrubDocument != store.operation.id ||
+            _fullscreen != store.playerFullscreen)) {
+      _cancelScrub();
+    }
     if (_fullscreen == store.playerFullscreen) return;
     _fullscreen = store.playerFullscreen;
     _revealControls();
     unawaited(_screenMode(_fullscreen));
+  }
+
+  bool get _canSwipeSeek =>
+      MediaQuery.orientationOf(context) == Orientation.landscape &&
+      !store.playerLocked &&
+      store.playback.value.canControl;
+
+  void _beginScrub(double position) {
+    if (!store.playback.value.canControl || store.playerLocked) return;
+    _scrubRevision++;
+    setState(() {
+      _scrubDocument = store.operation.id;
+      _scrub = position.clamp(0.0, store.playback.value.duration);
+    });
+    _revealControls();
+  }
+
+  void _updateScrub(double position) {
+    if (_scrub == null) {
+      _beginScrub(position);
+      return;
+    }
+    if (_scrubDocument != store.operation.id ||
+        !store.playback.value.canControl ||
+        store.playerLocked) {
+      _cancelScrub();
+      return;
+    }
+    setState(() => _scrub = position.clamp(0.0, store.playback.value.duration));
+  }
+
+  Future<void> _commitScrub() async {
+    final target = _scrub;
+    if (target == null) return;
+    if (_scrubDocument != store.operation.id ||
+        !store.playback.value.canControl ||
+        store.playerLocked) {
+      _cancelScrub();
+      return;
+    }
+    final revision = _scrubRevision;
+    setState(() {
+      _swipeStartPosition = null;
+      _swipeViewport = null;
+    });
+    // Keep both progress displays at the target until the player command has
+    // finished. Native seeks publish their new position before completing.
+    await store.controlPlayer('seek', target);
+    if (!mounted || revision != _scrubRevision) return;
+    _cancelScrub();
+  }
+
+  void _cancelScrub() {
+    if (_scrub == null) return;
+    _scrubRevision++;
+    setState(() {
+      _scrub = null;
+      _scrubDocument = null;
+      _swipeStartPosition = null;
+      _swipeViewport = null;
+    });
+    _revealControls();
+  }
+
+  void _startSwipe(DragStartDetails details) {
+    if (!_canSwipeSeek || _scrub != null) return;
+    final surface = _videoSurfaceKey.currentContext?.findRenderObject();
+    if (surface is! RenderBox || !surface.hasSize || surface.size.width <= 0) {
+      return;
+    }
+    final state = store.playback.value;
+    _swipeStartPosition = state.position.clamp(0.0, state.duration);
+    _swipeLastX = details.globalPosition.dx;
+    _swipeViewport = MediaQuery.sizeOf(context);
+    // One video width moves at most two minutes, regardless of episode length.
+    // Keep fractional seconds so small reversals can refine the target.
+    _swipeSecondsPerPixel =
+        state.duration.clamp(0.0, 120.0) / surface.size.width;
+    _beginScrub(_swipeStartPosition!);
+  }
+
+  void _updateSwipe(DragUpdateDetails details) {
+    if (_swipeStartPosition == null) return;
+    if (!_canSwipeSeek) {
+      _cancelScrub();
+      return;
+    }
+    final distance = details.globalPosition.dx - _swipeLastX;
+    _swipeLastX = details.globalPosition.dx;
+    _updateScrub(_scrub! + distance * _swipeSecondsPerPixel);
+  }
+
+  void _endSwipe(DragEndDetails details) {
+    if (_swipeStartPosition == null) return;
+    if (_canSwipeSeek) {
+      unawaited(_commitScrub());
+    } else {
+      _cancelScrub();
+    }
+  }
+
+  void _cancelSwipe() {
+    if (_swipeStartPosition != null) _cancelScrub();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_swipeStartPosition != null &&
+        _swipeViewport != MediaQuery.sizeOf(context)) {
+      _cancelScrub();
+    }
   }
 
   Future<void> _screenMode(bool expanded) async {
@@ -326,6 +458,48 @@ class _PlayerPageState extends State<PlayerPage> {
       ? store.t('episodeNumber').replaceAll('{n}', value)
       : value;
 
+  Widget _gestureSurface() => Listener(
+    // An accepted Flutter drag reports onEnd for PointerCancelEvent as well.
+    // Cancel first so an interrupted touch cannot commit its preview target.
+    onPointerCancel: (_) => _cancelSwipe(),
+    child: RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
+      gestures: {
+        if (_canSwipeSeek)
+          HorizontalDragGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<
+                HorizontalDragGestureRecognizer
+              >(
+                () => HorizontalDragGestureRecognizer(debugOwner: this),
+                (instance) => instance
+                  // A vertical movement can eliminate the tap recognizer,
+                  // leaving a horizontal recognizer as the arena's default
+                  // winner. It must still meet its own horizontal threshold.
+                  ..onlyAcceptDragOnThreshold = true
+                  ..dragStartBehavior = DragStartBehavior.down
+                  ..gestureSettings = MediaQuery.maybeGestureSettingsOf(context)
+                  ..onStart = _startSwipe
+                  ..onUpdate = _updateSwipe
+                  ..onEnd = _endSwipe
+                  ..onCancel = _cancelSwipe,
+              ),
+      },
+      child: GestureDetector(
+        key: const ValueKey('player-controls-toggle'),
+        behavior: HitTestBehavior.opaque,
+        onTap: store.playerFullscreen ? _toggleControls : _revealControls,
+        onDoubleTap: store.playerFullscreen
+            ? () {
+                final playback = store.playback.value;
+                if (!store.playerLocked && playback.canControl) {
+                  store.controlPlayer(playback.paused ? 'play' : 'pause');
+                }
+              }
+            : null,
+      ),
+    ),
+  );
+
   Widget _surface() => Stack(
     key: _videoSurfaceKey,
     fit: StackFit.expand,
@@ -340,23 +514,59 @@ class _PlayerPageState extends State<PlayerPage> {
                 state.phase != PlaybackPhase.error &&
                 !store.browserError)
               const ColoredBox(color: Colors.black),
-            if (state.canControl)
-              GestureDetector(
-                key: const ValueKey('player-controls-toggle'),
-                behavior: HitTestBehavior.opaque,
-                onTap: store.playerFullscreen
-                    ? _toggleControls
-                    : _revealControls,
-                onDoubleTap: store.playerFullscreen
-                    ? () {
-                        final playback = store.playback.value;
-                        if (!store.playerLocked && playback.canControl) {
-                          store.controlPlayer(
-                            playback.paused ? 'play' : 'pause',
-                          );
-                        }
-                      }
-                    : null,
+            if (state.canControl) _gestureSurface(),
+            if (_swipeStartPosition != null && _scrub != null)
+              Center(
+                child: IgnorePointer(
+                  child: Semantics(
+                    label: store.t('playbackProgress'),
+                    child: Container(
+                      key: const ValueKey('player-seek-preview'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xbb101014),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _scrub! >= _swipeStartPosition!
+                                ? CupertinoIcons.forward_fill
+                                : CupertinoIcons.backward_fill,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${_time(_scrub!)} / ${_time(state.duration)}',
+                            key: const ValueKey('player-seek-target'),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${_scrub! >= _swipeStartPosition! ? '+' : '−'}'
+                            '${_time((_scrub! - _swipeStartPosition!).abs())}',
+                            key: const ValueKey('player-seek-offset'),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
             if (!store.browserError &&
                 (state.phase == PlaybackPhase.loading ||
@@ -522,7 +732,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Widget _controls({required bool fullscreen}) => ValueListenableBuilder(
     valueListenable: store.playback,
     builder: (context, state, child) {
-      final seekable = state.canControl;
+      final seekable = state.canControl && _swipeStartPosition == null;
       final duration = state.duration;
       final position = (_scrub ?? state.position).clamp(0.0, duration);
       final dark = Theme.of(context).brightness == Brightness.dark;
@@ -573,24 +783,27 @@ class _PlayerPageState extends State<PlayerPage> {
               height: fullscreen ? 32 : 30,
               child: Semantics(
                 label: store.t('playbackProgress'),
-                child: GlassSlider(
-                  value: position,
-                  max: duration > 0 ? duration : 1,
-                  thumbRadius: fullscreen ? 8 : 7,
-                  trackHeight: 4,
-                  activeColor: color,
-                  inactiveColor: color.withValues(alpha: .33),
-                  onChanged: seekable
-                      ? (value) {
-                          _hideTimer?.cancel();
-                          setState(() => _scrub = value);
-                        }
-                      : null,
-                  onChangeEnd: (value) {
-                    store.controlPlayer('seek', value);
-                    setState(() => _scrub = null);
-                    _revealControls();
-                  },
+                child: Listener(
+                  onPointerCancel: (_) => _cancelScrub(),
+                  child: BufferedPlaybackTrack(
+                    key: const ValueKey('player-buffered-track'),
+                    state: state,
+                    color: color,
+                    child: GlassSlider(
+                      key: const ValueKey('player-progress-slider'),
+                      value: position,
+                      max: duration > 0 ? duration : 1,
+                      thumbRadius: fullscreen ? 8 : 7,
+                      trackHeight: 4,
+                      activeColor: color,
+                      inactiveColor: Colors.transparent,
+                      onChangeStart: seekable ? _beginScrub : null,
+                      onChanged: seekable ? _updateScrub : null,
+                      onChangeEnd: seekable
+                          ? (_) => unawaited(_commitScrub())
+                          : null,
+                    ),
+                  ),
                 ),
               ),
             ),

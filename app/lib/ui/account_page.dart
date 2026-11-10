@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'diagnostics_page.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({
@@ -198,6 +199,16 @@ class AccountPage extends StatelessWidget {
               CupertinoIcons.arrow_clockwise,
               store.updates.checking ? null : onCheckUpdates,
               busy: store.updates.checking,
+            ),
+            _row(
+              context,
+              store.t('diagnosticsTitle'),
+              CupertinoIcons.doc_text,
+              () => Navigator.of(context).push<void>(
+                CupertinoPageRoute(
+                  builder: (_) => DiagnosticsPage(store: store),
+                ),
+              ),
             ),
           ]),
           const SizedBox(height: 12),

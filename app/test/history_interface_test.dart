@@ -96,6 +96,7 @@ void main() {
       expect(portal.visited.length, navigations + 1);
       expect(portal.visited.last, OfficialSite.video('42'));
       expect(store.playingVideoId, '42');
+      store.detach(portal);
     },
   );
 
@@ -111,6 +112,7 @@ void main() {
     await frames(tester);
     expect(portal.visited.last, OfficialSite.video('20'));
     expect(tester.takeException(), isNull);
+    store.detach(portal);
   });
 
   testWidgets('history controls fit a narrow screen and large text', (

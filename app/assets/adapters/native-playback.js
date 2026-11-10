@@ -23,8 +23,12 @@
       const c = context();
       if (!['android-exoplayer', 'ios-avplayer', 'windows-mpv'].includes(backend) ||
           active || !authorized(c) || !(c.media.duration > 0)) return false;
+      const saved = window.__bahaPlaybackCheckpoint;
+      const restoring = saved?.videoId === new URL(location.href).searchParams.get('sn') &&
+        typeof saved.paused === 'boolean';
       held ??= {position: c.media.currentTime, duration: c.media.duration,
-        paused: c.media.paused, muted: c.media.muted, rate: c.media.playbackRate};
+        paused: restoring ? saved.paused : c.media.paused,
+        muted: c.media.muted, rate: c.media.playbackRate};
       if (heldMedia !== c.media) {
         heldMedia?.removeEventListener('play', preventWebContent);
         heldMedia = c.media;
