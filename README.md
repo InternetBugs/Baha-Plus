@@ -77,6 +77,7 @@
 请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本。
 
 - Android 需要 Android 7.0（API 24）或更高版本。
+- Android APK 按架构分别提供：多数手机选择 `arm64-v8a`，32 位 ARM 设备选择 `armeabi-v7a`，64 位 Intel／AMD 设备或模拟器选择 `x86_64`。
 - iOS 版本需要自行解决证书签名问题。
 
 想自行构建的用户可以参考 [开发与构建](docs/development.md)。

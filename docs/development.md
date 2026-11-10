@@ -110,7 +110,7 @@ GitHub Actions 的 **Manual test build** 默认只构建 iOS 测试包并运行 
 1. 确认计划发布的代码已经合并到 `main`。
 2. 在 GitHub **Actions → Manual release → Run workflow** 选择 `main`。可在 **版本号** 中填写 `0.5.0` 或 `v0.5.0`；留空则自动选择版本。`release_notes` 可填写整理好的中文更新内容，支持 Markdown；委托 Codex 发版时，由 Codex 根据实际改动整理中文说明并填写。点击运行，操作者需有运行工作流和发布 Release 的仓库权限。
 3. 指定版本必须是数字形式的 `主版本.次版本.修订号`，且大于所有已有的同格式版本标签；次版本和修订号须小于 1000，生成的 Android 构建号也须在允许范围内。留空时，工作流以 `app/pubspec.yaml` 的版本作为起点，并根据已有的版本标签自动选择下一个版本（例如从 `v0.3.0` 到 `v0.3.1`）。它在构建前为所选提交创建标签，以避免构建期间工作流变更导致 GitHub 拒绝创建标签。APK 和 IPA 使用相同版本，Android 构建号随版本递增；不会修改仓库文件。
-4. 工作流分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后，核对标签是否仍指向所构建的提交，再创建 Release 草稿并上传附件，完成后发布。Release 包含 Android 签名 APK、**未签名**的 iOS IPA 和 SHA-256 校验文件。
+4. 工作流分别在 Linux 和 macOS 构建 Android APK 与 iOS IPA；两端都成功后，核对标签是否仍指向所构建的提交，再创建 Release 草稿并上传附件，完成后发布。Android 使用 `--split-per-abi` 分别生成 `BahaPlus-Android-arm64-v8a.apk`、`BahaPlus-Android-armeabi-v7a.apk` 和 `BahaPlus-Android-x86_64.apk` 三个签名包；Release 同时包含**未签名**的 iOS IPA，SHA-256 校验文件覆盖四个安装包。`Manual test build` 也按相同架构拆分 Android 测试包，文件名为 `BahaPlus-Android-test-<ABI>.apk`，并在 `build-info.json` 中记录架构列表。
 
 发布说明固定包含下载说明，并优先使用 `release_notes` 中整理好的更新内容。留空时，自动列出自上一个正式 Release 以来的非合并提交，保留原始标题；首次发布会列出截至该版本的全部非合并提交。工作流不再调用外部翻译服务。中文翻译与内容整理在发版前由 Codex 完成，依据实际改动描述，区分已实现内容与仍需真机验证的结果。
 

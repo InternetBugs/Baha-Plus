@@ -75,7 +75,7 @@ jobs:
         run: python3 tools/release_version.py
 
   android:
-    name: Build signed Android test APK
+    name: Build signed Android test APKs by ABI
     needs: validate
     if: inputs.platform == 'android' || inputs.platform == 'both'
     runs-on: ubuntu-latest
@@ -91,7 +91,7 @@ jobs:
           flutter-version: "3.47.9"
           channel: stable
           cache: true
-      - name: Build APK
+      - name: Build APKs by ABI
         working-directory: app
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -113,13 +113,18 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           flutter pub get --enforce-lockfile
-          flutter build apk --release --dart-define=BAHA_DIAGNOSTICS=true --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build apk --release --split-per-abi \
+            --target-platform android-arm,android-arm64,android-x64 \
+            --dart-define=BAHA_DIAGNOSTICS=true \
+            --build-name "$TEST_VERSION" --build-number "$BUILD_NUMBER"
           mkdir -p test-package
-          cp build/app/outputs/flutter-apk/app-release.apk test-package/BahaPlus-Android-test.apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-$abi-release.apk" "test-package/BahaPlus-Android-test-$abi.apk"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: test-package-android
-          path: app/test-package/BahaPlus-Android-test.apk
+          path: app/test-package/BahaPlus-Android-test-*.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -238,8 +243,11 @@ jobs:
           set -euo pipefail
           packages=()
           if [[ "$TEST_PLATFORM" == "android" || "$TEST_PLATFORM" == "both" ]]; then
-            test -f BahaPlus-Android-test.apk
-            packages+=(BahaPlus-Android-test.apk)
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              android_package="BahaPlus-Android-test-$abi.apk"
+              test -f "$android_package"
+              packages+=("$android_package")
+            done
           fi
           if [[ "$TEST_PLATFORM" == "ios" || "$TEST_PLATFORM" == "both" ]]; then
             ios_package="BahaPlus-iOS-test-$IOS_BUILD_MODE-unsigned.ipa"
@@ -260,6 +268,7 @@ jobs:
               "run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
               "platform": platform,
               "android_signing": "production" if android else None,
+              "android_abis": ["arm64-v8a", "armeabi-v7a", "x86_64"] if android else [],
               "ios_signing": "unsigned" if ios else None,
               "ios_build_mode": os.environ["IOS_BUILD_MODE"] if ios else None,
               "diagnostics": True,

@@ -11,9 +11,9 @@ def make_notes(commit_range: str, previous_tag: str, release_notes: str = "") ->
     notes = [
         "## 下载说明",
         "",
-        "- Android：已签名的正式版 APK。",
+        "- Android：已签名的正式版 APK，按设备架构选择 `arm64-v8a`、`armeabi-v7a` 或 `x86_64`。",
         "- iOS：未签名的 IPA，安装前需使用合适的 Apple 证书和描述文件签名。",
-        "- SHA256SUMS.txt 包含两个文件的 SHA-256 校验值。",
+        "- SHA256SUMS.txt 包含三个 Android APK 和 iOS IPA 的 SHA-256 校验值。",
         "",
         "## 更新内容",
         "",

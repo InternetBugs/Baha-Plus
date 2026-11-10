@@ -95,7 +95,7 @@ jobs:
           gh api "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA"
 
   android:
-    name: Build signed Android APK
+    name: Build signed Android APKs by ABI
     needs: [validate, reserve_tag]
     runs-on: ubuntu-latest
     steps:
@@ -109,7 +109,7 @@ jobs:
           flutter-version: "3.47.9"
           channel: stable
           cache: true
-      - name: Build signed APK
+      - name: Build signed APKs by ABI
         working-directory: app
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -131,13 +131,17 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           flutter pub get --enforce-lockfile
-          flutter build apk --release --build-name "$RELEASE_VERSION" --build-number "$BUILD_NUMBER"
+          flutter build apk --release --split-per-abi \
+            --target-platform android-arm,android-arm64,android-x64 \
+            --build-name "$RELEASE_VERSION" --build-number "$BUILD_NUMBER"
           mkdir -p release
-          cp build/app/outputs/flutter-apk/app-release.apk release/BahaPlus-Android.apk
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-$abi-release.apk" "release/BahaPlus-Android-$abi.apk"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: android-release
-          path: app/release/BahaPlus-Android.apk
+          path: app/release/BahaPlus-Android-*.apk
           if-no-files-found: error
 
   ios:
@@ -205,8 +209,14 @@ jobs:
             exit 1
           fi
           cd release
-          sha256sum BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa > SHA256SUMS.txt
+          packages=(
+            BahaPlus-Android-arm64-v8a.apk
+            BahaPlus-Android-armeabi-v7a.apk
+            BahaPlus-Android-x86_64.apk
+            BahaPlus-iOS-unsigned.ipa
+          )
+          sha256sum "${packages[@]}" > SHA256SUMS.txt
           args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md)
           gh release create "$RELEASE_TAG" "${args[@]}" \
-            BahaPlus-Android.apk BahaPlus-iOS-unsigned.ipa SHA256SUMS.txt
+            "${packages[@]}" SHA256SUMS.txt
           gh release edit "$RELEASE_TAG" --draft=false
