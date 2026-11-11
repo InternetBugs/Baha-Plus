@@ -70,3 +70,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Match video_player_android; use its shared media bandwidth counter.
+    implementation("androidx.media3:media3-exoplayer:1.9.2")
+}

@@ -615,6 +615,43 @@ function playerFixture(nativeHls = false, backend?: string) {
     bridge: fixture.context.window.__bahaPlayerBridge };
 }
 
+test('player download speed tracks media bytes, idle transfers and source resets', () => {
+  const f = playerFixture();
+  const player = (f.document.querySelector('#ani_video') as any).player;
+  let vhs = {stats: {mediaBytesTransferred: 500000}};
+  player.tech = () => ({vhs});
+  f.media.readyState = 2;
+  const state = () => f.messages.filter(message => message.type === 'player-state').at(-1);
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 0);
+  f.advance(1000);
+  vhs.stats.mediaBytesTransferred += 1024 * 1024;
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 1024 * 1024);
+  assert.equal(state().buffering, true);
+  f.advance(2000);
+  vhs.stats.mediaBytesTransferred += 1024 * 1024;
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 512 * 1024);
+  f.advance(1000);
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 0);
+  vhs = {stats: {mediaBytesTransferred: 9000000}};
+  f.advance(1000);
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 0);
+  vhs.stats.mediaBytesTransferred = 10;
+  f.advance(1000);
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 0);
+  vhs.stats.mediaBytesTransferred = NaN;
+  f.advance(1000);
+  f.tick();
+  assert.equal(state().downloadBytesPerSecond, 0);
+  assert.equal(f.requests.length, 0, 'Statistics never initiate a speed test or media request.');
+  f.bridge.dispose();
+});
+
 test('iOS AVPlayer handoff owns the clock, disables web recovery and excludes the legacy cache', async () => {
   const f = playerFixture(true, 'ios-avplayer');
   await new Promise(resolve => setImmediate(resolve));

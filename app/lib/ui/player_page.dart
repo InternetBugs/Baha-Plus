@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart'
-    show DragStartBehavior, HorizontalDragGestureRecognizer;
+    show DragStartBehavior, HorizontalDragGestureRecognizer, kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -23,7 +23,7 @@ class PlayerPage extends StatefulWidget {
   State<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> {
+class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   AppStore get store => widget.store;
   double? _scrub;
   String? _scrubDocument;
@@ -32,6 +32,12 @@ class _PlayerPageState extends State<PlayerPage> {
   double _swipeLastX = 0;
   double _swipeSecondsPerPixel = 0;
   Size? _swipeViewport;
+  bool _holdingSpeed = false;
+  double? _holdOriginalRate;
+  String? _holdDocument;
+  Size? _holdViewport;
+  Future<void>? _holdStart;
+  bool _restoringHoldSpeed = false;
   bool _fullscreen = false;
   bool _controlsVisible = true;
   String _controlState = '';
@@ -41,6 +47,7 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     store.addListener(_syncFullscreen);
     store.playback.addListener(_playbackChanged);
     _syncFullscreen();
@@ -49,6 +56,8 @@ class _PlayerPageState extends State<PlayerPage> {
 
   void _playbackChanged() {
     final state = store.playback.value;
+    if (_holdingSpeed && !_canHoldSpeed) _stopHoldSpeed();
+    unawaited(_restoreHoldSpeed());
     if (_scrub != null &&
         (!state.canControl || _scrubDocument != store.operation.id)) {
       _cancelScrub();
@@ -106,6 +115,13 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   void _syncFullscreen() {
+    if (_holdingSpeed &&
+        (store.playerLocked ||
+            _holdDocument != store.operation.id ||
+            _fullscreen != store.playerFullscreen)) {
+      _stopHoldSpeed();
+    }
+    unawaited(_restoreHoldSpeed());
     if (_scrub != null &&
         (store.playerLocked ||
             _scrubDocument != store.operation.id ||
@@ -122,6 +138,67 @@ class _PlayerPageState extends State<PlayerPage> {
       MediaQuery.orientationOf(context) == Orientation.landscape &&
       !store.playerLocked &&
       store.playback.value.canControl;
+
+  bool get _canHoldSpeed {
+    final state = store.playback.value;
+    return store.applicationActive &&
+        !store.playerLocked &&
+        state.canControl &&
+        !state.paused &&
+        !state.ended &&
+        _scrub == null;
+  }
+
+  void _startHoldSpeed() {
+    if (!_canHoldSpeed || _holdOriginalRate != null) return;
+    setState(() {
+      _holdingSpeed = true;
+      _holdOriginalRate = store.playback.value.rate;
+      _holdDocument = store.operation.id;
+      _holdViewport = MediaQuery.sizeOf(context);
+    });
+    _holdStart = store.controlPlayer('rate', 2);
+  }
+
+  void _stopHoldSpeed({bool rebuild = true}) {
+    if (_holdingSpeed) {
+      void stop() {
+        _holdingSpeed = false;
+        _holdViewport = null;
+      }
+
+      if (rebuild && mounted) {
+        setState(stop);
+      } else {
+        stop();
+      }
+    }
+    unawaited(_restoreHoldSpeed());
+  }
+
+  Future<void> _restoreHoldSpeed() async {
+    if (_holdingSpeed || _holdOriginalRate == null || _restoringHoldSpeed) {
+      return;
+    }
+    _restoringHoldSpeed = true;
+    try {
+      // A quick release must restore after the initial rate command finishes.
+      await _holdStart;
+      if (_holdDocument == store.operation.id) {
+        // Lifecycle and player transitions can temporarily reject commands.
+        // Keep the original rate until this same session can accept it again.
+        if (!store.applicationActive || !store.playback.value.canControl) {
+          return;
+        }
+        await store.controlPlayer('rate', _holdOriginalRate);
+      }
+      _holdOriginalRate = null;
+      _holdDocument = null;
+      _holdStart = null;
+    } finally {
+      _restoringHoldSpeed = false;
+    }
+  }
 
   void _beginScrub(double position) {
     if (!store.playback.value.canControl || store.playerLocked) return;
@@ -224,9 +301,21 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_holdingSpeed && _holdViewport != MediaQuery.sizeOf(context)) {
+      _stopHoldSpeed();
+    }
     if (_swipeStartPosition != null &&
         _swipeViewport != MediaQuery.sizeOf(context)) {
       _cancelScrub();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _stopHoldSpeed();
+    } else {
+      unawaited(_restoreHoldSpeed());
     }
   }
 
@@ -243,8 +332,10 @@ class _PlayerPageState extends State<PlayerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_syncFullscreen);
     store.playback.removeListener(_playbackChanged);
+    _stopHoldSpeed(rebuild: false);
     _hideTimer?.cancel();
     if (_fullscreen) unawaited(_screenMode(false));
     super.dispose();
@@ -461,7 +552,10 @@ class _PlayerPageState extends State<PlayerPage> {
   Widget _gestureSurface() => Listener(
     // An accepted Flutter drag reports onEnd for PointerCancelEvent as well.
     // Cancel first so an interrupted touch cannot commit its preview target.
-    onPointerCancel: (_) => _cancelSwipe(),
+    onPointerCancel: (_) {
+      _cancelSwipe();
+      _stopHoldSpeed();
+    },
     child: RawGestureDetector(
       behavior: HitTestBehavior.opaque,
       gestures: {
@@ -496,6 +590,17 @@ class _PlayerPageState extends State<PlayerPage> {
                 }
               }
             : null,
+        onLongPressStart: _canHoldSpeed ? (_) => _startHoldSpeed() : null,
+        onLongPressMoveUpdate: _canHoldSpeed
+            ? (details) {
+                final slop =
+                    MediaQuery.maybeGestureSettingsOf(context)?.touchSlop ??
+                    kTouchSlop;
+                if (details.offsetFromOrigin.distance > slop) _stopHoldSpeed();
+              }
+            : null,
+        onLongPressEnd: _canHoldSpeed ? (_) => _stopHoldSpeed() : null,
+        onLongPressCancel: _canHoldSpeed ? _stopHoldSpeed : null,
       ),
     ),
   );
@@ -515,6 +620,49 @@ class _PlayerPageState extends State<PlayerPage> {
                 !store.browserError)
               const ColoredBox(color: Colors.black),
             if (state.canControl) _gestureSurface(),
+            if (_holdingSpeed)
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 20,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Container(
+                        key: const ValueKey('player-hold-speed-indicator'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xbb101014),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              CupertinoIcons.forward_fill,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              store.t('holdSpeedActive'),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (_swipeStartPosition != null && _scrub != null)
               Center(
                 child: IgnorePointer(
@@ -575,10 +723,29 @@ class _PlayerPageState extends State<PlayerPage> {
                 child: IgnorePointer(
                   child: Semantics(
                     label: store.t('loading'),
-                    child: const CupertinoActivityIndicator(
-                      key: ValueKey('player-loading-indicator'),
-                      color: Colors.white,
-                      radius: 12,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CupertinoActivityIndicator(
+                          key: ValueKey('player-loading-indicator'),
+                          color: Colors.white,
+                          radius: 12,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          _downloadSpeed(state.downloadBytesPerSecond),
+                          key: const ValueKey('player-loading-speed'),
+                          textDirection: TextDirection.ltr,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                            shadows: [
+                              Shadow(color: Colors.black87, blurRadius: 4),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1144,6 +1311,17 @@ class _PlayerPageState extends State<PlayerPage> {
       ],
     ),
   );
+
+  String _downloadSpeed(double bytesPerSecond) {
+    if (!bytesPerSecond.isFinite || bytesPerSecond <= 0) return '0 B/s';
+    if (bytesPerSecond >= 1024 * 1024) {
+      return '${(bytesPerSecond / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+    }
+    if (bytesPerSecond >= 1024) {
+      return '${(bytesPerSecond / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${bytesPerSecond.round()} B/s';
+  }
 
   String _time(double seconds) {
     final value = seconds.floor();

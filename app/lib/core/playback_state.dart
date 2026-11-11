@@ -24,6 +24,7 @@ class PlaybackState {
     this.duration = 0,
     this.buffered = 0,
     this.bufferedRanges,
+    this.downloadBytesPerSecond = 0,
     this.rate = 1,
     this.qualities = const [],
     this.quality = 0,
@@ -33,7 +34,9 @@ class PlaybackState {
 
   factory PlaybackState.fromJson(Json body) {
     double number(String key, double max) {
-      final value = (body[key] as num).toDouble();
+      final raw = body[key];
+      if (raw is! num) throw FormatException('Invalid playback $key');
+      final value = raw.toDouble();
       if (!value.isFinite || value < 0 || value > max) {
         throw FormatException('Invalid playback $key');
       }
@@ -51,6 +54,9 @@ class PlaybackState {
       duration: number('duration', 172800),
       buffered: number('buffered', 172800),
       bufferedRanges: _parseBufferedRanges(body['bufferedRanges']),
+      downloadBytesPerSecond: body['downloadBytesPerSecond'] == null
+          ? 0
+          : number('downloadBytesPerSecond', 1e12),
       rate: number('rate', 4),
       qualities: (body['qualities'] as List? ?? const []).cast<int>(),
       quality: body['quality'] as int? ?? 0,
@@ -74,6 +80,7 @@ class PlaybackState {
   final PlaybackPhase phase;
   final bool surfaceReady, paused, buffering, ended, muted;
   final double position, duration, buffered, rate;
+  final double downloadBytesPerSecond;
 
   /// Null for older adapters that only report a continuous buffer endpoint.
   final List<PlaybackBufferRange>? bufferedRanges;

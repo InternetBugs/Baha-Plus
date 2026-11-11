@@ -5,7 +5,8 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/native_playback.dart';
 import 'package:baha_plus/ui/player_page.dart';
-import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
+import 'package:flutter/gestures.dart'
+    show kDoubleTapTimeout, kLongPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -18,12 +19,16 @@ PlaybackState _playback({
   double position = 600,
   double duration = 1200,
   bool paused = false,
+  bool ended = false,
+  double rate = 1,
   PlaybackPhase phase = PlaybackPhase.content,
 }) => PlaybackState(
   phase: phase,
   surfaceReady: true,
   buffering: false,
   paused: paused,
+  ended: ended,
+  rate: rate,
   position: position,
   duration: duration,
 );
@@ -32,6 +37,7 @@ class _SeekPortal extends FakePortal {
   late AppStore store;
   final commands = <(String, double?)>[];
   Completer<void>? pendingSeek;
+  Completer<void>? pendingRate;
   Future<bool> Function(String, double?)? commandHandler;
   bool failSeek = false;
 
@@ -51,6 +57,16 @@ class _SeekPortal extends FakePortal {
         position: value!,
         duration: state.duration,
         paused: state.paused,
+        rate: state.rate,
+      );
+    } else if (action == 'rate') {
+      await pendingRate?.future;
+      final state = store.playback.value;
+      store.playback.value = _playback(
+        position: state.position,
+        duration: state.duration,
+        paused: state.paused,
+        rate: value!,
       );
     }
     return true;
@@ -62,6 +78,9 @@ void main() {
   final slider = find.byKey(const ValueKey('player-progress-slider'));
   final preview = find.byKey(const ValueKey('player-seek-preview'));
   final controls = find.byKey(const ValueKey('video-glass-controls'));
+  final speedIndicator = find.byKey(
+    const ValueKey('player-hold-speed-indicator'),
+  );
   final portals = <_SeekPortal>[];
 
   void testSeekWidgets(String description, WidgetTesterCallback body) {
@@ -136,6 +155,237 @@ void main() {
 
   double position(WidgetTester tester) =>
       tester.widget<GlassSlider>(slider).value;
+
+  for (final fullscreen in [false, true]) {
+    for (final rate in [1.0, 1.5, 2.0]) {
+      testSeekWidgets(
+        '${fullscreen ? 'fullscreen' : 'portrait'} holds use 2x and restore $rate',
+        (tester) async {
+          final portal = await launch(
+            tester,
+            size: fullscreen ? const Size(850, 400) : const Size(400, 850),
+            fullscreen: fullscreen,
+            state: _playback(rate: rate),
+          );
+          final gesture = await tester.startGesture(tester.getCenter(surface));
+          await tester.pump(
+            kLongPressTimeout - const Duration(milliseconds: 1),
+          );
+          expect(portal.commands, isEmpty);
+          // Small hand movements should not prevent a stationary hold.
+          await gesture.moveBy(const Offset(3, 2));
+          await tester.pump(const Duration(milliseconds: 2));
+          expect(portal.commands, [('rate', 2.0)]);
+          expect(speedIndicator, findsOneWidget);
+          expect(portal.store.playback.value.rate, 2);
+          expect(portal.store.playback.value.position, 600);
+          expect(portal.store.playback.value.paused, isFalse);
+          await tester.pump(const Duration(seconds: 1));
+          expect(portal.commands, hasLength(1));
+          await gesture.up();
+          await tester.pump();
+          expect(portal.commands, [('rate', 2.0), ('rate', rate)]);
+          expect(portal.store.playback.value.rate, rate);
+          expect(speedIndicator, findsNothing);
+          expect(preview, findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  for (final movement in [
+    const Offset(85, 0),
+    const Offset(-85, 0),
+    const Offset(0, 85),
+    const Offset(0, -85),
+  ]) {
+    testSeekWidgets('movement $movement before a hold never speeds up', (
+      tester,
+    ) async {
+      final portal = await launch(tester);
+      final gesture = await tester.startGesture(tester.getCenter(surface));
+      await gesture.moveBy(movement);
+      await tester.pump(kLongPressTimeout);
+      expect(speedIndicator, findsNothing);
+      expect(portal.commands, isEmpty);
+      await gesture.up();
+      await tester.pump();
+      expect(portal.commands.where((command) => command.$1 == 'rate'), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
+    testSeekWidgets('movement $movement after a hold restores speed', (
+      tester,
+    ) async {
+      final portal = await launch(tester, state: _playback(rate: 1.25));
+      final gesture = await tester.startGesture(tester.getCenter(surface));
+      await tester.pump(kLongPressTimeout);
+      expect(speedIndicator, findsOneWidget);
+      await gesture.moveBy(movement);
+      await tester.pump();
+      expect(speedIndicator, findsNothing);
+      expect(preview, findsNothing);
+      expect(portal.commands, [('rate', 2.0), ('rate', 1.25)]);
+      await gesture.moveBy(-movement);
+      await tester.pump(kLongPressTimeout);
+      await gesture.up();
+      await tester.pump();
+      expect(portal.commands, hasLength(2));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testSeekWidgets('canceling an accepted hold restores speed', (tester) async {
+    final portal = await launch(tester, state: _playback(rate: .75));
+    final gesture = await tester.startGesture(tester.getCenter(surface));
+    await tester.pump(kLongPressTimeout);
+    expect(speedIndicator, findsOneWidget);
+    await gesture.cancel();
+    await tester.pump();
+    expect(speedIndicator, findsNothing);
+    expect(portal.commands, [('rate', 2.0), ('rate', .75)]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testSeekWidgets(
+    'releasing before a rate command finishes restores in order',
+    (tester) async {
+      final portal = await launch(tester, state: _playback(rate: 1.75));
+      portal.pendingRate = Completer<void>();
+      final gesture = await tester.startGesture(tester.getCenter(surface));
+      await tester.pump(kLongPressTimeout);
+      expect(portal.commands, [('rate', 2.0)]);
+      await gesture.up();
+      await tester.pump();
+      expect(speedIndicator, findsNothing);
+      expect(portal.commands, hasLength(1));
+      portal.pendingRate!.complete();
+      await tester.pump();
+      expect(portal.commands, [('rate', 2.0), ('rate', 1.75)]);
+      expect(portal.store.playback.value.rate, 1.75);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'paused, ended, locked and unavailable playback cannot hold',
+    (tester) async {
+      final portal = await launch(tester);
+      final origin = tester.getCenter(surface);
+      for (final state in [
+        _playback(paused: true),
+        _playback(ended: true),
+        _playback(duration: 0, position: 0),
+        for (final phase in PlaybackPhase.values.where(
+          (phase) => phase != PlaybackPhase.content,
+        ))
+          _playback(phase: phase),
+      ]) {
+        portal.store.playback.value = state;
+        await tester.pump();
+        final gesture = await tester.startGesture(origin);
+        await tester.pump(kLongPressTimeout);
+        await gesture.up();
+        await tester.pump(kDoubleTapTimeout);
+        expect(speedIndicator, findsNothing);
+        expect(portal.commands, isEmpty);
+      }
+      portal.store.playback.value = _playback();
+      portal.store.setPlayerLocked(true);
+      await tester.pump();
+      final gesture = await tester.startGesture(origin);
+      await tester.pump(kLongPressTimeout);
+      await gesture.up();
+      await tester.pump();
+      expect(speedIndicator, findsNothing);
+      expect(portal.commands, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final interruption in [
+    'rotation',
+    'exit fullscreen',
+    'lock',
+    'pause',
+    'advertisement',
+    'background',
+    'new episode',
+    'dispose',
+  ]) {
+    testSeekWidgets(
+      '$interruption ends a hold and preserves the original rate',
+      (tester) async {
+        final portal = await launch(tester, state: _playback(rate: 1.5));
+        final store = portal.store;
+        final gesture = await tester.startGesture(tester.getCenter(surface));
+        await tester.pump(kLongPressTimeout);
+        expect(portal.commands, [('rate', 2.0)]);
+        expect(speedIndicator, findsOneWidget);
+        switch (interruption) {
+          case 'rotation':
+            tester.view.physicalSize = const Size(400, 850);
+          case 'exit fullscreen':
+            store.setPlayerFullscreen(false);
+          case 'lock':
+            store.setPlayerLocked(true);
+          case 'pause':
+            store.playback.value = _playback(paused: true, rate: 2);
+          case 'advertisement':
+            store.playback.value = _playback(
+              phase: PlaybackPhase.advertisement,
+            );
+          case 'background':
+            await store.setApplicationActive(false);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.hidden,
+            );
+          case 'new episode':
+            await store.play(
+              store.playingAnime!,
+              episode: const Episode(id: '21', label: '2'),
+            );
+            store.playback.value = _playback(position: 10);
+          case 'dispose':
+            await tester.pumpWidget(const SizedBox.shrink());
+        }
+        await tester.pump();
+        // Flutter suppresses frames while hidden; the rendered tree catches up
+        // when the application resumes.
+        if (interruption != 'background') {
+          expect(speedIndicator, findsNothing);
+        }
+        await gesture.up();
+        await tester.pump();
+        if (interruption == 'advertisement' || interruption == 'background') {
+          expect(portal.commands, [('rate', 2.0)]);
+          if (interruption == 'background') {
+            await store.setApplicationActive(true);
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.resumed,
+            );
+          } else {
+            store.playback.value = _playback(rate: 2);
+          }
+          await tester.pump();
+        }
+        expect(speedIndicator, findsNothing);
+        expect(
+          portal.commands,
+          interruption == 'new episode'
+              ? [('rate', 2.0)]
+              : [('rate', 2.0), ('rate', 1.5)],
+        );
+        expect(
+          store.playback.value.rate,
+          interruption == 'new episode' ? 1 : 1.5,
+        );
+        expect(preview, findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testSeekWidgets(
     'landscape swipes preview precise relative seeks on the player slider',
@@ -443,6 +693,57 @@ void main() {
     expect(portal.commands, [('seek', 612.0), ('seek', 588.0)]);
     expect(position(tester), 588);
   });
+
+  testSeekWidgets(
+    'a stationary hold changes and restores the native video playback rate',
+    (tester) async {
+      final portal = await launch(tester);
+      final previousPlatform = VideoPlayerPlatform.instance;
+      final platform = FakeVideo();
+      VideoPlayerPlatform.instance = platform;
+      addTearDown(() => VideoPlayerPlatform.instance = previousPlatform);
+      final native = NativePlayback(
+        document: portal.store.operation.id,
+        source: NativePlaybackSource.fromJson(sourceJson()),
+        userAgent: 'device agent',
+        onState: (state) => portal.store.playback.value = state,
+      );
+      try {
+        await tester.runAsync(() => native.initialize(0));
+        await native.activate(
+          applicationActive: true,
+          timeline: {
+            'position': 600,
+            'paused': false,
+            'rate': 1.5,
+            'muted': false,
+          },
+        );
+        portal.commandHandler = native.command;
+        await tester.pump();
+        final playCalls = platform.playCalls.length;
+        final gesture = await tester.startGesture(tester.getCenter(surface));
+        await tester.pump(kLongPressTimeout);
+        expect(speedIndicator, findsOneWidget);
+        expect(native.state.rate, 2);
+        expect(native.state.paused, isFalse);
+        expect(platform.positions.values.single, const Duration(seconds: 600));
+        await gesture.up();
+        await tester.pump();
+        expect(speedIndicator, findsNothing);
+        expect(native.state.rate, 1.5);
+        expect(native.state.paused, isFalse);
+        expect(platform.playCalls, hasLength(playCalls));
+        expect(portal.commands, [('rate', 2.0), ('rate', 1.5)]);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.runAsync(() async {
+          native.dispose();
+          await native.released;
+        });
+      }
+    },
+  );
 
   testSeekWidgets(
     'a swipe reaches the native video backend with the same target',

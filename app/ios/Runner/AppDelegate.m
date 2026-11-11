@@ -1,6 +1,7 @@
 #import "AppDelegate.h"
 #import "GeneratedPluginRegistrant.h"
 #import <AVFAudio/AVFAudio.h>
+#import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <math.h>
 #import "Runner-Swift.h"
@@ -9,6 +10,11 @@
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
 @property(nonatomic, strong) FlutterMethodChannel *playbackCacheChannel;
 @property(nonatomic, strong) FlutterMethodChannel *playbackEnvironmentChannel;
+@property(nonatomic, strong) FlutterMethodChannel *playbackDownloadChannel;
+@property(nonatomic, copy) NSString *downloadDocument;
+@property(nonatomic, copy) NSSet<NSString *> *downloadSources;
+@property(nonatomic, weak) AVPlayerItem *downloadItem;
+@property(nonatomic, assign) NSUInteger downloadSourceGeneration;
 @property(nonatomic, strong) id remotePlayTarget;
 @property(nonatomic, strong) id remotePauseTarget;
 @property(nonatomic, strong) id remoteToggleTarget;
@@ -29,6 +35,9 @@
   [NSNotificationCenter.defaultCenter addObserver:self
       selector:@selector(audioRouteChanged:)
       name:AVAudioSessionRouteChangeNotification object:nil];
+  [NSNotificationCenter.defaultCenter addObserver:self
+      selector:@selector(playbackAccessLogChanged:)
+      name:AVPlayerItemNewAccessLogEntryNotification object:nil];
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
 }
 
@@ -40,6 +49,12 @@
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/playback_environment"
                                  binaryMessenger:registrar.messenger];
   __weak AppDelegate *weakSelf = self;
+  self.playbackDownloadChannel =
+      [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/playback_download"
+                                 binaryMessenger:registrar.messenger];
+  [self.playbackDownloadChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    [weakSelf handlePlaybackDownloadCall:call result:result];
+  }];
   [self.playbackEnvironmentChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
     AppDelegate *owner = weakSelf;
     if (![call.method isEqualToString:@"update"]) {
@@ -116,6 +131,68 @@
     }
     result(nil);
   }];
+}
+
+- (void)playbackAccessLogChanged:(NSNotification *)notification {
+  AVPlayerItem *item = [notification.object isKindOfClass:AVPlayerItem.class] ? notification.object : nil;
+  if (!item || ![item.asset isKindOfClass:AVURLAsset.class]) return;
+  // AVPlayer may deliver this notification from a media thread. Keep all
+  // counter state on the platform channel's main queue.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSString *source = ((AVURLAsset *)item.asset).URL.absoluteString;
+    if (!self.downloadDocument.length || ![self.downloadSources containsObject:source]) return;
+    if (self.downloadItem != item) {
+      self.downloadItem = item;
+      self.downloadSourceGeneration++;
+    }
+  });
+}
+
+- (void)handlePlaybackDownloadCall:(FlutterMethodCall *)call result:(FlutterResult)result {
+  NSDictionary *arguments = [call.arguments isKindOfClass:NSDictionary.class] ? call.arguments : @{};
+  NSString *document = [arguments[@"document"] isKindOfClass:NSString.class] ? arguments[@"document"] : nil;
+  if ([call.method isEqualToString:@"start"]) {
+    NSArray *sources = [arguments[@"sources"] isKindOfClass:NSArray.class] ? arguments[@"sources"] : nil;
+    if (!document.length || !sources.count || sources.count > 21) {
+      result(@NO);
+      return;
+    }
+    for (id source in sources) {
+      if (![source isKindOfClass:NSString.class]) {
+        result(@NO);
+        return;
+      }
+      NSURL *url = [NSURL URLWithString:source];
+      if (![url.scheme isEqualToString:@"https"] || ![url.host isEqualToString:@"bahamut.akamaized.net"]) {
+        result(@NO);
+        return;
+      }
+    }
+    self.downloadDocument = document;
+    self.downloadSources = [NSSet setWithArray:sources];
+    self.downloadItem = nil;
+    self.downloadSourceGeneration = 0;
+    result(@YES);
+  } else if ([call.method isEqualToString:@"sample"]) {
+    if (![self.downloadDocument isEqualToString:document]) {
+      result(nil);
+      return;
+    }
+    long long bytes = 0;
+    for (AVPlayerItemAccessLogEvent *event in self.downloadItem.accessLog.events) {
+      bytes += MAX(0LL, event.numberOfBytesTransferred);
+    }
+    result(@{@"bytes": @(bytes), @"source": @(self.downloadSourceGeneration)});
+  } else if ([call.method isEqualToString:@"stop"]) {
+    if ([self.downloadDocument isEqualToString:document]) {
+      self.downloadDocument = nil;
+      self.downloadSources = nil;
+      self.downloadItem = nil;
+    }
+    result(nil);
+  } else {
+    result(FlutterMethodNotImplemented);
+  }
 }
 
 - (void)installPlaybackControls {

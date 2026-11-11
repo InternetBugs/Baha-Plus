@@ -15,6 +15,7 @@
   let qualityQueue = Promise.resolve(), qualityList = null;
   let lastProgress = null, stalledSince = 0, recoveryAfter = 0, recoveryCount = 0;
   let checkpointRestored = false;
+  let downloadSample = null, downloadBytesPerSecond = 0;
   const text = node => node?.textContent.replace(/\s+/g, ' ').trim() || '';
   const visible = node => !!node && node.getBoundingClientRect().height > 0 &&
     getComputedStyle(node).display !== 'none' && getComputedStyle(node).visibility !== 'hidden' &&
@@ -28,6 +29,22 @@
   function qualityLevels(player) {
     const levels = player?.qualityLevels?.();
     return levels ? Array.from({ length: levels.length }, (_, i) => levels[i]) : [];
+  }
+  function downloadSpeed(c) {
+    const vhs = c.player?.tech?.(true)?.vhs;
+    const bytes = vhs?.stats?.mediaBytesTransferred;
+    const now = window.performance?.now?.() ?? Date.now();
+    if (requiresNative() || !Number.isFinite(bytes) || bytes < 0) {
+      downloadSample = null; downloadBytesPerSecond = 0; return 0;
+    }
+    if (!downloadSample || downloadSample.vhs !== vhs || bytes < downloadSample.bytes ||
+        now < downloadSample.time) {
+      downloadSample = {vhs, bytes, time: now}; downloadBytesPerSecond = 0;
+    } else if (now - downloadSample.time >= 1000) {
+      downloadBytesPerSecond = Math.min(1e12, (bytes - downloadSample.bytes) * 1000 / (now - downloadSample.time));
+      downloadSample = {vhs, bytes, time: now};
+    }
+    return downloadBytesPerSecond;
   }
   const nativeHls = c => !c.player?.tech?.(true)?.vhs && !!nativeQuality?.source(c.player, c.media);
   const requiresNative = () => ['android-exoplayer', 'ios-avplayer', 'windows-mpv'].includes(window.__bahaNativeBackend);
@@ -379,6 +396,7 @@
       paused: c.media?.paused !== false, ended: c.media?.ended === true,
       muted: c.media?.muted === true, buffering: !c.media || c.media.readyState < 3,
       position, duration, buffered, bufferedRanges, rate: c.media?.playbackRate || 1,
+      downloadBytesPerSecond: downloadSpeed(c),
       qualities, quality,
       mediaSource: c.phase === 'content' && !c.player?.tech?.(true)?.vhs
         ? nativeQuality?.source(c.player, c.media) || null : null,

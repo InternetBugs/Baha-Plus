@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 import '../core/models.dart';
 import '../core/playback_state.dart';
 import 'app_diagnostics.dart';
+import 'native_download_speed.dart';
 
 class NativePlaybackSource {
   NativePlaybackSource.fromJson(Json json)
@@ -114,6 +115,8 @@ class NativePlayback extends ChangeNotifier {
   final String document, userAgent;
   final NativePlaybackSource source;
   final void Function(PlaybackState) onState;
+  late final _downloadSpeed = NativeDownloadSpeed(onSpeed: _downloadChanged);
+  double _downloadBytesPerSecond = 0;
   VideoPlayerController? video;
   bool _disposed = false, _active = false, _polling = false, _blocked = false;
   bool _seeking = false;
@@ -163,6 +166,7 @@ class NativePlayback extends ChangeNotifier {
       duration: duration,
       buffered: buffered.clamp(0, duration),
       bufferedRanges: List.unmodifiable(bufferedRanges),
+      downloadBytesPerSecond: _downloadBytesPerSecond,
       rate: value?.playbackSpeed ?? source.rate,
       qualities: source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
       quality: _quality,
@@ -185,6 +189,13 @@ class NativePlayback extends ChangeNotifier {
   };
 
   Future<void> initialize(int preferredQuality) async {
+    _downloadSpeed.setEnabled(_foreground);
+    unawaited(
+      _downloadSpeed.start(document, [
+        source.master.toString(),
+        ...source.variants.values.map((uri) => uri.toString()),
+      ]),
+    );
     _quality = source.variants.containsKey(preferredQuality)
         ? preferredQuality
         : 0;
@@ -192,6 +203,7 @@ class NativePlayback extends ChangeNotifier {
     if (!await _load(_quality, initial: true)) {
       throw StateError('Native media initialization failed');
     }
+    _syncDownloadSampling();
   }
 
   Future<bool> _load(int quality, {bool initial = false}) async {
@@ -357,6 +369,7 @@ class NativePlayback extends ChangeNotifier {
 
   void _changed() {
     if (_disposed) return;
+    _syncDownloadSampling();
     final position = video?.value.position;
     // video_player already publishes its native position every 100ms while
     // playing. Reuse that clock instead of running another platform poll.
@@ -365,6 +378,24 @@ class NativePlayback extends ChangeNotifier {
       _position = position.inMilliseconds / 1000;
     }
     _publish();
+  }
+
+  void _syncDownloadSampling() {
+    final value = state;
+    final sampling =
+        !_disposed &&
+        _foreground &&
+        (value.phase == PlaybackPhase.loading ||
+            (value.phase == PlaybackPhase.content && value.buffering));
+    _downloadSpeed.setEnabled(sampling);
+    if (!sampling) _downloadBytesPerSecond = 0;
+  }
+
+  void _downloadChanged(double speed) {
+    if (_disposed) return;
+    _downloadBytesPerSecond = speed;
+    // Initialization already exposes the loading surface before handoff.
+    if (active || video == null) onState(state);
   }
 
   void _publish() {
@@ -450,6 +481,7 @@ class NativePlayback extends ChangeNotifier {
 
   Future<void> setApplicationActive(bool value) async {
     _foreground = value;
+    _syncDownloadSampling();
     if (!value) await pause();
   }
 
@@ -478,6 +510,7 @@ class NativePlayback extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _downloadSpeed.dispose();
     _generation++;
     final current = video;
     current?.removeListener(_changed);
