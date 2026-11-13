@@ -240,9 +240,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     });
     // Keep both progress displays at the target until the player command has
     // finished. Native seeks publish their new position before completing.
-    await store.controlPlayer('seek', target);
-    if (!mounted || revision != _scrubRevision) return;
-    _cancelScrub();
+    try {
+      await store.controlPlayer('seek', target);
+    } catch (_) {
+      // A failed seek keeps the decoder's actual position.
+    } finally {
+      if (mounted && revision == _scrubRevision) _cancelScrub();
+    }
   }
 
   void _cancelScrub() {
@@ -496,8 +500,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 description: detail.description,
               ),
             ],
-            if (store.playingVideoId != null &&
-                !store.usesNativeHttpPlayback) ...[
+            if (store.playingVideoId != null) ...[
               const SizedBox(height: 28),
               CompactCommentsPreview(
                 key: ValueKey('player-board-${store.playingVideoId}'),

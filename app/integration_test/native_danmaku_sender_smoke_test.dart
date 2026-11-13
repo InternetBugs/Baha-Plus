@@ -28,13 +28,18 @@ void main() {
             reason:
                 'The native test cookie must be available without a WebView',
           );
-          return http.Response(switch (request.url.path) {
-            '/mygather.php' =>
-              '<a class="user-info"><span class="user-id">offline-probe</span></a>',
-            '/ajax/getCSRFToken.php' => 'offline-csrf',
-            '/ajax/danmuSet.php' => '{"sn":91}',
-            _ => throw StateError('Unexpected mocked endpoint'),
-          }, 200);
+          return http.Response(
+            switch (request.url.path) {
+              '/mygather.php' =>
+                '<h2 class="theme-title">我的動畫</h2>'
+                    '<a href="/viewList.php?u=offline-probe">觀看紀錄</a>',
+              '/ajax/getCSRFToken.php' => 'offline-csrf',
+              '/ajax/danmuSet.php' => '{"sn":91}',
+              _ => throw StateError('Unexpected mocked endpoint'),
+            },
+            200,
+            headers: {'content-type': 'text/plain; charset=utf-8'},
+          );
         }),
       );
       try {
@@ -73,6 +78,7 @@ void main() {
         binding.reportData = {
           'nativeCookiePlugin': true,
           'httpOnlyProbeRead': true,
+          'serverRenderedIdentity': true,
           'httpRequestsMocked': requests.length,
           'realNetworkRequests': 0,
           'realPublications': 0,

@@ -15,12 +15,24 @@ class FakeAccountApi extends NativeAccountApi {
   final favoriteRequests = <(String, bool)>[];
 
   @override
-  Future<Json?> fetchAccount({void Function()? checkCurrent}) async {
+  Future<Json?> fetchAccount({
+    void Function()? checkCurrent,
+    String? expectedOwner,
+    void Function(Json profile)? onAuthenticated,
+  }) async {
     accountReads++;
     checkCurrent?.call();
     if (accountLoader == null) throw const CommunityException('unavailable');
     final result = await accountLoader!();
     checkCurrent?.call();
+    if (result?['profile'] case final Json profile) {
+      if (expectedOwner != null &&
+          (profile['id'] as String).toLowerCase() !=
+              expectedOwner.toLowerCase()) {
+        throw const CommunityException('stale');
+      }
+      onAuthenticated?.call(profile);
+    }
     return result;
   }
 

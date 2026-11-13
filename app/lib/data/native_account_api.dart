@@ -5,6 +5,7 @@ import 'package:html/parser.dart' show parse;
 
 import '../core/community.dart';
 import '../core/models.dart';
+import 'official_account_profile.dart';
 import 'official_http_client.dart';
 
 /// Official account, collection and community endpoints, executed in Dart.
@@ -33,25 +34,7 @@ class NativeAccountApi {
         : null;
   }
 
-  static Json? _profile(Document page) {
-    final user = page.querySelector('a.user-info');
-    final id = user?.querySelector('.user-id')?.text.trim();
-    if (id == null || id.isEmpty || id.toLowerCase() == 'guest') {
-      if (page.querySelector('a[href*="user.gamer.com.tw/login.php"]') !=
-          null) {
-        return null;
-      }
-      throw const CommunityException('format');
-    }
-    final img = user?.querySelector('.avatar img');
-    final profile = <String, dynamic>{
-      'id': id,
-      'displayName': user?.querySelector('.user-name')?.text.trim() ?? id,
-      'avatar': _image(img?.attributes['data-src'] ?? img?.attributes['src']),
-    };
-    AccountProfile.fromJson(profile);
-    return profile;
-  }
+  static Json? _profile(Document page) => officialAccountProfile(page);
 
   Future<Json> _requireProfile(
     OfficialHttpSession session,
@@ -69,18 +52,35 @@ class NativeAccountApi {
 
   Future<Json?> fetchAccount({
     void Function()? checkCurrent,
+    String? expectedOwner,
+    void Function(Json profile)? onAuthenticated,
   }) => transport.session((session) async {
-    if (session.cookies.header(_web('/mygather.php')).isEmpty) return null;
+    if (session.cookies.header(_web('/mygather.php')).isEmpty) {
+      if (expectedOwner != null) throw const CommunityException('login');
+      return null;
+    }
     Document page;
     try {
       page = parse(await session.get(_web('/mygather.php')));
     } on CommunityException catch (error) {
-      if (error.code == 'login') return null;
+      if (error.code == 'login' && expectedOwner == null) {
+        await session.revalidate();
+        return null;
+      }
       rethrow;
     }
     final profile = _profile(page);
-    if (profile == null) return null;
+    if (profile == null) {
+      if (expectedOwner != null) throw const CommunityException('login');
+      await session.revalidate();
+      return null;
+    }
     final owner = (profile['id'] as String).toLowerCase();
+    if (expectedOwner != null && expectedOwner.toLowerCase() != owner) {
+      throw const CommunityException('stale');
+    }
+    await session.revalidate();
+    onAuthenticated?.call(profile);
     final favorites = <String, Json>{};
     final visited = <String>{};
     final queue = <Uri>[_web('/mygather.php')];
@@ -230,51 +230,76 @@ class NativeAccountApi {
     required void Function() checkCurrent,
   }) => transport.session((session) async {
     await _requireProfile(session, owner);
+    final selected = await _favoriteButton(session, anime);
+    final arguments = _gather.firstMatch(selected.attributes['onclick']!)!;
+    var confirmed = desired;
+    if (_favoriteSelected(selected) != desired) {
+      final token = (await session.get(_web('/ajax/getCSRFToken.php'))).trim();
+      if (token.isEmpty ||
+          token.length > 500 ||
+          token.contains(RegExp(r'[<>\r\n]'))) {
+        throw const CommunityException('unavailable');
+      }
+      final response = await session.post(
+        _web(desired ? '/ajax/want2play.php' : '/ajax/delgather.php'),
+        {'s': arguments[1]!, 'animeSn': anime.id, 'token': token},
+      );
+      if (desired) {
+        final xml = parse(response);
+        if (xml.querySelector('errmsg') != null ||
+            xml.querySelector('okmsg') == null) {
+          throw const CommunityException('rejected');
+        }
+      } else {
+        // The official handler rejects positive error codes, not every value
+        // other than integer zero. An absent/unknown acknowledgement still
+        // needs the authenticated state read below before confirming success.
+        dynamic error;
+        try {
+          final result = jsonDecode(response);
+          if (result is Json) error = result['error'];
+        } on FormatException {
+          // Empty or changed response formats require a server-state check.
+        }
+        if (error != null && error != false) {
+          final code = error is num
+              ? error
+              : error is String
+              ? num.tryParse(error)
+              : null;
+          if (code == null || !code.isFinite || code > 0) {
+            throw const CommunityException('rejected');
+          }
+        }
+      }
+      confirmed = _favoriteSelected(await _favoriteButton(session, anime));
+    }
+    await _requireProfile(session, owner);
+    await session.revalidate();
+    if (confirmed != desired) throw const CommunityException('rejected');
+  }, checkCurrent: checkCurrent);
+
+  Future<Element> _favoriteButton(
+    OfficialHttpSession session,
+    Anime anime,
+  ) async {
     final doc = parse(
       await session.get(_web('/search.php', {'keyword': anime.title})),
     );
-    Element? selected;
-    RegExpMatch? arguments;
     for (final button in doc.querySelectorAll('[onclick*="toggleGather"]')) {
       final match = _gather.firstMatch(button.attributes['onclick'] ?? '');
-      if (match?[2] == anime.id) {
-        selected = button;
-        arguments = match;
-        break;
-      }
+      if (match?[2] == anime.id) return button;
     }
-    if (selected == null || arguments == null) {
-      throw const CommunityException('unavailable');
-    }
-    final action = selected.attributes['onclick']!;
+    throw const CommunityException('unavailable');
+  }
+
+  bool _favoriteSelected(Element button) {
+    final action = button.attributes['onclick']!;
     final selectedClass = action.contains('btn-is-active')
         ? 'btn-is-active'
         : 'ordered';
-    if (selected.classes.contains(selectedClass) == desired) {
-      await session.revalidate();
-      return;
-    }
-    final token = (await session.get(_web('/ajax/getCSRFToken.php'))).trim();
-    if (token.isEmpty ||
-        token.length > 500 ||
-        token.contains(RegExp(r'[<>\r\n]'))) {
-      throw const CommunityException('unavailable');
-    }
-    final response = await session.post(
-      _web(desired ? '/ajax/want2play.php' : '/ajax/delgather.php'),
-      {'s': arguments[1]!, 'animeSn': anime.id, 'token': token},
-    );
-    if (desired) {
-      final xml = parse(response);
-      if (xml.querySelector('errmsg') != null ||
-          xml.querySelector('okmsg') == null) {
-        throw const CommunityException('rejected');
-      }
-    } else {
-      final result = jsonDecode(response) as Json;
-      if (result['error'] != 0) throw const CommunityException('rejected');
-    }
-  }, checkCurrent: checkCurrent);
+    return button.classes.contains(selectedClass);
+  }
 
   Future<Json> community(
     String action,

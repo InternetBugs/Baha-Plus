@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
 import 'dart:async';
@@ -41,6 +42,7 @@ void main() {
     final disk = MemoryStorage();
     final portal = FakePortal();
     final store = await AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
       metadataApi: FakeMetadata(),
       accountApi: portal.accountApi,
       danmakuSender: DanmakuSendFixture().sender,
@@ -145,7 +147,7 @@ void main() {
         cover: 'https://p2.bahamut.com.tw/10.jpg',
         latestVideoId: '20',
       );
-      await store.play(anime);
+      await playFixture(store, anime);
       final operation = store.operation.id;
       final visits = portal.visited.length;
       portal.communityResponse = commentPageJson(nextPage: 2);
@@ -243,7 +245,7 @@ void main() {
         cover: 'https://p2.bahamut.com.tw/10.jpg',
         latestVideoId: '20',
       );
-      await store.play(anime);
+      await playFixture(store, anime);
       store.playback.value = const PlaybackState(
         phase: PlaybackPhase.advertisement,
         surfaceReady: true,
@@ -266,44 +268,36 @@ void main() {
       portal.communityResponse = {'ok': true, 'id': '91'};
       await store.sendDanmaku('測試', position: 1, color: '#FFD166');
       expect(portal.communityRequests, isEmpty);
-      expect(store.sentDanmaku.single.text, '測試');
-      expect(store.sentDanmaku.single.mode, 'top');
+      expect(store.nativeHttpPlayback!.danmaku.single.text, '測試');
+      expect(store.nativeHttpPlayback!.danmaku.single.mode, 'top');
     },
   );
 
-  test(
-    'danmaku settings survive restart and configure a new player document',
-    () async {
-      final (store, portal, disk) = await setup();
-      await store.setDanmakuSettings(
-        const DanmakuSettings(opacity: .6, top: false),
-      );
-      final restored = await AppStore.create(
-        metadataApi: FakeMetadata(),
-        storage: disk,
-        animeSearch: FakeSearch(),
-      );
-      addTearDown(restored.dispose);
-      expect(restored.danmakuSettings.opacity, .6);
-      expect(restored.danmakuSettings.top, isFalse);
-      const anime = Anime(
-        id: '10',
-        title: '測試',
-        cover: 'https://p2.bahamut.com.tw/10.jpg',
-        latestVideoId: '20',
-      );
-      await store.play(anime);
-      await store.preparePlayerSurface(OfficialSite.video('20'));
-      expect(
-        portal.scripts.any(
-          (s) =>
-              s.contains('"opacity":0.6') &&
-              s.contains('__bahaDanmakuPreferences'),
-        ),
-        isTrue,
-      );
-    },
-  );
+  test('danmaku settings survive restart without browser commands', () async {
+    final (store, portal, disk) = await setup();
+    await store.setDanmakuSettings(
+      const DanmakuSettings(opacity: .6, top: false),
+    );
+    final restored = await AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
+      metadataApi: FakeMetadata(),
+      storage: disk,
+      animeSearch: FakeSearch(),
+    );
+    addTearDown(restored.dispose);
+    expect(restored.danmakuSettings.opacity, .6);
+    expect(restored.danmakuSettings.top, isFalse);
+    const anime = Anime(
+      id: '10',
+      title: '測試',
+      cover: 'https://p2.bahamut.com.tw/10.jpg',
+      latestVideoId: '20',
+    );
+    await playFixture(store, anime);
+    expect(store.danmakuSettings.opacity, .6);
+    expect(store.danmakuSettings.top, isFalse);
+    expect(portal.scripts, isEmpty);
+  });
 
   test(
     'notification read state is scoped to official account and never fabricates update items',
@@ -373,7 +367,9 @@ void main() {
       );
       expect(store.playingAnime?.id, '10');
       expect(store.playingVideoId, '20');
-      expect(portal.visited.last, OfficialSite.video('20'));
+      expect(store.nativeHttpPlayback!.videoId, '20');
+      expect(store.needsOfficialPortal, isFalse);
+      expect(portal.visited, isEmpty);
     },
   );
 }

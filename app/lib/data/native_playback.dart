@@ -100,8 +100,8 @@ class _SeekAwareVideoPlayerController extends VideoPlayerController {
   }
 }
 
-/// AVPlayer/ExoPlayer owns the video texture and actual media clock. The portal
-/// receives numeric state only; media URLs never enter logs or preferences.
+/// AVPlayer/ExoPlayer owns the video texture and actual media clock.
+/// Media URLs never enter logs or preferences.
 class NativePlayback extends ChangeNotifier {
   NativePlayback({
     required this.document,
@@ -120,8 +120,6 @@ class NativePlayback extends ChangeNotifier {
   VideoPlayerController? video;
   bool _disposed = false, _active = false, _polling = false, _blocked = false;
   bool _seeking = false;
-  bool _authorizationAvailable = true;
-  bool _recoverableFailure = false;
   bool _foreground = true;
   int _pauseVersion = 0, _seekRevision = 0;
   int _generation = 0, _quality = 0;
@@ -133,10 +131,6 @@ class NativePlayback extends ChangeNotifier {
 
   bool get active => _active && !_disposed;
   int get seekRevision => _seekRevision;
-  bool get authorizationAvailable => _authorizationAvailable;
-  bool get recoverable =>
-      (!_blocked && _authorizationAvailable) || _recoverableFailure;
-  bool get retryable => !_blocked || _recoverableFailure;
   Future<void> get released => _released;
   int get quality => _quality;
   PlaybackState get state {
@@ -155,7 +149,7 @@ class NativePlayback extends ChangeNotifier {
       }
     }
     return PlaybackState(
-      phase: _blocked || !_authorizationAvailable || value?.hasError == true
+      phase: _blocked || value?.hasError == true
           ? PlaybackPhase.error
           : value?.isInitialized == true
           ? PlaybackPhase.content
@@ -177,19 +171,6 @@ class NativePlayback extends ChangeNotifier {
       danmaku: true,
     );
   }
-
-  Json get clock => {
-    'position': state.position,
-    'duration': state.duration,
-    'buffered': state.buffered,
-    'paused': state.paused,
-    'rate': state.rate,
-    'muted': state.muted,
-    'ended': state.ended,
-    'seeking': _seeking,
-    'videoWidth': video?.value.size.width.round() ?? 0,
-    'videoHeight': video?.value.size.height.round() ?? 0,
-  };
 
   Future<void> initialize(int preferredQuality) async {
     _downloadSpeed.setEnabled(_foreground);
@@ -270,7 +251,6 @@ class NativePlayback extends ChangeNotifier {
         // never send playback back to an already disposed controller.
       }
       if (_active &&
-          _authorizationAvailable &&
           _foreground &&
           pauseVersion == _pauseVersion &&
           !old.paused) {
@@ -315,7 +295,6 @@ class NativePlayback extends ChangeNotifier {
           generation == _generation &&
           previous != null) {
         if (_active &&
-            _authorizationAvailable &&
             _foreground &&
             pauseVersion == _pauseVersion &&
             !old.paused) {
@@ -418,7 +397,6 @@ class NativePlayback extends ChangeNotifier {
     final current = video;
     if (!active ||
         _blocked ||
-        (!_authorizationAvailable && action != 'pause') ||
         current == null ||
         !current.value.isInitialized) {
       return false;
@@ -490,28 +468,6 @@ class NativePlayback extends ChangeNotifier {
     _foreground = value;
     _syncDownloadSampling();
     if (!value) await pause();
-  }
-
-  Future<void> setAuthorizationAvailable(bool available) async {
-    if (_disposed || _blocked || _authorizationAvailable == available) return;
-    _authorizationAvailable = available;
-    // A suspended or temporarily unavailable portal must not destroy the
-    // AVPlayer or its buffer. A successful check restores controls, never play.
-    if (!available) await pause();
-    _publish();
-  }
-
-  Future<void> block({bool committed = false, bool recoverable = false}) async {
-    if (_disposed || _blocked) return;
-    if (committed) _active = true;
-    _blocked = true;
-    _recoverableFailure = recoverable;
-    try {
-      await pause();
-    } catch (_) {
-      // Even a disconnected platform player must expose the retry surface.
-    }
-    _changed();
   }
 
   @override

@@ -67,7 +67,7 @@ jobs:
           flutter pub get --enforce-lockfile
           flutter analyze --no-pub
           flutter test --no-pub
-          flutter test --no-pub --dart-define=BAHA_DIAGNOSTICS=true test/player_session_test.dart test/player_process_recovery_test.dart
+          flutter test --no-pub --dart-define=BAHA_DIAGNOSTICS=true test/native_http_playback_test.dart test/native_playback_test.dart
       - name: Select test version
         id: version
         env:

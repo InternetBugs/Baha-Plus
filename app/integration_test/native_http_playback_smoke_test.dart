@@ -15,7 +15,7 @@ import 'package:integration_test/integration_test.dart';
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'guest HTTP authorization, real ad and native content without WebView',
+    'default HTTP authorization, real ad and native content without WebView',
     (tester) async {
       Future<void> waitFor(
         bool Function() condition, {
@@ -44,7 +44,11 @@ void main() {
       await application.main();
       await waitFor(() => find.byType(AppRoot).evaluate().isNotEmpty);
       final store = tester.widget<AppRoot>(find.byType(AppRoot)).store;
-      expect(store.enableNativeHttpPlayback, isTrue);
+      expect(
+        store.hasAccount,
+        isFalse,
+        reason: 'Use the dedicated guest device',
+      );
       await waitFor(() => !store.updates.checking);
       await tester.pump(const Duration(milliseconds: 500));
       if (find.byType(CupertinoAlertDialog).evaluate().isNotEmpty) {
@@ -67,6 +71,7 @@ void main() {
         ),
       );
       final session = store.nativeHttpPlayback!;
+      expect(session.api.usesDeviceSession, isTrue);
       await waitFor(() => session.needsConsent, session: session);
       noWebView();
       expect(store.needsOfficialPortal, isFalse);
@@ -189,10 +194,12 @@ void main() {
       final report = <String, Object?>{
         'videoId': videoId,
         'guestSession': true,
+        'defaultHttpPlayback': true,
+        'usesNativeCookieStore': session.api.usesDeviceSession,
         'realAdMediaSeconds': adSeconds,
         'watchMediaSeconds': session.watch.total,
-        'acceptedGuestProgress': session.acceptedProgress,
-        'acceptedPeriodicGuestProgress': session.acceptedPeriodicProgress,
+        'acceptedProgress': session.acceptedProgress,
+        'acceptedPeriodicProgress': session.acceptedPeriodicProgress,
         'contentWidth': session.player!.video!.value.size.width,
         'contentHeight': session.player!.video!.value.size.height,
         'quality': session.state.quality,

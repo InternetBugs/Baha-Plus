@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:async';
 import 'package:baha_plus/data/app_store.dart';
@@ -44,6 +45,7 @@ void main() {
     );
     final store = (await tester.runAsync(
       () => AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         metadataApi: FakeMetadata(),
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),

@@ -1,8 +1,9 @@
-# 原生 HTTP 播放实验
+# 原生 HTTP 播放
 
-本轮从 `c6db10f` 建立 `experiment/native-http-playback`，整合 Android TV 项目已验证的
-`nativeApi` 访客播放协议。现已按用户要求合入本地 `main`，实验分支已删除。
-`BAHA_NATIVE_HTTP` 仍默认关闭，普通构建继续使用原有正式播放流程；尚未推送或发布。
+原实现从 `c6db10f` 建立 `experiment/native-http-playback`，移植 Android TV 项目验证过的
+HTTP 播放协议，后合入本地 `main` 并删除实验分支。2026-11-14 按用户要求改为默认播放路径：
+普通构建直接通过 HTTP 完成授权、广告事件、影片源和进度回报，使用原生视频后端解码。
+播放期间不创建隐藏 WebView，也不依赖 JavaScript 时钟桥接。
 
 ## 启用与运行
 
@@ -10,16 +11,26 @@
 
 ```sh
 cd app
-flutter run --dart-define=BAHA_NATIVE_HTTP=true
+flutter run
 ```
 
 iOS 和 Android 使用现有 AVPlayer／ExoPlayer。Windows 派生调试工程还需同时传入
 `--dart-define=BAHA_WINDOWS_NATIVE=true`，并使用已注册 mpv 的 `desktop_main.dart`。
-`BAHA_NATIVE_HTTP` 默认关闭，因此既有构建入口保持原来的会话路径。
+播放统一使用原生 HTTP。`BAHA_NATIVE_HTTP`、`BAHA_ANDROID_NATIVE` 与
+`BAHA_IOS_NATIVE` 旧开关已移除；HTTP 失败显示错误和重试，不再提供网页播放路径。
 
-播放页会明确显示“访客播放实验，不同步账号观看记录”。播放实验建立新的内存访客 Cookie
-容器，不读取 WebView Cookie，也不读取或覆盖登录账号的观看数据。影片编号有效且平台提供
-原生后端时进入 HTTP 路径。官方拒绝、广告异常和网络失败显示重试，不回退网页播放。
+每集播放建立独立内存 Cookie 容器，通过原生 CookieManager 导入应用已有的官方登录会话。
+未登录时按访客协议播放；已登录时向官方授权与进度端点携带账号 Cookie，供官方核验会员
+权益、断点和云端进度。Cookie 不写入资料缓存或日志，也不发送给广告或媒体 CDN。
+账号切换或登出导致设备 Cookie 变化时，旧播放会话在下一次官方请求前停止并提示重试。
+无影片 ID、无原生后端、官方拒绝、广告异常和网络失败均显示明确错误，不回退网页播放。
+家长密码、额外网页挑战及未实现的后续广告安排仍会停止播放；不跳过官方校验。
+
+确认框按官方播放器 `r18` 编号显示完整分级名称和适用群体：普遍级、保护级（含
+6 至未满 12 岁的陪同要求）、辅12级、辅15级、限制级，以及须年龄验证的限制级。
+未知、缺失或格式异常的编号显示“分级待确认”，不默认视为全年龄。简繁文字均能
+自动换行，较窄的播放器允许滚动查看说明和确认按钮。确认提示只保留观看年龄及
+陪同要求，已按用户要求删除“同意观看官方广告”文案。
 
 ## 会话与界面
 
@@ -36,7 +47,7 @@ iOS 和 Android 使用现有 AVPlayer／ExoPlayer。Windows 派生调试工程�
 5. 正片使用设备检查、开始通知、状态回报和进度接口。按实际媒体推进累计每 60 秒回传，
    并在定位、后台和关闭时尝试回报；接近片尾时保留官方 `time=-1` 语义。
 6. 正片开始后异步调用 `/anime/v1/danmu.php?videoSn=…&geo=TW,HK` 读取弹幕。
-   复用本集内存访客会话，把十分之一秒转换成秒，并按官方规则转换滚动／顶部／底部、
+   复用本集内存会话，把十分之一秒转换成秒，并按官方规则转换滚动／顶部／底部、
    小／标准／大字号。HTML 只解析为纯文本，不执行脚本；去重排序后交给现有 Flutter
    弹幕画布，不读取或轮询 WebView 弹幕管理器。
 
@@ -54,18 +65,18 @@ iOS 和 Android 使用现有 AVPlayer／ExoPlayer。Windows 派生调试工程�
 弹幕发送保留画面内的纸飞机入口，支持正文、颜色、位置和字号。未登录时提示先在账号
 页面登录；`NativeDanmakuSender` 仅在用户提交时，通过平台原生 CookieManager 读取应用内
 已有登录 Cookie，独立调用账号页确认身份、获取 CSRF，再原生 POST `/ajax/danmuSet.php`。
-发送使用短期内存 Cookie 容器，不混入访客播放、广告、设备锁或观看进度会话。
+发送使用独立的短期内存 Cookie 容器，不复用播放、广告、设备锁或观看进度的可变会话。
 发送前重新检查账号 Cookie、剧集、正片、前台状态和 60 字节 UTF-8 限制；不自动重发。
 失败保留草稿，收到官方有效 `sn` 后才把自己的弹幕加入原生画布；迟到确认不会写入新集。
 这条路径不通过 JavaScript 获取 Cookie 或执行发送，也不为发送创建隐藏 WebView。
 
-实验播放期间不挂载 `OfficialBrowser` 或隐藏的 `InAppWebView`，不会发送播放器桥接命令。
-自动留言预览、收藏和通知也不会为此创建账号 WebView。公开目录和详情仍使用现有原生读取。
+默认播放期间不挂载 `OfficialBrowser` 或隐藏的 `InAppWebView`，不会发送播放器桥接命令。
+自动留言预览、收藏和通知使用原生 HTTP。公开目录和有影片 ID 的详情使用现有原生读取。
+退出时先回报进度并释放解码器，再原生刷新账号收藏与历史。
 
 ## 账号与社区原生接入
 
-`NativeAccountApi` 与 `OfficialHttpClient` 将下列操作移出 WebView，既有播放路径和
-HTTP 实验路径共用这一实现，不依赖 `BAHA_NATIVE_HTTP` 开关：
+`NativeAccountApi` 与 `OfficialHttpClient` 将下列操作移出 WebView：
 
 - 账号资料、分页收藏与观看记录刷新。观看记录读取 `/anime/v3/history.php`，保留
   断点、已看完状态、下一集和观看时间；接口的影片时长以分钟换算。
@@ -81,21 +92,41 @@ HTTP 实验路径共用这一实现，不依赖 `BAHA_NATIVE_HTTP` 开关：
 报告身份变化，收藏和观看记录由原生客户端独立刷新。没有影片 ID 的作品详情仍保留
 原有 HTML／WebView 入口。
 
+身份解析兼容官方 HTTP 响应没有 JavaScript 用户菜单的情况：从同源
+`/viewList.php?u=…` 链接及账号页标题确认账号，核对重复或冲突身份，不执行页面脚本。
+身份先于收藏和历史同步完成；后续数据失败保留已确认身份及可重试状态。刚收到官方登录
+回调时核对预期账号，短暂 Cookie 读取失败不能把确认的登录清空。普通重定向不作为登出
+信号；仅明确的官方登录跳转、401 或访客响应按未登录处理。弹幕发送共用该身份解析。
+历史与追番页区分登录身份和数据同步状态；已确认身份但同步失败时提供原生重试，
+不会再次要求登录，成功后清除旧同步错误。
+
 原生账号请求仅在当前操作的内存中使用 Cookie，通过平台原生 CookieManager 取得
 应用已有的登录状态。它不创建 WebView，也不执行 JavaScript。请求前核对账号，
 写入前重新检查 Cookie 与当前页面／剧集，登录登出使在途操作失效；收到明确的成功
 回执后不因页面切换将成功误报为失败。wall 写入的 CSRF Cookie 与请求头遵循官网
 协议。凭据不会写入资料缓存或诊断日志。
 
-这条账号数据路径与访客播放隔离。读取账号观看记录已迁移；HTTP 实验播放本身仍以
-访客身份回报进度，因此不会生成登录账号的云端观看记录。传统播放的广告、播放授权、
-进度回传和时钟桥接仍按原有流程运行。两条播放路径的弹幕发送都使用
-`NativeDanmakuSender`，原生画布收到成功回执后显示自己的弹幕。
+账号数据与播放各持有独立内存 Cookie 快照；默认 HTTP 播放现在也导入设备登录会话。
+真实 Android 访客播放和进度回报已经验证，已登录账号的云端进度写回及会员播放仍待
+真实账号验收。弹幕发送使用 `NativeDanmakuSender`，原生画布收到成功回执后
+显示自己的弹幕。
 
-Cookie 仅接受 `ani.gamer.com.tw` 和 `api.gamer.com.tw` 的 HTTPS 会话，支持 parent-domain、
+播放 Cookie 仅接受 `ani.gamer.com.tw` 和 `api.gamer.com.tw` 的 HTTPS 会话，支持 parent-domain、
 host-only、路径、替换和过期。Cookie 不发送给广告配置或媒体 CDN。请求不跟随重定向，
 限制响应大小并支持超时取消。诊断只记录阶段、状态码和数值，不记录 Cookie、设备标识、
 媒体地址或响应正文。
+
+## 旧桥接清理
+
+2026-11-14 按酥鱼要求，在其他窗口已完成原生功能验证的基础上删除旧桥接。
+本次清理不重新运行测试或设备验收。
+
+- 删除旧播放脚本、网页授权后交接解码器、JavaScript 时钟同步、网页弹幕轮询，
+  以及已经由原生接口替代的目录、收藏和社区脚本。
+- 删除旧播放回退开关和仅用于上述桥接的测试入口；保留原生 HTTP、原生解码器与原生界面用例。
+- 删除 iOS 网页 HLS 缓存通道、回环网关和相关构建资源，只保留取消旧版遗留后台下载的迁移处理。
+- 官方 WebView 只保留登录／登出、手动官网浏览和无影片 ID 的详情读取；其消息仅接受
+  当前请求对应的身份与详情事件，拒绝旧播放、收藏及账号集合事件。
 
 ## 验证入口
 
@@ -110,11 +141,11 @@ flutter test integration_test/native_account_smoke_test.dart \
   integration_test/community_smoke_test.dart -d <device> --no-uninstall
 flutter test integration_test/native_http_playback_smoke_test.dart \
   -d <device> --no-uninstall \
-  --dart-define=BAHA_NATIVE_HTTP=true \
   --dart-define=BAHA_DIAGNOSTICS=true
 ```
 
-真实网络测试固定使用独立访客会话，默认影片为 `40190`；可以通过
+真实网络测试使用专用未登录设备，读取真实原生 Cookie 存储并验证默认 HTTP 路径，
+默认影片为 `40190`；可以通过
 `BAHA_HTTP_TEST_VIDEO` 指定其他影片。它验证实际广告、跳过门槛、正片视频尺寸和原生
 时钟推进、暂停、暂停中定位、画质、倍速、应用生命周期通知、至少 60 秒真实媒体推进、
 官方进度回报，以及包括 offstage 在内的 WebView 组件数量为零。
@@ -127,6 +158,8 @@ flutter test integration_test/native_http_playback_smoke_test.dart \
 自动暂停且位置不再推进。此开关需要同时运行宿主检查脚本；测试结束前会断言保持暂停、
 仍为同一个原生播放器。测试只在最终报告打印公共影片编号、画质、时钟和计数。
 本机证据保存在被忽略的 `artifacts/native-http/`。
+
+以下为迁移历史验证记录；当时默认构建尚使用旧桥接路径。
 
 2026-11-13 当前窗口整合验证：
 
@@ -160,7 +193,46 @@ TypeScript、248 条双语资源与差异格式检查均通过。覆盖原生账
 记录见本机 `artifacts/native-account-regression-final.log`、
 `native-account-js-tests-final.log` 与 `native-account-teardown-tests.log`。
 
-2026-11-14 合入本地 `main` 后的模拟器复核：
+2026-11-14 默认 HTTP 切换验证：
+
+- 普通 `AppStore.create` 默认启用 HTTP；影片 ID 缺失、原生后端不可用及会话变更均不会
+  打开播放网页。默认播放器的留言预览、控制和弹幕发送入口通过组件测试。
+- 移除旧网页播放桥接及其专用测试、迁移导航断言，并整合分级适用群体、账号同步界面、
+  取消追番回执修复后，当前完整 Flutter 回归 **494 项通过**，JavaScript **14 项通过**。
+  取消追番专项 41 项及分级界面专项 17 项均包含在完整回归内；Dart 静态分析、
+  TypeScript 与 257 条双语资源检查通过。诊断模式的 HTTP 播放、原生解码和系统音频
+  回执另有 50 项测试通过；不记录原始异常、媒体地址或账号内容。
+- 手机端原先也只接受取消追番回执中的整数 `error: 0`。现与 TV 修复对齐，兼容字符串
+  `"0"`、空值及缺失回执，并从服务器重新读取收藏状态、确认账号与 Cookie 会话后再
+  更新界面。明确错误、服务器未生效和账号变化仍失败；不重复提交请求。验证使用
+  HTTP mock，未真实修改账号收藏。
+- 播放页拖动定位遇到命令异常时会清除预览并恢复实际播放位置；后台暂停与长按倍速
+  恢复在原生 HTTP 路径下通过回归。
+- 可见 Android API 35 模拟器未传入 `BAHA_NATIVE_HTTP=true`，真实影片 `40190` 的广告
+  实际推进 30.030 秒，正片累计推进 65.625 秒，3 次进度回报成功，包含 1 次周期回报。
+  360p、1.5 倍速、暂停、定位和 707 条弹幕读取通过；暂停定位后画布绘制 8 条弹幕。
+- Flutter 组件树（含 offstage）与 Android 运行时均为 **0 个 WebView**。宿主实际按 Home、
+  返回应用后，系统媒体会话保持暂停，位置稳定在 80000 毫秒。
+- 原生 CookieManager 的设备测试确认 HttpOnly Cookie 可直接用于播放授权与进度
+  HTTP mock；更换账号 Cookie 后，旧会话不会发出下一条进度请求。
+- 原生账号设备测试使用不含 JavaScript 用户菜单的官方响应结构，31 个 HTTP mock
+  请求通过；历史失败保留身份，收藏、留言与通知正常，Cookie 变更会阻止旧账号写入。
+  弹幕发送的同类身份结构及原生 HttpOnly Cookie 设备测试通过，真实发布次数为零。
+- 构建未带播放开关的普通 `lib/main.dart` Debug APK，覆盖安装时保留模拟器应用数据。
+  真实已登录账号的会员播放、云端写回和 iPhone 新默认路径仍待对应设备验收。
+- 独立可视化验收从普通首页实际点击《我家的弟弟們真是讓您費心了》第 19 集
+  （影片 `52306`）进入确认、广告与正片，暂停位置为 01:07／23:55；弹幕设置、
+  发送面板、4 则公开留言的完整留言板、时间排序与留言附图通过。18 次运行时采样
+  均为 0 个 WebView，退出后原生媒体会话释放。保留截图与 90 秒录屏；未实际发送内容。
+
+本轮日志与运行时报告位于本机 `artifacts/native-migration-device/`：
+`native-http-final-current-all-tests.log`、`favorite-consent-final-tests.log`、
+`native-http-final-diagnostics-tests.log`、`http-default-device.log`、
+`http-default-runtime.json`、`http-default-cookie-device.log`、
+`http-default-sender-device-final.log` 及 `http-default-visible-agent/result.json`；APK 为
+`artifacts/BahaPlus-native-http-default-debug.apk`。这些本机验收产物不提交。
+
+2026-11-14 合入本地 `main` 后、切换默认 HTTP 之前的模拟器复核：
 
 - Android 15／API 35、x86_64 上原生账号临时 HttpOnly Cookie 与 27 个 mock 请求通过，
   原生弹幕发送设备 mock 通过，未进行真实账号写入或公开发布。
@@ -181,10 +253,10 @@ TypeScript、248 条双语资源与差异格式检查均通过。覆盖原生账
 
 ## 尚未覆盖
 
-此次移植的播放流程保留 TV 实验的访客范围，没有接入登录账号历史和跨设备续播。
-账号观看记录读取和留言已接入独立原生请求；留言、收藏、推嘘及弹幕的真实账号写入
-尚未实测。也不覆盖完整广告
-调度、IMA／互动广告、短广告的后续调度、家长密码和验证码。短于 30 秒且需要后续广告
+默认 HTTP 播放已接入原生登录 Cookie、断点读取及官方进度端点；真实登录账号的会员
+权益、云端记录写回与跨设备续播仍待验收。账号历史读取和社区功能使用独立原生请求；
+留言、收藏、推嘘及弹幕的真实账号写入尚未实测。尚未覆盖完整广告调度、
+IMA／互动广告、短广告的后续调度、家长密码和验证码。短于 30 秒且需要后续广告
 的情况明确报错。
 
 Android 模拟器通过不能代表 iOS 真机、Windows、低端 ARM 电视或完整一集验收。

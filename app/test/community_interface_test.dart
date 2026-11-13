@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:ui' as ui;
 import 'dart:io';
@@ -36,6 +37,7 @@ void main() {
     addTearDown(tester.view.reset);
     final store = (await tester.runAsync(
       () => AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         metadataApi: FakeMetadata(),
         accountApi: portal.accountApi,
         storage: MemoryStorage(),

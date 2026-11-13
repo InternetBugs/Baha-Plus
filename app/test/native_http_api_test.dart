@@ -122,6 +122,169 @@ class HttpFixture {
 }
 
 void main() {
+  for (final values in <(Object?, Object?, int)>[
+    (3, 1, 3),
+    (6, 1, 6),
+    (null, 4, 4),
+    (null, null, 0),
+    (7, 1, 0),
+    (2.5, 1, 0),
+    ('unknown', 1, 0),
+  ]) {
+    test(
+      'official policy rating ${values.$1} and metadata ${values.$2} stay explicit',
+      () async {
+        final fixture = HttpFixture(ads: false);
+        fixture.handler = (request) async {
+          if (request.url.path == '/ajax/token.php') {
+            return http.Response(
+              jsonEncode({'time': 1, if (values.$1 != null) 'r18': values.$1}),
+              200,
+            );
+          }
+          if (request.url.path == '/anime/v1/video.php') {
+            return http.Response(
+              jsonEncode({
+                'data': {
+                  'video': {
+                    'title': 'Sample',
+                    'duration': 24,
+                    if (values.$2 != null) 'rating': values.$2,
+                  },
+                },
+              }),
+              200,
+            );
+          }
+          return fixture.response(request);
+        };
+        final api = fixture.api();
+        addTearDown(api.dispose);
+        expect((await api.prepare('40190')).rating, values.$3);
+      },
+    );
+  }
+
+  test(
+    'native login cookies authorize playback and progress, never media',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      final imported = <NativeHttpCookieJar>[];
+      final api = NativeHttpApi(
+        client: fixture.client,
+        cookieLoader: () async {
+          final jar = NativeHttpCookieJar();
+          jar.receive(
+            Uri.https('ani.gamer.com.tw', '/'),
+            'account=mock-login; Domain=gamer.com.tw; Path=/; Secure; HttpOnly',
+          );
+          imported.add(jar);
+          return jar;
+        },
+      );
+      addTearDown(api.dispose);
+      final prepared = await api.prepare('40190');
+      expect(api.usesDeviceSession, isTrue);
+      expect(prepared.position, 10);
+      api.consent();
+      final source = await api.source();
+      expect(source.position, 10);
+      await api.started();
+      expect(await api.progress(120, 1200), isTrue);
+      for (final request in fixture.requests) {
+        if (request.url.host.endsWith('.gamer.com.tw')) {
+          expect(request.headers['cookie'], contains('account=mock-login'));
+        } else {
+          expect(request.headers['cookie'], isNull);
+        }
+      }
+      api.dispose();
+      for (final jar in imported) {
+        expect(jar.header(NativeHttpApi.cookieURLs.first), isEmpty);
+      }
+    },
+  );
+
+  test(
+    'a changed native login stops the old playback session before writing',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      var owner = 'first-account';
+      final api = NativeHttpApi(
+        client: fixture.client,
+        cookieLoader: () async => NativeHttpCookieJar()
+          ..receive(
+            Uri.https('ani.gamer.com.tw', '/'),
+            'account=$owner; Domain=gamer.com.tw; Path=/; Secure',
+          ),
+      );
+      addTearDown(api.dispose);
+      await api.prepare('40190');
+      api.consent();
+      await api.source();
+      owner = 'another-account';
+      final before = fixture.requests.length;
+      await expectLater(
+        api.progress(120, 1200),
+        throwsA(
+          isA<NativeHttpException>().having(
+            (error) => error.stage,
+            'stage',
+            'session-changed',
+          ),
+        ),
+      );
+      expect(fixture.requests.length, before);
+    },
+  );
+
+  test(
+    'unavailable native cookies fail explicitly instead of playing as guest',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      final api = NativeHttpApi(
+        client: fixture.client,
+        cookieLoader: () async => throw StateError('unavailable'),
+      );
+      addTearDown(api.dispose);
+      await expectLater(
+        api.prepare('40190'),
+        throwsA(
+          isA<NativeHttpException>().having(
+            (error) => error.stage,
+            'stage',
+            'session-unavailable',
+          ),
+        ),
+      );
+      expect(fixture.requests, isEmpty);
+    },
+  );
+
+  test('closing while importing cookies clears the late snapshot', () async {
+    final fixture = HttpFixture(ads: false);
+    final pending = Completer<NativeHttpCookieJar>();
+    final api = NativeHttpApi(
+      client: fixture.client,
+      cookieLoader: () => pending.future,
+    );
+    final prepared = api.prepare('40190');
+    final assertion = expectLater(
+      prepared,
+      throwsA(isA<NativeHttpException>()),
+    );
+    api.dispose();
+    final jar = NativeHttpCookieJar()
+      ..receive(
+        Uri.https('ani.gamer.com.tw', '/'),
+        'account=late-login; Domain=gamer.com.tw; Path=/; Secure',
+      );
+    pending.complete(jar);
+    await assertion;
+    expect(jar.header(NativeHttpApi.cookieURLs.first), isEmpty);
+    expect(fixture.requests, isEmpty);
+  });
+
   test('native danmaku uses the episode guest session after consent', () async {
     final fixture = HttpFixture(ads: false);
     final api = fixture.api();

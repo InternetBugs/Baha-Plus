@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:async';
 
@@ -43,7 +44,7 @@ class _SeekPortal extends FakePortal {
   bool failSeek = false;
 
   @override
-  Future<bool> playerCommand(
+  Future<bool> recordPlayerCommand(
     String document,
     String action,
     double? value,
@@ -114,6 +115,7 @@ void main() {
     addTearDown(tester.view.reset);
     final store = (await tester.runAsync(
       () => AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         metadataApi: FakeMetadata(),
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
@@ -131,13 +133,17 @@ void main() {
       };
     portals.add(portal);
     await store.attach(portal);
-    await store.play(
+    await playFixture(
+      store,
       const Anime(
         id: '10',
         title: 'Test Anime',
         latestVideoId: '20',
         cover: '',
       ),
+
+      onCommand: (action, value) =>
+          portal.recordPlayerCommand(store.operation.id, action, value),
     );
     store.playback.value = state ?? _playback();
     store.setPlayerFullscreen(fullscreen);
@@ -346,9 +352,13 @@ void main() {
               AppLifecycleState.hidden,
             );
           case 'new episode':
-            await store.play(
+            await playFixture(
+              store,
               store.playingAnime!,
               episode: const Episode(id: '21', label: '2'),
+
+              onCommand: (action, value) =>
+                  portal.recordPlayerCommand(store.operation.id, action, value),
             );
             store.playback.value = _playback(position: 10);
           case 'dispose':
@@ -363,7 +373,10 @@ void main() {
         await gesture.up();
         await tester.pump();
         if (interruption == 'advertisement' || interruption == 'background') {
-          expect(portal.commands, [('rate', 2.0)]);
+          expect(portal.commands, [
+            ('rate', 2.0),
+            if (interruption == 'background') ('pause', null),
+          ]);
           if (interruption == 'background') {
             await store.setApplicationActive(true);
             tester.binding.handleAppLifecycleStateChanged(
@@ -379,8 +392,15 @@ void main() {
           portal.commands,
           interruption == 'new episode'
               ? [('rate', 2.0)]
-              : [('rate', 2.0), ('rate', 1.5)],
+              : [
+                  ('rate', 2.0),
+                  if (interruption == 'background') ('pause', null),
+                  ('rate', 1.5),
+                ],
         );
+        if (interruption == 'background') {
+          expect(store.playback.value.paused, isTrue);
+        }
         expect(
           store.playback.value.rate,
           interruption == 'new episode' ? 1 : 1.5,

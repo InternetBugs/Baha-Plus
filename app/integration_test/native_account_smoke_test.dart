@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:baha_plus/core/community.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/native_account_api.dart';
+import 'package:baha_plus/data/native_http_api.dart';
 import 'package:baha_plus/data/official_http_client.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -13,6 +14,7 @@ import 'package:integration_test/integration_test.dart';
 
 import '../test/core_test.dart' show FakeSearch, MemoryStorage;
 import '../test/fake_metadata.dart';
+import '../test/native_http_api_test.dart' show HttpFixture;
 import '../test/native_account_api_test.dart'
     show AccountFixture, accountAnime, nativeError;
 
@@ -21,15 +23,22 @@ void main() {
   testWidgets(
     'native account cookie access, favorites and community writes without WebView',
     (tester) async {
-      await tester.pumpWidget(const CupertinoApp(home: SizedBox()));
+      await tester.pumpWidget(
+        const CupertinoApp(
+          home: CupertinoPageScaffold(
+            child: Center(child: Text('原生 Cookie 與帳號身份回歸\n離線 HTTP 測試')),
+          ),
+        ),
+      );
       final manager = CookieManager.instance();
       final cookieUrl = WebUri('https://ani.gamer.com.tw/');
       const cookieName = 'baha_plus_native_account_probe';
       final fixture = AccountFixture()
         ..owner = 'offline-probe'
+        ..scriptedMenu = false
         ..saved = true;
       final requests = <http.Request>[];
-      var rejectVote = false, changeCookie = false;
+      var rejectVote = false, changeCookie = false, failHistory = false;
       final api = NativeAccountApi(
         transport: OfficialHttpClient(
           client: MockClient((request) async {
@@ -62,6 +71,9 @@ void main() {
             }
             if (rejectVote && request.url.path == '/app/v1/comment_like.php') {
               return http.Response('{"error":"offline-rejection"}', 200);
+            }
+            if (failHistory && request.url.path == '/anime/v3/history.php') {
+              return http.Response('', 503);
             }
             if (request.url.path == '/ajax/want2play.php') {
               fixture.saved = true;
@@ -97,6 +109,13 @@ void main() {
         expect(store.accountProfile?.id, 'offline-probe');
         expect(store.favorites.single.id, accountAnime.id);
         expect(store.history.single.progress, .5);
+        failHistory = true;
+        await store.syncAccount();
+        expect(store.accountProfile?.id, 'offline-probe');
+        expect(store.hasAccount, isTrue);
+        expect(store.accountNeedsRefresh, isTrue);
+        failHistory = false;
+        await store.syncAccount();
         await store.toggleFavorite(accountAnime);
         expect(store.favorites, isEmpty);
         await store.toggleFavorite(accountAnime);
@@ -121,6 +140,61 @@ void main() {
         );
         await store.refreshNotifications();
         expect(store.notifications.single.videoId, '20');
+        final playbackFixture = HttpFixture(ads: false);
+        playbackFixture.handler = (request) async {
+          if (OfficialHttpClient.hosts.contains(request.url.host)) {
+            expect(
+              request.headers['cookie'],
+              contains('$cookieName=offline-probe'),
+            );
+          } else {
+            expect(request.headers['cookie'], isNull);
+          }
+          return playbackFixture.response(request);
+        };
+        final playback = NativeHttpApi(
+          client: playbackFixture.client,
+          cookieLoader: OfficialHttpClient.loadPlaybackCookies,
+        );
+        try {
+          await playback.prepare('40190');
+          playback.consent();
+          expect((await playback.source()).position, 10);
+          await playback.started();
+          expect(await playback.progress(120, 1200), isTrue);
+          await manager.setCookie(
+            url: cookieUrl,
+            name: cookieName,
+            value: 'switched-probe',
+            domain: '.gamer.com.tw',
+            path: '/',
+            isSecure: true,
+            isHttpOnly: true,
+          );
+          final requestCount = playbackFixture.requests.length;
+          await expectLater(
+            playback.progress(180, 1200),
+            throwsA(
+              isA<NativeHttpException>().having(
+                (e) => e.stage,
+                'stage',
+                'session-changed',
+              ),
+            ),
+          );
+          expect(playbackFixture.requests.length, requestCount);
+          await manager.setCookie(
+            url: cookieUrl,
+            name: cookieName,
+            value: 'offline-probe',
+            domain: '.gamer.com.tw',
+            path: '/',
+            isSecure: true,
+            isHttpOnly: true,
+          );
+        } finally {
+          playback.dispose();
+        }
         final before = requests.where((r) => r.method == 'POST').length;
         changeCookie = true;
         await expectLater(
@@ -139,6 +213,10 @@ void main() {
         binding.reportData = {
           'nativeHttpOnlyCookieRead': true,
           'accountHistoryAndFavorites': true,
+          'serverRenderedAccountIdentity': true,
+          'historyFailurePreservesIdentity': true,
+          'nativePlaybackCookieImportAndProgress': true,
+          'nativePlaybackAccountSwitchStopsRequest': true,
           'favoriteAddAndRemove': true,
           'commentsRepliesAndNotifications': true,
           'mockedCommentAndVotes': true,

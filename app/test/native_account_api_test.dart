@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -27,15 +28,19 @@ Matcher nativeError(String code) =>
 
 class AccountFixture {
   String owner = 'reader', cookie = 'session-a';
-  bool saved = false, paginate = false, live = true;
+  bool saved = false, paginate = false, live = true, scriptedMenu = true;
   int cookieReads = 0;
   final requests = <http.Request>[];
   Future<http.Response> Function(http.Request)? handler;
 
-  String profile() =>
-      '''
+  String profile() => scriptedMenu
+      ? '''
 <a class="user-info"><span class="user-id">$owner</span>
 <span class="user-name">讀者</span></a><h2 class="theme-title">我的動畫</h2>
+'''
+      : '''
+<h2 class="theme-title">我的動畫</h2>
+<a href="/viewList.php?u=$owner">觀看紀錄</a>
 ''';
   String card() => '''
 <a class="theme-list-main" href="/animeRef.php?sn=10">
@@ -193,6 +198,127 @@ void main() {
       addTearDown(fixture.api.dispose);
       expect(await fixture.api.fetchAccount(), isNull);
       expect(fixture.requests, isEmpty);
+    },
+  );
+
+  test('HTTP identity is confirmed before optional history finishes', () async {
+    final fixture = AccountFixture()..scriptedMenu = false;
+    addTearDown(fixture.api.dispose);
+    final waiting = Completer<void>(), history = Completer<http.Response>();
+    fixture.handler = (request) async {
+      if (request.url.path == '/anime/v3/history.php') {
+        waiting.complete();
+        return history.future;
+      }
+      return fixture.response(request);
+    };
+    final store = await AppStore.create(
+      storage: MemoryStorage(),
+      metadataApi: FakeMetadata(),
+      animeSearch: FakeSearch(),
+      accountApi: fixture.api,
+    );
+    addTearDown(store.dispose);
+    final reading = store.syncAccount();
+    await waiting.future;
+    expect(store.accountProfile?.id, 'reader');
+    expect(store.hasAccount, isTrue);
+    expect(store.accountLoading, isTrue);
+    expect(store.accountSynced, isFalse);
+    history.complete(http.Response('', 503));
+    await reading;
+    expect(store.accountProfile?.id, 'reader');
+    expect(store.hasAccount, isTrue);
+    expect(store.accountSynced, isFalse);
+    expect(store.accountNeedsRefresh, isTrue);
+    expect(store.notice, store.t('accountSyncError'));
+  });
+
+  test('server identity paginates and syncs without a scripted menu', () async {
+    final fixture = AccountFixture()
+      ..scriptedMenu = false
+      ..saved = true
+      ..paginate = true;
+    addTearDown(fixture.api.dispose);
+    final account = (await fixture.api.fetchAccount())!;
+    expect(account['profile'], containsPair('id', 'reader'));
+    expect(account['favorites'], hasLength(1));
+    expect(account['history'], hasLength(1));
+  });
+
+  test(
+    'unrelated redirects preserve the known account and never follow',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (_) async =>
+          http.Response('', 302, headers: {'location': '/maintenance.php'});
+      final store = await AppStore.create(
+        storage: MemoryStorage(),
+        metadataApi: FakeMetadata(),
+        animeSearch: FakeSearch(),
+        accountApi: fixture.api,
+      );
+      addTearDown(store.dispose);
+      store.accountProfile = AccountProfile.fromJson(nativeProfile);
+      store.accountSynced = true;
+      await store.syncAccount();
+      expect(store.accountProfile?.id, 'reader');
+      expect(store.accountSynced, isTrue);
+      expect(fixture.requests.single.followRedirects, isFalse);
+    },
+  );
+
+  test(
+    'confirmed login survives a temporarily unavailable native session',
+    () async {
+      final api = FakeAccountApi()..accountLoader = () async => null;
+      final store = await AppStore.create(
+        storage: MemoryStorage(),
+        metadataApi: FakeMetadata(),
+        animeSearch: FakeSearch(),
+        accountApi: api,
+      );
+      addTearDown(store.dispose);
+      await store.attach(FakePortal());
+      await store.connectAccount();
+      await store.receive(
+        jsonEncode({
+          'type': 'account-authenticated',
+          'requestId': store.operation.id,
+          'profile': nativeProfile,
+        }),
+        origin: OfficialSite.home,
+        source: OfficialSite.home.resolve('mygather.php'),
+        isMainFrame: true,
+      );
+      expect(store.accountProfile?.id, 'reader');
+      expect(store.hasAccount, isTrue);
+      expect(store.accountNeedsRefresh, isTrue);
+      expect(store.accountSynced, isFalse);
+      expect(store.browserVisible, isFalse);
+      // A subsequent independently confirmed guest refresh can clear identity.
+      await store.syncAccount();
+      expect(store.hasAccount, isFalse);
+    },
+  );
+
+  test(
+    'expected login owner rejects missing cookies or another account',
+    () async {
+      final fixture = AccountFixture()..cookie = '';
+      addTearDown(fixture.api.dispose);
+      await expectLater(
+        fixture.api.fetchAccount(expectedOwner: 'reader'),
+        throwsA(nativeError('login')),
+      );
+      fixture.cookie = 'session-a';
+      fixture.owner = 'another';
+      await expectLater(
+        fixture.api.fetchAccount(expectedOwner: 'reader'),
+        throwsA(nativeError('stale')),
+      );
+      expect(fixture.requests, hasLength(1));
     },
   );
 
@@ -501,6 +627,22 @@ void main() {
   });
 
   test(
+    'a stale unauthorized response cannot clear a newly switched account',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (_) async {
+        fixture.cookie = 'new-account-session';
+        return http.Response('', 401);
+      };
+      await expectLater(
+        fixture.api.fetchAccount(),
+        throwsA(nativeError('stale')),
+      );
+    },
+  );
+
+  test(
     'an earlier account refresh cannot overwrite a confirmed favorite',
     () async {
       final api = FakeAccountApi();
@@ -508,6 +650,7 @@ void main() {
       api.accountLoader = () => pending.future;
       api.favoriteHandler = (_, _) async {};
       final store = await AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         storage: MemoryStorage(),
         metadataApi: FakeMetadata(),
         animeSearch: FakeSearch(),
@@ -534,6 +677,7 @@ void main() {
     () async {
       final fixture = AccountFixture()..saved = true;
       final store = await AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         storage: MemoryStorage(),
         metadataApi: FakeMetadata(),
         animeSearch: FakeSearch(),

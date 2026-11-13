@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'dart:async';
 
 import 'package:baha_plus/core/models.dart';
@@ -79,6 +80,7 @@ void main() {
     FakeAccountApi? accountApi,
   }) async {
     final store = await AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
       storage: storage ?? MemoryStorage(),
       metadataApi: api,
       accountApi: accountApi ?? FakeAccountApi(),
@@ -279,48 +281,6 @@ void main() {
       expect(store.catalogFailed, isFalse);
       expect(api.catalogRequests, 2);
       expect(lifecycle.created, 0);
-    },
-  );
-
-  testWidgets(
-    'playback portal unmounts after media cleanup while native account sync is pending',
-    (tester) async {
-      final api = FakeMetadata()..catalogLoader = () async => _catalog();
-      final pending = Completer<Json?>();
-      final accountApi = FakeAccountApi()..accountLoader = () => pending.future;
-      final store = (await tester.runAsync(
-        () => create(api, accountApi: accountApi),
-      ))!;
-      final lifecycle = _PortalLifecycle();
-      await launch(tester, store, lifecycle);
-      expect(lifecycle.created, 0);
-      await store.play(_anime);
-      await frames(tester);
-      expect(lifecycle.created, 1);
-      expect(lifecycle.portal.visited.single, OfficialSite.video('20'));
-      final closing = store.closeBrowser();
-      await tester.pump();
-      expect(lifecycle.disposed, 1);
-      expect(store.accountLoading, isTrue);
-      expect(store.needsOfficialPortal, isFalse);
-      expect(lifecycle.portal.visited, [OfficialSite.video('20')]);
-      expect(
-        lifecycle.portal.scripts.any(
-          (script) => script.contains('account-authenticated'),
-        ),
-        isFalse,
-      );
-      pending.complete(null);
-      await closing;
-      await frames(tester);
-      expect(lifecycle.disposed, 1);
-      expect(store.needsOfficialPortal, isFalse);
-      await store.play(_anime);
-      await frames(tester);
-      expect(lifecycle.created, 2);
-      expect(lifecycle.portal.visited.last, OfficialSite.video('20'));
-      await store.closeBrowser();
-      await frames(tester);
     },
   );
 }

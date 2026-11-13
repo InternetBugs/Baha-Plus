@@ -21,10 +21,12 @@ class NativeHttpPlayback extends ChangeNotifier {
     this.checkpoint,
     Duration Function()? now,
     NativeHttpApi? api,
+    Future<NativeHttpCookieJar> Function()? cookieLoader,
   }) : _nowOverride = now,
        api =
            api ??
            NativeHttpApi(
+             cookieLoader: cookieLoader,
              onEvent: (stage, code) {
                diagnostics.record('player.http', {
                  'stage': stage,
@@ -83,9 +85,16 @@ class NativeHttpPlayback extends ChangeNotifier {
   int get adSecondsRemaining => max(0, (30 - adWatch.total).ceil());
   bool get isAdvertisement => _ad;
 
-  Future<void> prepare({bool applicationActive = true}) async {
+  Future<void> prepare({
+    bool applicationActive = true,
+    bool nativeBackendAvailable = true,
+  }) async {
     _foreground = applicationActive;
     final revision = ++_revision;
+    if (!nativeBackendAvailable) {
+      _fail(const NativeHttpException('native-backend-unavailable'), revision);
+      return;
+    }
     try {
       final result = await api.prepare(videoId);
       if (!_live(revision)) return;
@@ -382,7 +391,7 @@ class NativeHttpPlayback extends ChangeNotifier {
           if (periodic) acceptedPeriodicProgress++;
           diagnostics.record('player.http-progress', {
             'accepted': true,
-            'guest': true,
+            'deviceSession': api.usesDeviceSession,
             'position': value.position,
           });
         }
@@ -453,7 +462,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     _publish(const PlaybackState(phase: PlaybackPhase.error));
   }
 
-  /// Flush the final guest progress before cancelling this episode's requests.
+  /// Flush the final progress before cancelling this episode's requests.
   Future<void> close() async {
     if (_disposed) return released;
     await player?.pause();

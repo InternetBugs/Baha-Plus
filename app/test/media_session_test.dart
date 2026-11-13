@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -15,18 +16,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'core_test.dart' show FakePortal, FakeSearch, MemoryStorage;
 
 class _MediaPortal extends FakePortal {
-  Completer<void>? release;
-  bool failRelease = false;
-
-  @override
-  Future<dynamic> evaluate(String script) async {
-    final result = await super.evaluate(script);
-    if (script.contains('session.metadata = null')) {
-      await release?.future;
-      if (failRelease) throw StateError('Document destroyed');
-    }
-    return result;
-  }
+  late FakeHttpPlayback session;
+  set release(Completer<void> value) => session.closeGate = value;
+  Completer<void>? get release => session.closeGate;
 }
 
 void main() {
@@ -58,6 +50,7 @@ void main() {
 
   Future<AppStore> playingStore(_MediaPortal portal) async {
     final store = await AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
       metadataApi: FakeMetadata(),
       accountApi: portal.accountApi,
       storage: MemoryStorage(),
@@ -68,7 +61,13 @@ void main() {
       jsonDecode(File('test/fixtures/catalog.json').readAsStringSync()) as Json,
     );
     await store.attach(portal);
-    await store.play(anime);
+    await playFixture(
+      store,
+      anime,
+      onCommand: (action, value) =>
+          portal.recordPlayerCommand(store.operation.id, action, value),
+    );
+    portal.session = store.nativeHttpPlayback! as FakeHttpPlayback;
     // Focus these tests on teardown rather than delayed account sync.
     store.accountNeedsRefresh = false;
     store.updateNavigation(OfficialSite.video('20'), canGoBack: false);
@@ -81,32 +80,30 @@ void main() {
   }
 
   test(
-    'exiting playback unloads web media before releasing iOS Now Playing',
+    'exiting playback releases native media before iOS Now Playing',
     () async {
       final portal = _MediaPortal();
       final store = await playingStore(portal);
-      final document = store.operation.id;
       portal.release = Completer<void>();
       final closing = store.closeBrowser();
       await Future<void>.delayed(Duration.zero);
       expect(calls, isEmpty);
       expect(store.browserVisible, isFalse);
       expect(store.playback.value.paused, isTrue);
-      expect(portal.scripts.last, contains(document));
-      expect(portal.scripts.last, contains('media.removeAttribute(\'src\')'));
-      expect(portal.scripts.last, contains('media.load()'));
+      expect(portal.session.closeGate!.isCompleted, isFalse);
       portal.release!.complete();
       await closing;
       expect(calls.single.method, 'releasePlayback');
       expect(store.operation.intent, BrowserIntent.idle);
 
-      await store.play(
+      await playFixture(
+        store,
         anime,
         episode: const Episode(id: '21', label: '2'),
       );
       expect(store.showsPlayer, isTrue);
       expect(store.playingVideoId, '21');
-      expect(portal.visited.last, OfficialSite.video('21'));
+      expect(portal.visited, isEmpty);
       expect(calls, hasLength(1));
     },
   );
@@ -117,12 +114,10 @@ void main() {
       final portal = _MediaPortal();
       final store = await playingStore(portal);
       await store.setApplicationActive(false);
-      expect(portal.scripts.last, contains('media.pause()'));
-      expect(portal.scripts.last, isNot(contains('media.load()')));
+      expect(portal.scripts.last, contains('"pause"'));
       expect(calls, isEmpty);
       await store.setApplicationActive(true);
-      expect(portal.scripts.last, contains('__bahaMediaSuspended = false'));
-      expect(portal.scripts.last, isNot(contains('.play(')));
+      expect(portal.scripts.last, contains('"pause"'));
       expect(calls, isEmpty);
     },
   );
@@ -156,7 +151,6 @@ void main() {
     expect(response['action'], 'pause');
     expect(response['reason'], 'dispatched');
     expect(portal.scripts.skip(before).single, contains('"pause"'));
-    expect(portal.scripts.last, isNot(contains('media.load()')));
     expect(calls, isEmpty);
     expect(store.browserVisible, isTrue);
     expect(store.showsPlayer, isTrue);
@@ -168,7 +162,8 @@ void main() {
     portal.release = Completer<void>();
     final closing = store.closeBrowser();
     await Future<void>.delayed(Duration.zero);
-    await store.play(
+    await playFixture(
+      store,
       anime,
       episode: const Episode(id: '21', label: '2'),
     );
@@ -178,59 +173,8 @@ void main() {
     expect(calls, isEmpty);
     expect(store.operation.id, next);
     expect(store.showsPlayer, isTrue);
-    expect(portal.visited.last, OfficialSite.video('21'));
+    expect(portal.visited, isEmpty);
   });
-
-  test(
-    'a destroyed web document still releases the iOS system session',
-    () async {
-      final portal = _MediaPortal();
-      final store = await playingStore(portal);
-      portal.failRelease = true;
-      await store.closeBrowser();
-      expect(calls.single.method, 'releasePlayback');
-      expect(store.browserVisible, isFalse);
-    },
-  );
-
-  test(
-    'a hidden player document finishing after exit is also released',
-    () async {
-      final portal = _MediaPortal();
-      final store = await playingStore(portal);
-      await store.closeBrowser();
-      calls.clear();
-      final before = portal.scripts.length;
-      await store.navigationFinished(OfficialSite.video('20'));
-      expect(portal.scripts[before], contains('session.metadata = null'));
-      expect(calls.single.method, 'releasePlayback');
-      expect(store.showsPlayer, isFalse);
-    },
-  );
-
-  test(
-    'a late hidden player is released while account sync is already active',
-    () async {
-      final portal = _MediaPortal();
-      final store = await playingStore(portal);
-      await store.closeBrowser();
-      final pending = Completer<Json?>();
-      portal.accountApi.accountLoader = () => pending.future;
-      final sync = store.syncAccount();
-      expect(store.accountLoading, isTrue);
-      expect(store.operation.intent, BrowserIntent.idle);
-      final navigations = portal.visited.length;
-      calls.clear();
-      final before = portal.scripts.length;
-      await store.navigationFinished(OfficialSite.video('20'));
-      expect(portal.scripts[before], contains('session.metadata = null'));
-      expect(calls.single.method, 'releasePlayback');
-      expect(store.showsPlayer, isFalse);
-      expect(portal.visited.length, navigations);
-      pending.complete(null);
-      await sync;
-    },
-  );
 
   test(
     'an iOS audio session failure does not prevent exiting or reopening',
@@ -243,7 +187,7 @@ void main() {
       final store = await playingStore(portal);
       await store.closeBrowser();
       expect(store.browserVisible, isFalse);
-      await store.play(anime);
+      await playFixture(store, anime);
       expect(store.showsPlayer, isTrue);
     },
   );
@@ -265,7 +209,8 @@ void main() {
       portal.release = Completer<void>();
       final navigation = store.connectAccount();
       await Future<void>.delayed(Duration.zero);
-      await store.play(
+      await playFixture(
+        store,
         anime,
         episode: const Episode(id: '21', label: '2'),
       );
@@ -274,16 +219,19 @@ void main() {
       await navigation;
       expect(calls, isEmpty);
       expect(store.operation.id, next);
-      expect(portal.visited.last, OfficialSite.video('21'));
+      expect(portal.visited, isEmpty);
     },
   );
 
-  test('Android exits unload media without calling the iOS channel', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    final portal = _MediaPortal();
-    final store = await playingStore(portal);
-    await store.closeBrowser();
-    expect(portal.scripts.last, contains('session.metadata = null'));
-    expect(calls, isEmpty);
-  });
+  test(
+    'Android exits release native media without calling the iOS channel',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final portal = _MediaPortal();
+      final store = await playingStore(portal);
+      await store.closeBrowser();
+      expect(portal.visited, isEmpty);
+      expect(calls, isEmpty);
+    },
+  );
 }

@@ -10,8 +10,8 @@ import '../core/models.dart';
 import 'native_http_api.dart';
 
 /// Account HTTP operations import the device's official cookies into memory.
-/// Neither a browser document nor JavaScript is needed. Guest playback keeps
-/// its own cookie jar and never shares this client's mutable session.
+/// Neither a browser document nor JavaScript is needed. Playback imports a
+/// separate snapshot and never shares this client's mutable session.
 class OfficialHttpClient {
   OfficialHttpClient({
     http.Client? client,
@@ -59,10 +59,13 @@ class OfficialHttpClient {
   int _generation = 0;
   bool _disposed = false;
 
-  static Future<NativeHttpCookieJar> loadCookies() async {
+  static Future<NativeHttpCookieJar> loadPlaybackCookies() =>
+      loadCookies(urls: NativeHttpApi.cookieURLs);
+
+  static Future<NativeHttpCookieJar> loadCookies({List<Uri>? urls}) async {
     final jar = NativeHttpCookieJar(allowedHosts: hosts);
     final manager = CookieManager.instance();
-    for (final uri in _cookieURLs) {
+    for (final uri in urls ?? _cookieURLs) {
       for (final cookie in await manager.getCookies(
         url: WebUri(uri.toString()),
       )) {
@@ -174,7 +177,19 @@ class OfficialHttpClient {
           throw const CommunityException('login');
         }
         if (response.statusCode >= 300 && response.statusCode < 400) {
-          throw const CommunityException('login');
+          final location = response.headers['location'];
+          final target = location == null
+              ? null
+              : uri.resolveUri(Uri.parse(location));
+          if (target != null &&
+              target.scheme == 'https' &&
+              target.host == 'user.gamer.com.tw' &&
+              target.port == 443 &&
+              target.userInfo.isEmpty &&
+              target.path == '/login.php') {
+            throw const CommunityException('login');
+          }
+          throw const CommunityException('unavailable');
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
           throw const CommunityException('unavailable');

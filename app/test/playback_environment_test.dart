@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:async';
 import 'package:baha_plus/core/models.dart';
@@ -13,7 +14,7 @@ class _PlaybackPortal extends FakePortal {
   Future<bool> Function(String, String, double?)? onPlayerCommand;
 
   @override
-  Future<bool> playerCommand(
+  Future<bool> recordPlayerCommand(
     String document,
     String action,
     double? value,
@@ -21,7 +22,7 @@ class _PlaybackPortal extends FakePortal {
     if (onPlayerCommand != null) {
       return onPlayerCommand!(document, action, value);
     }
-    return super.playerCommand(document, action, value);
+    return super.recordPlayerCommand(document, action, value);
   }
 }
 
@@ -46,19 +47,24 @@ void main() {
       return null;
     });
     store = await AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
       metadataApi: FakeMetadata(),
       storage: MemoryStorage(),
       animeSearch: FakeSearch(),
     );
     portal = _PlaybackPortal();
     await store.attach(portal);
-    await store.play(
+    await playFixture(
+      store,
       const Anime(
         id: '10',
         title: 'Test Anime',
         cover: 'https://p2.bahamut.com.tw/10.jpg',
         latestVideoId: '20',
       ),
+
+      onCommand: (action, value) =>
+          portal.recordPlayerCommand(store.operation.id, action, value),
     );
     store.playback.value = const PlaybackState(
       phase: PlaybackPhase.content,
@@ -293,7 +299,8 @@ void main() {
       portal.onPlayerCommand = (_, _, _) => finished.future;
       final pending = remote('pause', requestId: 47);
       await flush();
-      await store.play(
+      await playFixture(
+        store,
         const Anime(
           id: '10',
           title: 'Test Anime',
@@ -301,6 +308,9 @@ void main() {
           latestVideoId: '20',
         ),
         episode: const Episode(id: '21', label: '2'),
+
+        onCommand: (action, value) =>
+            portal.recordPlayerCommand(store.operation.id, action, value),
       );
       finished.complete(true);
       final receipt = await pending as Map;
@@ -353,14 +363,16 @@ void main() {
       final receipt =
           await remote('pause', requestId: 50, source: 'audio-interruption')
               as Map;
-      expect(receipt['stateMatches'], isFalse);
+      expect(receipt['accepted'], isFalse);
+      expect(receipt['reason'], 'command-error');
+      expect(receipt['stateMatches'], isNull);
       final enabled = const bool.fromEnvironment('BAHA_DIAGNOSTICS');
       expect(getLast()['diagnostics'], enabled);
       if (enabled) {
         expect(messages, hasLength(1));
         expect(messages.single, contains('"source":"audio-interruption"'));
         expect(messages.single, contains('"requestId":50'));
-        expect(messages.single, contains('"stateMatches":false'));
+        expect(messages.single, contains('"reason":"command-error"'));
         expect(messages.single, isNot(contains(store.operation.id)));
         expect(messages.single, isNot(contains('secret')));
         expect(messages.single, isNot(contains('signed.invalid')));

@@ -9,8 +9,9 @@ import '../core/community.dart';
 import '../core/models.dart';
 import '../core/native_danmaku.dart';
 import 'native_http_api.dart';
+import 'official_account_profile.dart';
 
-/// An explicit account write, isolated from the guest playback HTTP client.
+/// An explicit account write with its own short-lived account HTTP client.
 /// Cookies are read through the native plugin, without mounting a WebView.
 class NativeDanmakuSender {
   NativeDanmakuSender({
@@ -107,11 +108,8 @@ class NativeDanmakuSender {
       }
       final fingerprint = _fingerprint(cookies);
       final page = parse(await _request(_account, cookies, videoId));
-      final actualOwner = page
-          .querySelector('a.user-info .user-id')
-          ?.text
-          .trim();
-      if (actualOwner == null || !_owner.hasMatch(actualOwner)) {
+      final actualOwner = officialAccountProfile(page)?['id'] as String?;
+      if (actualOwner == null) {
         throw const CommunityException('login');
       }
       if (actualOwner.toLowerCase() != owner.toLowerCase()) {

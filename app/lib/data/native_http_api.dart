@@ -41,8 +41,8 @@ class NativeHttpPreparation {
   final NativeHttpAd? ad;
 }
 
-/// Closed-origin, in-memory cookies. Guest playback and account submissions
-/// each own a separate jar; the playback jar never imports browser cookies.
+/// Closed-origin, in-memory cookies. Playback and account operations each own
+/// a separate snapshot; cookies are never sent to advertising or media hosts.
 class NativeHttpCookieJar {
   NativeHttpCookieJar({
     Set<String> allowedHosts = const {'ani.gamer.com.tw', 'api.gamer.com.tw'},
@@ -120,14 +120,16 @@ class NativeHttpCookieJar {
   void clear() => _cookies.clear();
 }
 
-/// Port of the Android TV nativeApi experiment's official web HTTP protocol.
-/// Each episode owns an isolated guest session, including ads and device IDs.
+/// Official web HTTP playback protocol. Each episode owns its own cookies,
+/// ads and device ID, optionally seeded from the device's native login store.
 class NativeHttpApi {
   NativeHttpApi({
     http.Client? client,
     this.timeout = const Duration(seconds: 15),
     this.onEvent,
-  }) : _client = client ?? http.Client();
+    Future<NativeHttpCookieJar> Function()? cookieLoader,
+  }) : _client = client ?? http.Client(),
+       _cookieLoader = cookieLoader;
 
   static const userAgent =
       'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
@@ -135,7 +137,16 @@ class NativeHttpApi {
   final http.Client _client;
   final Duration timeout;
   final void Function(String stage, int? code)? onEvent;
-  final _cookies = NativeHttpCookieJar();
+  final Future<NativeHttpCookieJar> Function()? _cookieLoader;
+  static final cookieURLs = List<Uri>.unmodifiable([
+    Uri.https('ani.gamer.com.tw', '/animeVideo.php'),
+    Uri.https('ani.gamer.com.tw', '/ajax/elapse.php'),
+    Uri.https('api.gamer.com.tw', '/anime/v1/video.php'),
+    Uri.https('api.gamer.com.tw', '/anime/v1/video_src.php'),
+  ]);
+  NativeHttpCookieJar _cookies = NativeHttpCookieJar();
+  String? _deviceCookieFingerprint;
+  bool get usesDeviceSession => _cookieLoader != null;
   final _requests = <Completer<void>>{};
   bool _disposed = false, _consented = false, _adStarted = false;
   bool _adEnded = false;
@@ -147,6 +158,22 @@ class NativeHttpApi {
       throw const NativeHttpException('video-id');
     }
     _video = videoId;
+    if (_cookieLoader != null) {
+      NativeHttpCookieJar? imported;
+      try {
+        imported = await _cookieLoader().timeout(timeout);
+        if (_disposed) throw const NativeHttpException('disposed');
+        _deviceCookieFingerprint = _fingerprint(imported);
+        _cookies.clear();
+        _cookies = imported;
+      } on NativeHttpException {
+        rethrow;
+      } catch (_) {
+        throw const NativeHttpException('session-unavailable');
+      } finally {
+        if (imported != _cookies) imported?.clear();
+      }
+    }
     await _text('page', _web('/animeVideo.php', {'sn': _video}));
     _device = _deviceId(
       (await _json('device', _web('/ajax/getdeviceid.php')))['deviceid'],
@@ -187,10 +214,19 @@ class NativeHttpApi {
     }
     double number(dynamic raw) =>
         raw is num && raw.isFinite && raw >= 0 ? raw.toDouble() : 0;
+    final rawRating = policy['r18'] ?? video['rating'];
+    final rating =
+        rawRating is num &&
+            rawRating.isFinite &&
+            rawRating >= 1 &&
+            rawRating <= 6 &&
+            rawRating == rawRating.roundToDouble()
+        ? rawRating.toInt()
+        : 0;
     final breakpoint = video['breakpoint'];
     return _preparation = NativeHttpPreparation(
       title: video['title'] as String,
-      rating: (policy['r18'] as num? ?? video['rating'] as num? ?? 1).toInt(),
+      rating: rating,
       position: number(breakpoint is Json ? breakpoint['breakPoint'] : null),
       duration: number(video['duration']),
       ad: ad,
@@ -311,7 +347,7 @@ class NativeHttpApi {
     );
   }
 
-  /// Official API units differ from the already formatted WebView bridge:
+  /// Normalize the units returned by the official API:
   /// time is in tenths of a second, size/position are enum values, text is HTML.
   static List<NativeDanmaku> parseDanmaku(Json response) {
     final data = response['data'];
@@ -469,6 +505,26 @@ class NativeHttpApi {
   Uri _api(String path, Map<String, String> query) =>
       Uri.https('api.gamer.com.tw', path, query);
 
+  static String _fingerprint(NativeHttpCookieJar cookies) => cookieURLs
+      .map((uri) {
+        final values = cookies.header(uri).split('; ')..sort();
+        return values.join('; ');
+      })
+      .join('\n');
+
+  Future<void> _checkDeviceSession() async {
+    if (_cookieLoader == null) return;
+    final current = await _cookieLoader();
+    try {
+      if (_disposed) throw const NativeHttpException('disposed');
+      if (_fingerprint(current) != _deviceCookieFingerprint) {
+        throw const NativeHttpException('session-changed');
+      }
+    } finally {
+      current.clear();
+    }
+  }
+
   Future<Json> _json(String stage, Uri uri) async {
     final text = await _text(stage, uri);
     try {
@@ -535,6 +591,10 @@ class NativeHttpApi {
     _requests.add(abort);
     try {
       return await (() async {
+        if (uri.host == 'ani.gamer.com.tw' || uri.host == 'api.gamer.com.tw') {
+          await _checkDeviceSession();
+        }
+        if (_disposed) throw const NativeHttpException('disposed');
         final request = http.AbortableRequest(
           'GET',
           uri,
@@ -592,6 +652,7 @@ class NativeHttpApi {
     _client.close();
     _cookies.clear();
     _device = '';
+    _deviceCookieFingerprint = null;
   }
 }
 

@@ -1,5 +1,9 @@
 # iOS 原生播放迁移
 
+2026-11-14 起，播放统一使用[原生 HTTP 播放](native-http-playback.md)，旧 WebView
+播放、网页授权后原生接管及其回退开关已经删除。本文作为迁移历史记录保留，
+以下旧实现说明和构建命令不适用于当前代码；iPhone 新路径的真机验收边界见原生 HTTP 文档。
+
 本迁移在 `codex/ios-native-player` 分支进行，基于 Android 原生播放分支的 `42531bb`。本轮先完成代码迁移和 Windows 离线验证，iPhone 实播由维护者后续验收。
 
 2026-11-09 的 Profile 包自由观看反馈、采样范围和待处理项见[实机问题记录](ios-native-player-device-test-2026-11-09.md)。该记录保留了未验证的候选原因，不能视为完整验收通过。

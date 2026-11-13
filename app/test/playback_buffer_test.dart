@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:ui' as ui;
 
@@ -57,7 +58,7 @@ void main() {
     },
   );
 
-  test('invalid buffered interval payloads are rejected at the bridge', () {
+  test('invalid buffered interval payloads are rejected', () {
     for (final ranges in <dynamic>[
       '0-80',
       [30],
@@ -249,6 +250,7 @@ void main() {
       addTearDown(tester.view.reset);
       final store = (await tester.runAsync(
         () => AppStore.create(
+          nativeHttpApiFactory: PendingNativeHttpApi.new,
           metadataApi: FakeMetadata(),
           storage: MemoryStorage(),
           animeSearch: FakeSearch(),
@@ -262,7 +264,7 @@ void main() {
         latestVideoId: '20',
         cover: '',
       );
-      await store.play(anime);
+      await playFixture(store, anime);
       store.playback.value = PlaybackState.fromJson(_json());
       await tester.pumpWidget(
         LiquidGlassWidgets.wrap(
@@ -293,7 +295,8 @@ void main() {
       await tester.pump();
       expect(track, findsOneWidget);
       expect(tester.widget<BufferedPlaybackTrack>(track).state.buffered, 95);
-      await store.play(
+      await playFixture(
+        store,
         anime,
         episode: const Episode(id: '21', label: '2'),
       );

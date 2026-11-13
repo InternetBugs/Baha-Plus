@@ -173,12 +173,11 @@ void main() {
   }
 
   test(
-    'preserves raw messages so the shared request verifies nonce, type, series and target',
+    'preserves raw messages so detail requests verify nonce, type and series',
     () async {
       final request = BrowserRequest(
-        intent: BrowserIntent.favorite,
+        intent: BrowserIntent.detail,
         animeId: '10',
-        favoriteTarget: true,
       );
       final received = <String>[];
       final accepted = <Json>[];
@@ -194,16 +193,14 @@ void main() {
       });
       final body = {
         'requestId': request.id,
-        'type': 'favorite-complete',
+        'type': 'detail-error',
         'id': '10',
-        'saved': true,
       };
       final messages = [
         ' \n${jsonEncode(body)}\t ',
         jsonEncode({...body, 'requestId': 'expired'}),
         jsonEncode({...body, 'type': 'account-synced'}),
         jsonEncode({...body, 'id': '11'}),
-        jsonEncode({...body, 'saved': false}),
         '{"type":"favorite-complete","id":"10","saved":true}',
         'not JSON',
       ];
@@ -220,7 +217,7 @@ void main() {
   test(
     'the shared request still rejects oversized UTF-8 payloads below the helper character limit',
     () async {
-      final request = BrowserRequest(intent: BrowserIntent.accountRefresh);
+      final request = BrowserRequest(intent: BrowserIntent.account);
       final received = <String>[];
       final accepted = <Json>[];
       final platform = await _attach((raw) {

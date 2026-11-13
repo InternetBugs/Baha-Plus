@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'fake_account.dart';
 import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
@@ -33,6 +34,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = (await tester.runAsync(
       () => AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         metadataApi: FakeMetadata(),
         accountApi: FakeAccountApi()
           ..communityResponse = {
@@ -323,8 +325,9 @@ void main() {
       final navigations = portal.visited.length;
       await tester.tap(find.byKey(const ValueKey('history-play-10')));
       await frames(tester);
-      expect(portal.visited.length, navigations + 1);
-      expect(portal.visited.last, OfficialSite.video('20'));
+      expect(portal.visited.length, navigations);
+      expect(store.nativeHttpPlayback!.videoId, '20');
+      expect(store.needsOfficialPortal, isFalse);
       expect(tester.takeException(), isNull);
       store.detach(portal);
     },
@@ -754,7 +757,12 @@ void main() {
         cover: 'https://p2.bahamut.com.tw/10.jpg',
         latestVideoId: '20',
       );
-      await store.play(anime);
+      await playFixture(
+        store,
+        anime,
+        onCommand: (action, value) =>
+            portal.recordPlayerCommand(store.operation.id, action, value),
+      );
       store.playerDetail = AnimeDetail.fromJson({
         'title': 'Test Anime',
         'description': 'Synopsis',
@@ -778,26 +786,26 @@ void main() {
         ),
       );
       await frames(tester);
-      Future<void> state(String phase) => store.receive(
-        jsonEncode({
-          'type': 'player-state',
-          'requestId': store.operation.id,
-          'id': '10',
-          'videoId': '20',
-          'phase': phase,
-          'surfaceReady': true,
-          'paused': false,
-          'buffering': false,
-          'ended': false,
-          'muted': false,
-          'position': 37,
-          'duration': 1200,
-          'buffered': 90,
-          'rate': 1,
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.video('20'),
-        isMainFrame: true,
+      Future<void> state(String phase) => Future<void>.sync(
+        () => store.updateNativePlayback(
+          store.operation.id,
+          PlaybackState.fromJson({
+            'type': 'player-state',
+            'requestId': store.operation.id,
+            'id': '10',
+            'videoId': '20',
+            'phase': phase,
+            'surfaceReady': true,
+            'paused': false,
+            'buffering': false,
+            'ended': false,
+            'muted': false,
+            'position': 37,
+            'duration': 1200,
+            'buffered': 90,
+            'rate': 1,
+          }),
+        ),
       );
       await state('content');
       await frames(tester);
@@ -829,7 +837,7 @@ void main() {
       await frames(tester);
       await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
       await frames(tester);
-      expect(store.sentDanmaku.single.text, '測試彈幕');
+      expect(store.nativeHttpPlayback!.danmaku.single.text, '測試彈幕');
       expect(portal.communityRequests, isEmpty);
       expect(find.text('測試彈幕'), findsNothing);
       await tester.tap(find.bySemanticsLabel(store.t('close')).last);
@@ -860,18 +868,13 @@ void main() {
       expect(portal.scripts.last, contains('"pause"'));
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
       await frames(tester);
-      expect(
-        portal.scripts.last,
-        contains('window.__bahaMediaSuspended = true'),
-      );
+      expect(store.applicationActive, isFalse);
+      expect(portal.scripts.last, contains('"pause"'));
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await frames(tester);
-      expect(
-        portal.scripts.last,
-        contains('window.__bahaMediaSuspended = false'),
-      );
-      expect(portal.scripts.last, isNot(contains('.play(')));
+      expect(store.applicationActive, isTrue);
+      expect(portal.scripts.last, contains('"pause"'));
       await state('advertisement');
       await frames(tester);
       final before = portal.scripts.length;
@@ -941,7 +944,10 @@ void main() {
       expect(store.browserVisible, isTrue);
       await tester.tap(find.text('2'));
       await frames(tester);
-      expect(portal.visited.last, OfficialSite.video('21'));
+      expect(store.nativeHttpPlayback!.videoId, '21');
+      expect(store.playingVideoId, '21');
+      expect(store.needsOfficialPortal, isFalse);
+      expect(portal.visited, isEmpty);
       expect(store.playerDetail!.episodes.length, 2);
       expect(tester.takeException(), isNull);
       store.detach(portal);
@@ -953,13 +959,17 @@ void main() {
     final store = await launch(tester);
     final portal = FakePortal();
     await store.attach(portal);
-    await store.play(
+    await playFixture(
+      store,
       const Anime(
         id: '10',
         title: 'Test Anime',
         cover: 'https://p2.bahamut.com.tw/10.jpg',
         latestVideoId: '20',
       ),
+
+      onCommand: (action, value) =>
+          portal.recordPlayerCommand(store.operation.id, action, value),
     );
     store.playback.value = const PlaybackState(
       phase: PlaybackPhase.content,
@@ -1043,13 +1053,17 @@ void main() {
         final store = await launch(tester);
         final portal = FakePortal();
         await store.attach(portal);
-        await store.play(
+        await playFixture(
+          store,
           const Anime(
             id: '10',
             title: 'Test Anime',
             cover: 'https://p2.bahamut.com.tw/10.jpg',
             latestVideoId: '20',
           ),
+
+          onCommand: (action, value) =>
+              portal.recordPlayerCommand(store.operation.id, action, value),
         );
         store.playback.value = const PlaybackState(
           phase: PlaybackPhase.content,
@@ -1099,13 +1113,17 @@ void main() {
       final store = await launch(tester);
       final portal = FakePortal();
       await store.attach(portal);
-      await store.play(
+      await playFixture(
+        store,
         const Anime(
           id: '10',
           title: 'Test Anime',
           cover: 'https://p2.bahamut.com.tw/10.jpg',
           latestVideoId: '20',
         ),
+
+        onCommand: (action, value) =>
+            portal.recordPlayerCommand(store.operation.id, action, value),
       );
       Navigator.of(tester.element(find.byType(AppRoot))).push(
         CupertinoPageRoute<void>(
@@ -1190,13 +1208,17 @@ void main() {
           'comments': <Json>[],
         };
       await store.attach(portal);
-      await store.play(
+      await playFixture(
+        store,
         const Anime(
           id: '10',
           title: 'Test Anime',
           cover: 'https://p2.bahamut.com.tw/10.jpg',
           latestVideoId: '20',
         ),
+
+        onCommand: (action, value) =>
+            portal.recordPlayerCommand(store.operation.id, action, value),
       );
       var officialTaps = 0;
       Navigator.of(tester.element(find.byType(AppRoot))).push(

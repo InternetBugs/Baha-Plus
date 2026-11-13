@@ -271,7 +271,7 @@ void main() {
   );
 
   test(
-    'background activation stays paused and a policy rejection stops commands',
+    'background activation stays paused and rejects play commands',
     () async {
       final native = create();
       await native.initialize(0);
@@ -280,11 +280,10 @@ void main() {
         timeline: {'position': 30, 'paused': false, 'rate': 1, 'muted': false},
       );
       expect(native.state.paused, isTrue);
-      await native.command('play', null);
-      await native.block();
-      expect(native.state.paused, isTrue);
-      expect(native.state.phase.name, 'error');
       expect(await native.command('play', null), isFalse);
+      expect(native.state.paused, isTrue);
+      await native.setApplicationActive(true);
+      expect(native.state.paused, isTrue);
       native.dispose();
     },
   );
@@ -351,44 +350,6 @@ void main() {
       expect(await native.command('quality', 1080), isTrue);
       expect(native.state.buffered, 0);
       expect(native.state.bufferRanges, isEmpty);
-    },
-  );
-
-  test(
-    'temporary portal unavailability preserves the player and buffer and recovers paused',
-    () async {
-      final native = create();
-      await native.initialize(0);
-      await native.activate(
-        applicationActive: true,
-        timeline: {'position': 42, 'paused': false, 'rate': 1, 'muted': false},
-      );
-      final controller = native.video!;
-      controller.value = controller.value.copyWith(
-        buffered: [
-          DurationRange(
-            const Duration(seconds: 30),
-            const Duration(seconds: 120),
-          ),
-        ],
-      );
-      await native.setAuthorizationAvailable(false);
-      expect(native.state.phase.name, 'error');
-      expect(native.state.paused, isTrue);
-      expect(await native.command('play', null), isFalse);
-      await native.setApplicationActive(false);
-      await native.setApplicationActive(true);
-      await native.setAuthorizationAvailable(true);
-      expect(identical(native.video, controller), isTrue);
-      expect(native.state.phase.name, 'content');
-      expect(native.state.paused, isTrue);
-      expect(native.state.position, 42);
-      expect(native.state.buffered, 120);
-      expect(platform.sources, hasLength(1));
-      expect(platform.released, isEmpty);
-      expect(platform.playCalls, [0]);
-      expect(await native.command('play', null), isTrue);
-      native.dispose();
     },
   );
 
@@ -469,7 +430,6 @@ void main() {
           final targetTime = Duration(milliseconds: (target * 1000).round());
           expect(native.video!.value.position, targetTime);
           expect(native.state.position, target);
-          expect(native.clock['position'], target);
           expect(native.state.paused, paused);
 
           final lateNotifications = <double>[];
@@ -483,7 +443,6 @@ void main() {
           // target. Guarding only NativePlayback._samplePosition is insufficient.
           expect(native.video!.value.position, targetTime);
           expect(native.state.position, target);
-          expect(native.clock['position'], target);
           expect(native.seekRevision, revision + 1);
           expect(native.state.paused, paused);
           expect(lateNotifications, isEmpty);
@@ -511,7 +470,6 @@ void main() {
       final seeking = native.command('seek', 100);
       await tester.pump();
       final queries = platform.positionQueries;
-      expect(native.clock['seeking'], isTrue);
       expect(native.state.position, 100);
       await tester.pump(const Duration(milliseconds: 400));
       expect(platform.positionQueries, queries);
@@ -519,7 +477,6 @@ void main() {
       expect(platform.positionQueries, queries);
       held.complete();
       expect(await seeking, isTrue);
-      expect(native.clock['seeking'], isFalse);
       expect(native.video!.value.position, const Duration(seconds: 100));
       expect(await native.video!.position, const Duration(seconds: 100));
     }),

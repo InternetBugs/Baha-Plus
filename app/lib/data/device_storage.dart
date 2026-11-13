@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../core/browser_request.dart';
 import '../core/models.dart';
 
 abstract interface class DeviceStorage {
@@ -39,7 +38,7 @@ class CatalogCache {
   }
 }
 
-/// A display-only snapshot. Authentication stays in the native WebView.
+/// A display-only snapshot. Authentication stays in the native Cookie store.
 class AccountCache {
   AccountCache(this.storage);
   final DeviceStorage storage;
@@ -50,17 +49,23 @@ class AccountCache {
       final raw = await storage.read(key);
       if (raw == null || utf8.encode(raw).length >= 5000000) return null;
       final snapshot = jsonDecode(raw) as Json;
-      final request = BrowserRequest(intent: BrowserIntent.accountRefresh);
-      return request.accept(
-        jsonEncode({
-          ...snapshot,
-          'type': 'account-synced',
-          'requestId': request.id,
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: true,
-      );
+      if (snapshot['profile'] != null) {
+        AccountProfile.fromJson(snapshot['profile'] as Json);
+      }
+      final favorites = (snapshot['favorites'] as List)
+          .map((item) => Anime.fromJson(item as Json))
+          .toList();
+      final history = (snapshot['history'] as List)
+          .map((item) => WatchEntry.fromJson(item as Json))
+          .toList();
+      if (favorites.length > 10000 ||
+          favorites.map((item) => item.id).toSet().length != favorites.length ||
+          history.length > 1000 ||
+          history.map((item) => item.anime.id).toSet().length !=
+              history.length) {
+        return null;
+      }
+      return snapshot;
     } catch (_) {
       return null;
     }

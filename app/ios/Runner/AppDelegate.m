@@ -4,11 +4,11 @@
 #import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <math.h>
-#import "Runner-Swift.h"
 
-@interface AppDelegate ()
+@interface AppDelegate () <NSURLSessionDelegate>
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
-@property(nonatomic, strong) FlutterMethodChannel *playbackCacheChannel;
+@property(nonatomic, strong) NSURLSession *retiredPlaybackDownloads;
+@property(nonatomic, copy) void (^retiredPlaybackCompletion)(void);
 @property(nonatomic, strong) FlutterMethodChannel *playbackEnvironmentChannel;
 @property(nonatomic, strong) FlutterMethodChannel *playbackDownloadChannel;
 @property(nonatomic, copy) NSString *downloadDocument;
@@ -29,10 +29,7 @@
 @implementation AppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-  // Cancel transfers left by older builds even when this session uses native
-  // playback and never opens the optional WebView cache channel.
-  [[PlaybackCache shared] setApplicationActive:
-      application.applicationState != UIApplicationStateBackground];
+  [self retirePlaybackDownloads];
   [NSNotificationCenter.defaultCenter addObserver:self
       selector:@selector(audioSessionInterrupted:)
       name:AVAudioSessionInterruptionNotification object:nil];
@@ -92,27 +89,6 @@
     };
     result(nil);
   }];
-  self.playbackCacheChannel =
-      [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/hls_cache"
-                                 binaryMessenger:registrar.messenger];
-  [self.playbackCacheChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
-    NSDictionary *arguments = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
-    if ([call.method isEqualToString:@"prepare"]) {
-      [[PlaybackCache shared] prepare:arguments completion:^(NSDictionary *value) { result(value); }];
-    } else if ([call.method isEqualToString:@"update"]) {
-      [[PlaybackCache shared] update:arguments];
-      result(nil);
-    } else if ([call.method isEqualToString:@"setApplicationActive"]) {
-      [[PlaybackCache shared] setApplicationActive:[arguments[@"active"] boolValue]];
-      result(nil);
-    } else if ([call.method isEqualToString:@"stop"]) {
-      NSString *document = [arguments[@"document"] isKindOfClass:[NSString class]] ? arguments[@"document"] : @"";
-      [[PlaybackCache shared] stop:document];
-      result(nil);
-    } else {
-      result(FlutterMethodNotImplemented);
-    }
-  }];
   self.mediaSessionChannel =
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/media_session"
                                  binaryMessenger:registrar.messenger];
@@ -121,7 +97,7 @@
       result(FlutterMethodNotImplemented);
       return;
     }
-    // Dart releases the native player and unloads web media before exit.
+    // Dart releases the native player before exit.
     // Deactivate only on exit, never on a normal pause or quality change.
     [weakSelf clearPlaybackControls];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
@@ -403,11 +379,34 @@
   self.nativePlayback = NO;
 }
 
+// Cancel downloads left by releases that used the retired WebView cache.
+- (void)retirePlaybackDownloads {
+  if (self.retiredPlaybackDownloads) return;
+  NSURLSessionConfiguration *configuration =
+      [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:
+          @"app.bahaplus.mobile.hls-cache"];
+  configuration.sessionSendsLaunchEvents = NO;
+  self.retiredPlaybackDownloads =
+      [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
+  [self.retiredPlaybackDownloads invalidateAndCancel];
+}
+
+- (void)URLSession:(NSURLSession *)session didBecomeInvalidWithError:(NSError *)error {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session != self.retiredPlaybackDownloads) return;
+    self.retiredPlaybackDownloads = nil;
+    void (^completion)(void) = self.retiredPlaybackCompletion;
+    self.retiredPlaybackCompletion = nil;
+    if (completion) completion();
+  });
+}
+
 - (void)application:(UIApplication *)application
     handleEventsForBackgroundURLSession:(NSString *)identifier
     completionHandler:(void (^)(void))completionHandler {
-  if ([identifier isEqualToString:PlaybackCache.identifier]) {
-    [[PlaybackCache shared] reconnect:completionHandler];
+  if ([identifier isEqualToString:@"app.bahaplus.mobile.hls-cache"]) {
+    self.retiredPlaybackCompletion = completionHandler;
+    [self retirePlaybackDownloads];
   } else {
     [super application:application handleEventsForBackgroundURLSession:identifier
         completionHandler:completionHandler];

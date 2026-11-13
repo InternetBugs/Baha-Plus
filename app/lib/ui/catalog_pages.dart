@@ -596,19 +596,23 @@ class HistoryContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (store.history.isEmpty) {
+      final loading = store.busy || store.accountLoading;
+      final needsSync = !store.accountSynced || store.accountNeedsRefresh;
       return SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 54),
           child: Column(
             children: [
-              if (store.busy)
+              if (loading)
                 const CupertinoActivityIndicator(radius: 16)
               else
                 Icon(CupertinoIcons.clock, size: 48, color: secondary(context)),
               const SizedBox(height: 20),
               Text(
-                store.busy
+                loading
                     ? store.t('loading')
+                    : store.hasAccount && needsSync
+                    ? store.t('accountSyncError')
                     : store.notice == store.t('accountSyncError')
                     ? store.notice!
                     : store.t(
@@ -616,14 +620,18 @@ class HistoryContent extends StatelessWidget {
                       ),
                 textAlign: TextAlign.center,
               ),
-              if (!store.accountSynced && !store.busy) ...[
+              if (needsSync && !loading) ...[
                 const SizedBox(height: 24),
                 GlassButton.custom(
                   shape: const LiquidRoundedRectangle(borderRadius: 22),
                   width: 225,
                   height: 46,
-                  onTap: store.connectAccount,
-                  child: Text(store.t('connectAccount')),
+                  onTap: store.hasAccount
+                      ? () => store.syncAccount()
+                      : store.connectAccount,
+                  child: Text(
+                    store.t(store.hasAccount ? 'retry' : 'connectAccount'),
+                  ),
                 ),
               ],
             ],
@@ -805,7 +813,7 @@ class LibraryContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = store.libraryItems;
-    final needsAccount =
+    final needsSync =
         store.libraryFilter == 'favorites' && !store.accountSynced;
     return SliverMainAxisGroup(
       slivers: [
@@ -834,15 +842,36 @@ class LibraryContent extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 22),
-              if (needsAccount)
+              if (needsSync)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 40),
-                  child: GlassButton.custom(
-                    shape: const LiquidRoundedRectangle(borderRadius: 22),
-                    onTap: connectAccount,
-                    width: 225,
-                    height: 46,
-                    child: Text(store.t('connectAccount')),
+                  child: Column(
+                    children: [
+                      if (store.accountLoading)
+                        const CupertinoActivityIndicator()
+                      else ...[
+                        if (store.hasAccount) ...[
+                          Text(
+                            store.t('accountSyncError'),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                        GlassButton.custom(
+                          shape: const LiquidRoundedRectangle(borderRadius: 22),
+                          onTap: store.hasAccount
+                              ? () => store.syncAccount()
+                              : connectAccount,
+                          width: 225,
+                          height: 46,
+                          child: Text(
+                            store.t(
+                              store.hasAccount ? 'retry' : 'connectAccount',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 )
               else if (items.isEmpty &&
@@ -857,7 +886,7 @@ class LibraryContent extends StatelessWidget {
             ],
           ),
         ),
-        if (!needsAccount && items.isNotEmpty)
+        if (!needsSync && items.isNotEmpty)
           AnimeWaterfall(
             store: store,
             items: items,

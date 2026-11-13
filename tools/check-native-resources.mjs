@@ -24,11 +24,7 @@ for (const anime of catalog.items) {
 }
 for (const filename of fs.readdirSync('app/assets/adapters').filter(name => name.endsWith('.js'))) {
   const script = fs.readFileSync(`app/assets/adapters/${filename}`, 'utf8')
-    .replaceAll('%KIND%', 'catalog')
     .replaceAll('%ANIME_ID%', '10')
-    .replaceAll('%QUALITY%', '1080')
-    .replaceAll('__BAHA_COMMUNITY_REQUEST__', '{"action":"comments","args":{"videoId":"20","order":1,"page":0}}')
-    .replaceAll('__BAHA_DESIRED__', 'true')
     .replaceAll('__BAHA_WATCH_ACCOUNT__', 'false');
   assert.doesNotThrow(() => new vm.Script(script, { filename }));
 }

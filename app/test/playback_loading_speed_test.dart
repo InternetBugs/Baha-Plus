@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
@@ -13,37 +14,40 @@ void main() {
   final spinner = find.byKey(const ValueKey('player-loading-indicator'));
   final speed = find.byKey(const ValueKey('player-loading-speed'));
 
-  test('bridge accepts optional download speed and rejects invalid values', () {
-    final json = <String, dynamic>{
-      'phase': 'loading',
-      'surfaceReady': false,
-      'paused': true,
-      'buffering': true,
-      'ended': false,
-      'muted': false,
-      'position': 0,
-      'duration': 0,
-      'buffered': 0,
-      'rate': 1,
-    };
-    expect(PlaybackState.fromJson(json).downloadBytesPerSecond, 0);
-    expect(
-      PlaybackState.fromJson({
-        ...json,
-        'downloadBytesPerSecond': 1024,
-      }).downloadBytesPerSecond,
-      1024,
-    );
-    for (final invalid in [-1, double.nan, double.infinity, 1e13, '1000']) {
+  test(
+    'playback state accepts optional download speed and rejects invalid values',
+    () {
+      final json = <String, dynamic>{
+        'phase': 'loading',
+        'surfaceReady': false,
+        'paused': true,
+        'buffering': true,
+        'ended': false,
+        'muted': false,
+        'position': 0,
+        'duration': 0,
+        'buffered': 0,
+        'rate': 1,
+      };
+      expect(PlaybackState.fromJson(json).downloadBytesPerSecond, 0);
       expect(
-        () => PlaybackState.fromJson({
+        PlaybackState.fromJson({
           ...json,
-          'downloadBytesPerSecond': invalid,
-        }),
-        throwsFormatException,
+          'downloadBytesPerSecond': 1024,
+        }).downloadBytesPerSecond,
+        1024,
       );
-    }
-  });
+      for (final invalid in [-1, double.nan, double.infinity, 1e13, '1000']) {
+        expect(
+          () => PlaybackState.fromJson({
+            ...json,
+            'downloadBytesPerSecond': invalid,
+          }),
+          throwsFormatException,
+        );
+      }
+    },
+  );
 
   for (final fullscreen in [false, true]) {
     testWidgets(
@@ -56,6 +60,7 @@ void main() {
         addTearDown(tester.view.reset);
         final store = (await tester.runAsync(
           () => AppStore.create(
+            nativeHttpApiFactory: PendingNativeHttpApi.new,
             metadataApi: FakeMetadata(),
             storage: MemoryStorage(),
             animeSearch: FakeSearch(),
@@ -67,7 +72,8 @@ void main() {
           store.dispose();
         });
         await store.attach(portal);
-        await store.play(
+        await playFixture(
+          store,
           const Anime(
             id: '10',
             title: 'Test Anime',
@@ -136,7 +142,8 @@ void main() {
           expect(speed, findsNothing);
         }
 
-        await store.play(
+        await playFixture(
+          store,
           const Anime(
             id: '10',
             title: 'Test Anime',

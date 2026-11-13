@@ -1,5 +1,9 @@
 # Android 原生播放迁移
 
+2026-11-14 起，播放统一使用[原生 HTTP 播放](native-http-playback.md)，旧 WebView
+播放、网页授权后原生接管及其回退开关已经删除。本文作为迁移历史记录保留，
+以下旧实现说明和构建命令不适用于当前代码；iPhone 新路径的真机验收边界见原生 HTTP 文档。
+
 本实验在 `codex/android-native-player` 分支进行，起点为 `ff7c339376cc4352056602e681425a4640262706`。主分支不合入本次迁移；该 Android 分支的实测不覆盖 iOS。后续 iOS 适配在 `codex/ios-native-player` 独立分支继续，见 [iOS 原生播放迁移](ios-native-player.md)。
 
 ## 播放路径

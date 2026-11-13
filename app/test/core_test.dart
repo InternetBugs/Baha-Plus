@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'fake_account.dart';
 import 'package:baha_plus/core/community.dart';
@@ -8,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:baha_plus/core/browser_request.dart';
 import 'package:baha_plus/core/browser_presentation.dart';
 import 'package:baha_plus/core/models.dart';
-import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/device_storage.dart';
 import 'package:baha_plus/data/official_search.dart';
@@ -54,7 +54,6 @@ class FakePortal implements OfficialPortal {
       accountApi.communityHandler;
   set communityHandler(Future<Json> Function(String, Json)? value) =>
       accountApi.communityHandler = value;
-  @override
   Future<Json> community(String action, Json arguments) async {
     communityRequests.add({'action': action, ...arguments});
     if (communityHandler != null) return communityHandler!(action, arguments);
@@ -75,17 +74,14 @@ class FakePortal implements OfficialPortal {
     return true;
   }
 
-  @override
-  Future<bool> playerCommand(
+  Future<bool> recordPlayerCommand(
     String document,
     String action,
     double? value,
-  ) async =>
-      await evaluate(
-        'window.__bahaPlayerBridge?.command(${jsonEncode(document)},'
-        '${jsonEncode(action)},${jsonEncode(value)}); true;',
-      ) ==
-      true;
+  ) async {
+    scripts.add(jsonEncode([document, action, value]));
+    return true;
+  }
 
   @override
   Future<void> goBack() async {}
@@ -98,6 +94,7 @@ Future<AppStore> _createStore({
   AnimeSearch? animeSearch,
   FakeAccountApi? accountApi,
 }) => AppStore.create(
+  nativeHttpApiFactory: PendingNativeHttpApi.new,
   metadataApi: FakeMetadata(),
   accountApi: accountApi ?? FakeAccountApi(),
   storage: storage ?? MemoryStorage(),
@@ -109,165 +106,6 @@ void main() {
   final fixture =
       jsonDecode(File('test/fixtures/catalog.json').readAsStringSync()) as Json;
   final catalog = Catalog.fromJson(fixture);
-
-  Json playerState({String phase = 'content'}) => {
-    'type': 'player-state',
-    'id': '10',
-    'videoId': '20',
-    'phase': phase,
-    'surfaceReady': true,
-    'paused': false,
-    'buffering': false,
-    'ended': false,
-    'muted': false,
-    'position': 37,
-    'duration': 1200,
-    'buffered': 90,
-    'rate': 1,
-  };
-
-  test(
-    'playback bridge binds state to the exact series, episode and document',
-    () {
-      final request = BrowserRequest(
-        intent: BrowserIntent.play,
-        animeId: '10',
-        videoId: '20',
-      );
-      Json? accept(Json body, {String video = '20'}) => request.accept(
-        jsonEncode({...body, 'requestId': request.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.video(video),
-        isMainFrame: true,
-      );
-      expect(accept(playerState()), isNotNull);
-      expect(accept({...playerState(), 'id': '11'}), isNull);
-      expect(accept({...playerState(), 'videoId': '21'}, video: '21'), isNull);
-      expect(accept(playerState(), video: '21'), isNull);
-      expect(accept({...playerState(), 'position': -1}), isNull);
-      expect(accept({...playerState(), 'rate': 10}), isNull);
-      expect(
-        accept({
-          ...playerState(),
-          'qualities': [720, 720],
-        }),
-        isNull,
-      );
-      expect(
-        accept({
-          ...playerState(),
-          'qualities': [720],
-          'quality': 1080,
-        }),
-        isNull,
-      );
-      expect(
-        PlaybackState.fromJson(playerState(phase: 'age')).canControl,
-        isFalse,
-      );
-      expect(
-        PlaybackState.fromJson(playerState(phase: 'advertisement')).canControl,
-        isFalse,
-      );
-    },
-  );
-
-  test(
-    'player metadata updates preserve the active playback operation',
-    () async {
-      final store = await _createStore(storage: MemoryStorage());
-      addTearDown(store.dispose);
-      final portal = FakePortal();
-      await store.attach(portal);
-      final anime = Anime(
-        id: '10',
-        title: 'Test',
-        cover: 'https://p2.bahamut.com.tw/10.jpg',
-        latestVideoId: '20',
-      );
-      await store.play(anime);
-      final request = store.operation;
-      Future<void> send(Json body) => store.receive(
-        jsonEncode({...body, 'requestId': request.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.video('20'),
-        isMainFrame: true,
-      );
-      await send({
-        'type': 'player-detail',
-        'id': '10',
-        'videoId': '20',
-        'detail': {
-          'title': 'Test',
-          'description': 'Synopsis',
-          'episodes': [
-            {'id': '20', 'label': '1'},
-          ],
-          'metadata': [],
-        },
-      });
-      await send(playerState());
-      expect(store.showsPlayer, isTrue);
-      expect(store.operation.id, request.id);
-      expect(store.playerDetail?.episodes.single.id, '20');
-      expect(store.playback.value.position, 37);
-      await store.controlPlayer('seek', 42);
-      expect(portal.scripts.last, contains('"seek",42.0'));
-      await send(playerState(phase: 'advertisement'));
-      final count = portal.scripts.length;
-      await store.controlPlayer('seek', 100);
-      expect(portal.scripts.length, count);
-    },
-  );
-
-  test(
-    'background playback stays paused across a new document and foreground return',
-    () async {
-      final store = await _createStore(storage: MemoryStorage());
-      addTearDown(store.dispose);
-      final portal = FakePortal();
-      await store.attach(portal);
-      final idleCount = portal.scripts.length;
-      await store.setApplicationActive(false);
-      expect(portal.scripts.length, idleCount);
-      await store.setApplicationActive(true);
-      const anime = Anime(
-        id: '10',
-        title: 'Test',
-        cover: 'https://p2.bahamut.com.tw/10.jpg',
-        latestVideoId: '20',
-      );
-      await store.play(anime);
-      await store.receive(
-        jsonEncode({...playerState(), 'requestId': store.operation.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.video('20'),
-        isMainFrame: true,
-      );
-      await store.setApplicationActive(false);
-      expect(
-        portal.scripts.last,
-        contains('window.__bahaMediaSuspended = true'),
-      );
-      expect(portal.scripts.last, contains('media.pause()'));
-      expect(portal.scripts.last, contains(store.operation.id));
-      final count = portal.scripts.length;
-      await store.controlPlayer('play');
-      expect(portal.scripts.length, count);
-      await store.navigationFinished(OfficialSite.video('20'));
-      final configuration = portal.scripts[portal.scripts.length - 2];
-      expect(configuration, contains('window.__bahaMediaSuspended = true'));
-      expect(configuration, contains('media.pause()'));
-      await store.setApplicationActive(true);
-      expect(
-        portal.scripts.last,
-        contains('window.__bahaMediaSuspended = false'),
-      );
-      expect(portal.scripts.last, isNot(contains('.play(')));
-      await store.controlPlayer('play');
-      expect(portal.scripts.last, contains('"play"'));
-    },
-  );
 
   test(
     'logout visits the official endpoint and clears caches only after a verified guest response',
@@ -600,7 +438,7 @@ void main() {
   test(
     'account identity events require a current trusted account request and valid profile',
     () {
-      final request = BrowserRequest(intent: BrowserIntent.accountRefresh);
+      final request = BrowserRequest(intent: BrowserIntent.account);
       final body = {
         'type': 'account-authenticated',
         'requestId': request.id,
@@ -885,89 +723,6 @@ void main() {
     },
   );
 
-  test(
-    'bridge requires current nonce, native official origin and main frame',
-    () {
-      final current = BrowserRequest(intent: BrowserIntent.catalog);
-      final valid = {...fixture, 'type': 'catalog', 'requestId': current.id};
-      Json? check(Json body, {bool main = true, Uri? origin}) => current.accept(
-        jsonEncode(body),
-        origin: origin ?? OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: main,
-      );
-      expect(check(valid), isNotNull);
-      expect(check(valid, main: false), isNull);
-      expect(check(valid, origin: Uri.parse('https://attacker.test')), isNull);
-      expect(check({...valid, 'requestId': 'stale'}), isNull);
-      expect(check({...valid, 'items': []}), isNull);
-      expect(
-        check({
-          ...valid,
-          'items': [fixture['items'][0], fixture['items'][0]],
-        }),
-        isNull,
-      );
-      expect(check({...valid, 'fetchedAt': 'bad'}), isNull);
-    },
-  );
-
-  test(
-    'search replies belong to their exact submitted query and allow no results',
-    () {
-      final request = BrowserRequest(intent: BrowserIntent.search, query: '動畫');
-      final raw = jsonEncode({
-        'type': 'search',
-        'requestId': request.id,
-        'items': [],
-        'fetchedAt': fixture['fetchedAt'],
-      });
-      expect(
-        request.accept(
-          raw,
-          origin: OfficialSite.home,
-          source: OfficialSite.search('動畫'),
-          isMainFrame: true,
-        ),
-        isNotNull,
-      );
-      expect(
-        request.accept(
-          raw,
-          origin: OfficialSite.home,
-          source: OfficialSite.search('other'),
-          isMainFrame: true,
-        ),
-        isNull,
-      );
-    },
-  );
-
-  test(
-    'favorite completion must confirm the exact series and requested state',
-    () {
-      final request = BrowserRequest(
-        intent: BrowserIntent.favorite,
-        animeId: '10',
-        favoriteTarget: true,
-      );
-      Json? check(String id, bool saved) => request.accept(
-        jsonEncode({
-          'type': 'favorite-complete',
-          'requestId': request.id,
-          'id': id,
-          'saved': saved,
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.search('test'),
-        isMainFrame: true,
-      );
-      expect(check('10', true), isNotNull);
-      expect(check('11', true), isNull);
-      expect(check('10', false), isNull);
-    },
-  );
-
   test('invalid history progress is rejected', () {
     for (final progress in [-.01, 1.01, double.nan, double.infinity]) {
       expect(
@@ -1040,7 +795,7 @@ void main() {
     await old;
     expect(store.searchResults.single.id, catalog.items.last.id);
     expect(store.searchedQuery, 'new');
-    expect(store.operation.intent, BrowserIntent.catalog);
+    expect(store.operation.intent, BrowserIntent.idle);
   });
 
   test(

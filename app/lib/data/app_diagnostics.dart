@@ -10,7 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 typedef DiagnosticShare = Future<void> Function(File file, Rect origin);
 
-/// Opt-in, bounded diagnostics for release builds. Raw bridge messages, HTTP
+/// Opt-in, bounded diagnostics for release builds. Raw browser messages, HTTP
 /// bodies, cookies, media URLs and exception messages must never be recorded.
 class AppDiagnostics extends ChangeNotifier {
   AppDiagnostics({
@@ -293,7 +293,7 @@ class AppDiagnostics extends ChangeNotifier {
   static final _email = RegExp(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}');
 
   static String _cleanString(String value) {
-    // Bound before applying expressions, even for unexpected bridge input.
+    // Bound before applying expressions, even for unexpected browser input.
     final bounded = value.length > 2048
         ? '${value.substring(0, 2048)}…'
         : value;

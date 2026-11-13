@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'dart:async';
 import 'package:baha_plus/core/community.dart';
@@ -67,6 +68,7 @@ Future<_Session> _launch(
   final portal = FakePortal();
   final store = (await tester.runAsync(
     () => AppStore.create(
+      nativeHttpApiFactory: PendingNativeHttpApi.new,
       metadataApi: FakeMetadata(),
       accountApi: portal.accountApi,
       storage: MemoryStorage(),
@@ -397,9 +399,8 @@ void main() {
       final session = await _launch(tester);
       final store = session.store;
       final anime = store.catalog.items.first;
-      await store.play(anime);
+      await playFixture(store, anime);
       final document = store.operation;
-      store.nativePlaybackDocument = document.id;
       final playback = const PlaybackState(
         phase: PlaybackPhase.content,
         surfaceReady: true,
@@ -411,7 +412,7 @@ void main() {
       await store.toggleFavorite(anime);
       expect(store.isFavorite(anime), isTrue);
       expect(store.operation, same(document));
-      expect(store.nativePlaybackDocument, document.id);
+      expect(store.nativeHttpPlayback!.document, document.id);
       expect(store.playback.value, same(playback));
       expect(session.portal.visited.length, visits);
       await store.closeBrowser();

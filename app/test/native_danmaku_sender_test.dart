@@ -31,7 +31,9 @@ class DanmakuSendFixture {
   http.Response response(http.Request request) => http.Response(
     switch (request.url.path) {
       '/mygather.php' =>
-        '<a class="user-info"><span class="user-id">$owner</span></a>',
+        owner.isEmpty
+            ? '<a href="https://user.gamer.com.tw/login.php">登入</a>'
+            : '<a class="user-info"><span class="user-id">$owner</span></a>',
       '/ajax/getCSRFToken.php' => 'offline-csrf',
       '/ajax/danmuSet.php' => '{"sn":91}',
       _ => throw StateError('Unexpected endpoint'),
@@ -127,6 +129,24 @@ void main() {
       final item = await fixture.send();
       expect(fixture.posts.single.bodyFields['time'], '421');
       expect(item.time, 42.1);
+    },
+  );
+
+  test(
+    'send accepts the official server identity without the scripted menu',
+    () async {
+      final fixture = DanmakuSendFixture();
+      addTearDown(fixture.sender.dispose);
+      fixture.handler = (request) async => request.url.path == '/mygather.php'
+          ? http.Response(
+              '<h2 class="theme-title">我的動畫</h2>'
+              '<a href="/viewList.php?u=reader">觀看紀錄</a>',
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            )
+          : fixture.response(request);
+      expect((await fixture.send()).id, '91');
+      expect(fixture.posts, hasLength(1));
     },
   );
 

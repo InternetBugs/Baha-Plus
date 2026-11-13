@@ -1,3 +1,4 @@
+import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
@@ -47,6 +48,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = (await tester.runAsync(
       () => AppStore.create(
+        nativeHttpApiFactory: PendingNativeHttpApi.new,
         metadataApi: FakeMetadata(),
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
@@ -97,8 +99,9 @@ void main() {
       final navigations = portal.visited.length;
       await tester.tap(find.byKey(const ValueKey('history-next-10')));
       await frames(tester);
-      expect(portal.visited.length, navigations + 1);
-      expect(portal.visited.last, OfficialSite.video('42'));
+      expect(portal.visited.length, navigations);
+      expect(store.nativeHttpPlayback!.videoId, '42');
+      expect(store.needsOfficialPortal, isFalse);
       expect(store.playingVideoId, '42');
       store.detach(portal);
     },
@@ -114,7 +117,9 @@ void main() {
     await store.attach(portal);
     await tester.tap(find.byKey(const ValueKey('history-play-10')));
     await frames(tester);
-    expect(portal.visited.last, OfficialSite.video('20'));
+    expect(portal.visited, isEmpty);
+    expect(store.nativeHttpPlayback!.videoId, '20');
+    expect(store.needsOfficialPortal, isFalse);
     expect(tester.takeException(), isNull);
     store.detach(portal);
   });
