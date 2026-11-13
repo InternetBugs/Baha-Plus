@@ -1,4 +1,5 @@
 import 'fake_metadata.dart';
+import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,13 +39,15 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   Future<(AppStore, FakePortal, MemoryStorage)> setup() async {
     final disk = MemoryStorage();
+    final portal = FakePortal();
     final store = await AppStore.create(
       metadataApi: FakeMetadata(),
+      accountApi: portal.accountApi,
+      danmakuSender: DanmakuSendFixture().sender,
       storage: disk,
       animeSearch: FakeSearch(),
     );
     addTearDown(store.dispose);
-    final portal = FakePortal();
     await store.attach(portal);
     store.accountProfile = const AccountProfile(
       id: 'reader',
@@ -167,7 +170,7 @@ void main() {
   );
 
   test(
-    'an expired background sync ticket retries a read once and never repeats a write',
+    'native stale account reads and writes fail without replaying the request',
     () async {
       final (store, portal, _) = await setup();
       var reads = 0;
@@ -175,8 +178,13 @@ void main() {
         if (action == 'comments' && ++reads == 2) return commentPageJson();
         return {'ok': false, 'code': 'stale'};
       };
-      expect((await store.loadComments('20')).messageId, '123');
-      expect(reads, 2);
+      await expectLater(
+        store.loadComments('20'),
+        throwsA(
+          isA<CommunityException>().having((e) => e.code, 'code', 'stale'),
+        ),
+      );
+      expect(reads, 1);
       portal.communityRequests.clear();
       await expectLater(
         store.sendComment(videoId: '20', messageId: '123', text: '離線測試'),
@@ -257,8 +265,9 @@ void main() {
       expect(portal.communityRequests, isEmpty);
       portal.communityResponse = {'ok': true, 'id': '91'};
       await store.sendDanmaku('測試', position: 1, color: '#FFD166');
-      expect(portal.communityRequests.single['videoId'], '20');
-      expect(portal.communityRequests.single['position'], 1);
+      expect(portal.communityRequests, isEmpty);
+      expect(store.sentDanmaku.single.text, '測試');
+      expect(store.sentDanmaku.single.mode, 'top');
     },
   );
 

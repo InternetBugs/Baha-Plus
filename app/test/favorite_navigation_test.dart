@@ -1,14 +1,12 @@
 import 'fake_metadata.dart';
+import 'dart:async';
+import 'package:baha_plus/core/community.dart';
 import 'dart:convert';
-import 'package:baha_plus/core/browser_request.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/ui/app_root.dart';
-import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/detail_page.dart';
-import 'package:baha_plus/ui/player_page.dart';
-import 'package:baha_plus/ui/seasonal_page.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,9 +63,11 @@ Future<_Session> _launch(
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+  final portal = FakePortal();
   final store = (await tester.runAsync(
     () => AppStore.create(
       metadataApi: FakeMetadata(),
+      accountApi: portal.accountApi,
       storage: MemoryStorage(),
       animeSearch: FakeSearch(),
     ),
@@ -103,7 +103,7 @@ Future<_Session> _launch(
   if (saved) store.favorites = [...store.catalog.items];
   store.selectTab(tab, filter: filter);
   if (tab == 2) store.query = 'Favorite';
-  final portal = FakePortal();
+  portal.accountApi.favoriteHandler = (_, _) async {};
   await store.attach(portal);
   store.updateNavigation(OfficialSite.home, canGoBack: false);
   store.navigationFailed();
@@ -194,7 +194,7 @@ Finder _favoriteButton(AppStore store) => find.descendant(
 void main() {
   for (final saved in [false, true]) {
     testWidgets(
-      '${saved ? 'removing' : 'adding'} a favorite preserves detail, source tab, filter, query and scroll',
+      '${saved ? 'removing' : 'adding'} a native favorite preserves detail and source scroll',
       (tester) async {
         final session = await _launch(
           tester,
@@ -203,10 +203,9 @@ void main() {
         );
         final store = session.store;
         final source = await _openLibraryDetail(tester, store);
-        final sourcePosition = source.position;
-        final sourceOffset = source.offset;
-        final detailElement = tester.element(find.byType(DetailPage));
-        final detailRoute = ModalRoute.of(detailElement)!;
+        final offset = source.offset;
+        final element = tester.element(find.byType(DetailPage));
+        final route = ModalRoute.of(element)!;
         final detail = store.detail;
         final scroll = tester.state<ScrollableState>(
           find
@@ -220,373 +219,177 @@ void main() {
         await _frames(tester);
         final detailOffset = scroll.position.pixels;
         final anime = store.selectedAnime!;
-        final visibility = <bool>[];
-        store.addListener(() => visibility.add(store.browserVisible));
-
+        final operation = store.operation;
+        final visits = session.portal.visited.length;
         await tester.tap(_favoriteButton(store));
         await _frames(tester);
-        final favoriteRequest = store.operation;
-        expect(favoriteRequest.intent, BrowserIntent.favorite);
-        expect(favoriteRequest.animeId, anime.id);
-        expect(favoriteRequest.favoriteTarget, !saved);
-        expect(store.browserVisible, isFalse);
-        expect(detailRoute.isCurrent, isTrue);
-        await store.navigationFinished(OfficialSite.search(anime.title));
-        expect(store.busy, isTrue);
-        await _send(store, {
-          'type': 'favorite-complete',
-          'id': anime.id,
-          'saved': !saved,
-        });
         expect(store.isFavorite(anime), !saved);
-        expect(store.operation.intent, BrowserIntent.accountRefresh);
-        await _send(store, {
-          'type': 'account-synced',
-          'profile': _profile,
-          'favorites': store.favorites.map((item) => item.toJson()).toList(),
-          'history': [],
-        });
-        await _frames(tester);
-
-        expect(visibility, everyElement(isFalse));
-        expect(find.byType(DetailPage), findsOneWidget);
-        expect(tester.element(find.byType(DetailPage)), same(detailElement));
-        expect(ModalRoute.of(detailElement), same(detailRoute));
-        expect(detailRoute.isCurrent, isTrue);
+        expect(session.portal.accountApi.favoriteRequests, [
+          (anime.id, !saved),
+        ]);
+        expect(store.operation, same(operation));
+        expect(session.portal.visited.length, visits);
+        expect(store.browserVisible, isFalse);
+        expect(session.browserKey.currentState, isNull);
+        expect(tester.element(find.byType(DetailPage)), same(element));
+        expect(route.isCurrent, isTrue);
         expect(store.detail, same(detail));
         expect(scroll.position.pixels, detailOffset);
         expect(store.tab, 2);
         expect(store.libraryFilter, saved ? 'favorites' : 'season');
         expect(store.query, 'Favorite');
-        expect(source.position, same(sourcePosition));
-        expect(source.offset, sourceOffset);
-        expect(find.text('Official favorite session'), findsNothing);
+        expect(source.offset, offset);
         await tester.tap(find.bySemanticsLabel(store.t('close')));
         await _frames(tester);
-        expect(find.byType(DetailPage), findsNothing);
-        expect(source.offset, sourceOffset);
+        expect(source.offset, offset);
         expect(tester.takeException(), isNull);
       },
     );
   }
 
   testWidgets(
-    'favorite failures and late messages leave the detail and confirmed state intact',
+    'native favorite rejection and obsolete bridge messages preserve confirmed state',
     (tester) async {
       final session = await _launch(tester);
       final store = session.store;
+      session.portal.accountApi.favoriteHandler = (_, _) async =>
+          throw const CommunityException('rejected');
       await _openLibraryDetail(tester, store);
       final element = tester.element(find.byType(DetailPage));
       final anime = store.selectedAnime!;
       await tester.tap(_favoriteButton(store));
-      await store.navigationFinished(OfficialSite.search(anime.title));
-      final request = store.operation.id;
-      final valid = {
+      await _frames(tester);
+      expect(store.notice, store.t('accountSyncError'));
+      expect(store.isFavorite(anime), isFalse);
+      await _send(store, {
         'type': 'favorite-complete',
         'id': anime.id,
         'saved': true,
-      };
-      for (final invalid in [
-        {...valid, 'id': '999'},
-        {...valid, 'saved': false},
-      ]) {
-        await _send(store, invalid);
-        expect(store.operation.id, request);
-        expect(store.isFavorite(anime), isFalse);
-      }
-      await _send(store, valid, requestId: 'old-request');
-      await _send(store, valid, origin: Uri.parse('https://attacker.test/'));
-      await _send(store, valid, source: Uri.parse('https://attacker.test/'));
-      await _send(store, valid, isMainFrame: false);
-      expect(store.operation.id, request);
+      });
       expect(store.isFavorite(anime), isFalse);
-      await _send(store, {'type': 'favorite-error', 'id': anime.id});
-      await _frames(tester);
-      expect(store.notice, store.t('accountSyncError'));
       expect(store.browserVisible, isFalse);
       expect(tester.element(find.byType(DetailPage)), same(element));
-
+      session.portal.accountApi.favoriteHandler = (_, _) async {};
       await store.toggleFavorite(anime);
-      await store.navigationFinished(OfficialSite.search(anime.title));
-      final currentRequest = store.operation.id;
-      await _send(store, valid, requestId: request);
-      expect(store.operation.id, currentRequest);
-      expect(store.isFavorite(anime), isFalse);
-      await _send(store, valid);
-      await _send(store, {'type': 'account-error'});
-      await _frames(tester);
       expect(store.isFavorite(anime), isTrue);
-      expect(store.accountNeedsRefresh, isTrue);
-      expect(store.browserVisible, isFalse);
-      expect(tester.element(find.byType(DetailPage)), same(element));
       expect(tester.takeException(), isNull);
     },
   );
 
-  for (final challenge in ['account-guest', 'verification-required']) {
-    testWidgets(
-      '$challenge presents the same official session above detail and Back returns to it',
-      (tester) async {
-        final session = await _launch(tester);
-        final store = session.store;
-        final source = await _openLibraryDetail(tester, store);
-        final sourceOffset = source.offset;
-        final detailElement = tester.element(find.byType(DetailPage));
-        final route = ModalRoute.of(detailElement)!;
-        expect(session.browserKey.currentState, isNull);
-        await tester.tap(_favoriteButton(store));
-        await _frames(tester);
-        final browser = session.browserKey.currentState;
-        expect(browser, isNotNull);
-        await store.navigationFinished(
-          OfficialSite.search(store.selectedAnime!.title),
-        );
-        final favoriteRequest = store.operation.id;
-        await _send(store, {'type': challenge});
-        await _frames(tester);
-        expect(store.browserVisible, isTrue);
-        expect(store.canRetryFavorite, isTrue);
-        expect(
-          find.text('Official favorite session').hitTestable(),
-          findsOneWidget,
-        );
-        expect(route.isActive, isTrue);
-        expect(route.isCurrent, isFalse);
-        expect(session.browserKey.currentState, same(browser));
-        expect(store.operation.id, favoriteRequest);
-        await tester.binding.handlePopRoute();
-        await _frames(tester);
-        expect(store.browserVisible, isFalse);
-        expect(route.isCurrent, isTrue);
-        expect(tester.element(find.byType(DetailPage)), same(detailElement));
-        expect(session.browserKey.currentState, isNull);
-        expect(source.offset, sourceOffset);
-        expect(store.tab, 2);
-        expect(store.libraryFilter, 'season');
-        expect(store.query, 'Favorite');
-        await _send(store, {
-          'type': 'favorite-complete',
-          'id': store.selectedAnime!.id,
-          'saved': true,
-        }, requestId: favoriteRequest);
-        expect(store.isFavorite(store.selectedAnime!), isFalse);
-        // Closing verification can refresh the native catalog.
-        store.navigationFailed();
-        expect(tester.takeException(), isNull);
-      },
-    );
-  }
+  testWidgets(
+    'favorite submissions deduplicate while the native request is pending',
+    (tester) async {
+      final session = await _launch(tester);
+      final store = session.store;
+      await _openLibraryDetail(tester, store);
+      final pending = Completer<void>();
+      session.portal.accountApi.favoriteHandler = (_, _) => pending.future;
+      final first = store.toggleFavorite(store.selectedAnime!);
+      await store.toggleFavorite(store.selectedAnime!);
+      expect(session.portal.accountApi.favoriteRequests, hasLength(1));
+      pending.complete();
+      await first;
+      expect(store.isFavorite(store.selectedAnime!), isTrue);
+      expect(store.needsOfficialPortal, isFalse);
+    },
+  );
 
   testWidgets(
-    'login retry preserves the requested removal and returns directly to the original detail',
+    'expired login opens above detail and Back cancels the pending favorite',
+    (tester) async {
+      final session = await _launch(tester);
+      final store = session.store;
+      final source = await _openLibraryDetail(tester, store);
+      final offset = source.offset;
+      final element = tester.element(find.byType(DetailPage));
+      final route = ModalRoute.of(element)!;
+      session.portal.accountApi.favoriteHandler = (_, _) async =>
+          throw const CommunityException('login');
+      await tester.tap(_favoriteButton(store));
+      await _frames(tester);
+      expect(store.favoriteLoginPending, isTrue);
+      expect(store.browserVisible, isTrue);
+      expect(
+        find.text('Official favorite session').hitTestable(),
+        findsOneWidget,
+      );
+      expect(route.isCurrent, isFalse);
+      expect(route.isActive, isTrue);
+      await tester.binding.handlePopRoute();
+      await _frames(tester);
+      expect(store.favoriteLoginPending, isFalse);
+      expect(store.browserVisible, isFalse);
+      expect(route.isCurrent, isTrue);
+      expect(tester.element(find.byType(DetailPage)), same(element));
+      expect(source.offset, offset);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'login resumes the requested removal without changing detail or source route',
     (tester) async {
       final session = await _launch(tester, saved: true, filter: 'favorites');
       final store = session.store;
       final source = await _openLibraryDetail(tester, store);
       final offset = source.offset;
-      final detailElement = tester.element(find.byType(DetailPage));
-      final browser = session.browserKey.currentState;
+      final element = tester.element(find.byType(DetailPage));
       final anime = store.selectedAnime!;
-      await tester.tap(_favoriteButton(store));
-      await store.navigationFinished(OfficialSite.search(anime.title));
-      await _send(store, {'type': 'account-guest'});
-      await _frames(tester);
-      expect(store.favorites, isEmpty);
-      expect(store.operation.favoriteTarget, isFalse);
-      await store.navigationFinished(
-        Uri.parse('https://user.gamer.com.tw/login.php'),
-      );
-      await store.retryFavorite();
-      expect(session.portal.visited.last, OfficialSite.search(anime.title));
-      expect(store.operation.favoriteTarget, isFalse);
-      await store.navigationFinished(OfficialSite.search(anime.title));
-      await _send(store, {
-        'type': 'favorite-complete',
-        'id': anime.id,
-        'saved': false,
-      });
-      await _send(store, {
-        'type': 'account-synced',
+      session.portal.accountApi.favoriteHandler = (_, _) async =>
+          throw const CommunityException('login');
+      session.portal.accountApi.accountLoader = () async => {
         'profile': _profile,
-        'favorites': [
-          for (final item in store.catalog.items)
-            if (item.id != anime.id) item.toJson(),
-        ],
+        'favorites': store.catalog.items.map((item) => item.toJson()).toList(),
         'history': [],
-      });
+      };
+      await tester.tap(_favoriteButton(store));
       await _frames(tester);
-      expect(store.browserVisible, isFalse);
+      expect(store.favoriteLoginPending, isTrue);
+      session.portal.accountApi.favoriteHandler = (_, _) async {};
+      await _send(store, {
+        'type': 'account-authenticated',
+        'profile': _profile,
+      }, source: OfficialSite.home.resolve('mygather.php'));
+      await _frames(tester);
+      expect(session.portal.accountApi.favoriteRequests, [
+        (anime.id, false),
+        (anime.id, false),
+      ]);
       expect(store.isFavorite(anime), isFalse);
-      expect(tester.element(find.byType(DetailPage)), same(detailElement));
-      expect(ModalRoute.of(detailElement)!.isCurrent, isTrue);
-      expect(session.browserKey.currentState, same(browser));
+      expect(store.browserVisible, isFalse);
+      expect(store.favoriteLoginPending, isFalse);
+      expect(tester.element(find.byType(DetailPage)), same(element));
+      expect(ModalRoute.of(element)!.isCurrent, isTrue);
       expect(source.offset, offset);
-      expect(store.tab, 2);
-      expect(store.libraryFilter, 'favorites');
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets('favorite timeout keeps detail and rejects its expired ticket', (
-    tester,
-  ) async {
-    final session = await _launch(tester);
-    final store = session.store;
-    await _openLibraryDetail(tester, store);
-    final element = tester.element(find.byType(DetailPage));
-    final anime = store.selectedAnime!;
-    await tester.tap(_favoriteButton(store));
-    await store.navigationFinished(OfficialSite.search(anime.title));
-    final request = store.operation.id;
-    await tester.pump(const Duration(seconds: 31));
-    await _send(store, {
-      'type': 'favorite-complete',
-      'id': anime.id,
-      'saved': true,
-    }, requestId: request);
-    await _frames(tester);
-    expect(store.isFavorite(anime), isFalse);
-    expect(store.browserVisible, isFalse);
-    expect(store.notice, store.t('accountSyncError'));
-    expect(tester.element(find.byType(DetailPage)), same(element));
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('favorite keeps the seasonal route beneath the detail', (
-    tester,
-  ) async {
-    final session = await _launch(tester, tab: 0);
-    final store = session.store;
-    final heading = find.descendant(
-      of: find.byType(SectionHeading),
-      matching: find.text(store.t('seasonal')),
-    );
-    await Scrollable.ensureVisible(tester.element(heading), alignment: .35);
-    await _frames(tester);
-    await tester.tap(
-      find.descendant(
-        of: find.ancestor(of: heading, matching: find.byType(SectionHeading)),
-        matching: find.byType(CupertinoButton),
-      ),
-    );
-    await _frames(tester);
-    final season = tester.state(find.byType(SeasonalPage));
-    final controller = tester
-        .widget<CustomScrollView>(find.byType(CustomScrollView))
-        .controller!;
-    await tester.drag(find.byType(CustomScrollView), const Offset(0, -250));
-    await _frames(tester);
-    await tester.ensureVisible(find.byKey(const ValueKey('timeline-5')));
-    await _frames(tester);
-    final offset = controller.offset;
-    await tester.tap(find.byKey(const ValueKey('timeline-5')));
-    await _frames(tester);
-    await _finishDetail(store);
-    await _frames(tester);
-    await tester.tap(_favoriteButton(store));
-    await store.navigationFinished(
-      OfficialSite.search(store.selectedAnime!.title),
-    );
-    await _send(store, {
-      'type': 'favorite-complete',
-      'id': store.selectedAnime!.id,
-      'saved': true,
-    });
-    await _send(store, {'type': 'account-error'});
-    await _frames(tester);
-    await tester.tap(find.bySemanticsLabel(store.t('close')));
-    await _frames(tester);
-    expect(tester.state(find.byType(SeasonalPage)), same(season));
-    expect(controller.offset, offset);
-    expect(store.tab, 0);
-    expect(tester.takeException(), isNull);
-  });
-
   testWidgets(
-    'player favorite uses a separate validated ticket and preserves the native playback document',
+    'native favorite keeps the current player, media clock and authorization document',
     (tester) async {
       final session = await _launch(tester);
       final store = session.store;
       final anime = store.catalog.items.first;
       await store.play(anime);
-      store.updateNavigation(
-        OfficialSite.video(anime.latestVideoId!),
-        canGoBack: false,
-      );
       final document = store.operation;
-      const playback = PlaybackState(
+      store.nativePlaybackDocument = document.id;
+      final playback = const PlaybackState(
         phase: PlaybackPhase.content,
         surfaceReady: true,
-        paused: true,
-        position: 120,
         duration: 1200,
+        position: 42,
       );
-      store.updateNativePlayback(document.id, playback);
-      final navigator = Navigator.of(tester.element(find.byType(AppRoot)));
-      navigator.push(
-        CupertinoPageRoute<void>(
-          builder: (_) => PlayerPage(
-            store: store,
-            video: const SizedBox(key: ValueKey('test-video-surface')),
-          ),
-        ),
-      );
-      await _frames(tester);
-      final player = tester.state(find.byType(PlayerPage));
-      final loads = session.portal.visited.length;
-      await tester.tap(find.bySemanticsLabel(store.t('save')));
-      await _frames(tester);
-      final script = session.portal.scripts.last;
-      final ticket = RegExp(
-        r'const favoriteTicket = "([a-f0-9]+)";',
-      ).firstMatch(script)!.group(1)!;
-      expect(ticket, isNot(document.id));
-      expect(script, contains('const documentTicket = "${document.id}"'));
-      expect(script, isNot(contains('window.__bahaDocumentNonce =')));
-      final completion = {
-        'type': 'favorite-complete',
-        'id': anime.id,
-        'saved': true,
-      };
-      await _send(store, {...completion, 'saved': false}, requestId: ticket);
-      await _send(store, completion, requestId: document.id);
-      await _send(
-        store,
-        completion,
-        requestId: ticket,
-        source: OfficialSite.video('999'),
-      );
-      await _send(store, completion, requestId: ticket, isMainFrame: false);
-      expect(store.isFavorite(anime), isFalse);
-      await _send(store, completion, requestId: ticket);
-      await _frames(tester);
+      store.playback.value = playback;
+      final visits = session.portal.visited.length;
+      await store.toggleFavorite(anime);
       expect(store.isFavorite(anime), isTrue);
       expect(store.operation, same(document));
       expect(store.nativePlaybackDocument, document.id);
       expect(store.playback.value, same(playback));
-      expect(store.accountNeedsRefresh, isTrue);
-      expect(store.browserVisible, isTrue);
-      expect(session.portal.visited.length, loads);
-      expect(tester.state(find.byType(PlayerPage)), same(player));
-      await tester.tap(find.bySemanticsLabel(store.t('unsave')));
+      expect(session.portal.visited.length, visits);
+      await store.closeBrowser();
       await _frames(tester);
-      final removalTicket = RegExp(
-        r'const favoriteTicket = "([a-f0-9]+)";',
-      ).firstMatch(session.portal.scripts.last)!.group(1)!;
-      expect(removalTicket, isNot(ticket));
-      await _send(store, completion, requestId: ticket);
-      expect(store.isFavorite(anime), isTrue);
-      await _send(store, {
-        ...completion,
-        'saved': false,
-      }, requestId: removalTicket);
-      await _frames(tester);
-      expect(store.isFavorite(anime), isFalse);
-      expect(store.operation, same(document));
-      expect(store.nativePlaybackDocument, document.id);
-      expect(store.playback.value, same(playback));
-      expect(session.portal.visited.length, loads);
-      expect(tester.state(find.byType(PlayerPage)), same(player));
       expect(tester.takeException(), isNull);
     },
   );

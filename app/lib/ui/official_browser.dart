@@ -873,7 +873,12 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
         NativeVideoSurface(
           key: ValueKey('native-video-${_nativePlayback!.document}'),
           playback: _nativePlayback!,
-          danmaku: _nativeDanmaku,
+          danmaku: store.sentDanmaku.isEmpty
+              ? _nativeDanmaku
+              : ({
+                  for (final item in [..._nativeDanmaku, ...store.sentDanmaku])
+                    item.id: item,
+                }.values.toList()..sort((a, b) => a.time.compareTo(b.time))),
           settings: store.danmakuSettings,
           errorLabel: store.t('playerPlaybackError'),
           retryLabel: store.t('retry'),

@@ -134,7 +134,7 @@ void main() {
       );
       await tester.pump();
       expect(danmakuSurface.cachedTextPainters, greaterThan(0));
-      expect(find.byKey(const ValueKey('player-danmaku-send')), findsNothing);
+      expect(find.byKey(const ValueKey('player-danmaku-send')), findsOneWidget);
       noWebView();
       await binding.takeScreenshot('native-http-danmaku');
       await store.controlPlayer('play');

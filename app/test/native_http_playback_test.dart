@@ -21,7 +21,39 @@ import 'package:video_player_platform_interface/video_player_platform_interface.
 import 'core_test.dart' show MemoryStorage, FakeSearch, FakePortal;
 import 'fake_metadata.dart';
 import 'native_http_api_test.dart' show HttpFixture;
+import 'native_danmaku_sender_test.dart' show DanmakuSendFixture, communityCode;
 import 'native_playback_test.dart' show FakeVideo;
+
+Future<AppStore> nativeSendingStore(DanmakuSendFixture sender) async {
+  final fixture = HttpFixture(ads: false);
+  final store = AppStore(
+    storage: MemoryStorage(),
+    dictionaries: const {},
+    folding: SearchFolding({}),
+    scripts: const {},
+    animeSearch: FakeSearch(),
+    metadataApi: FakeMetadata(),
+    updates: AppUpdates(
+      versionLoader: () async => '1.0.0',
+      client: MockClient((_) async => http.Response('', 404)),
+    ),
+    enableNativeHttpPlayback: true,
+    nativeHttpApiFactory: fixture.api,
+    danmakuSender: sender.sender,
+  );
+  store.accountProfile = const AccountProfile(
+    id: 'reader',
+    displayName: 'Reader',
+  );
+  await store.play(
+    const Anime(id: '1', title: 'Sample', cover: '', latestVideoId: '40190'),
+  );
+  await Future<void>.delayed(const Duration(milliseconds: 20));
+  expect(store.nativeHttpPlayback!.needsConsent, isTrue);
+  await store.nativeHttpPlayback!.consent();
+  expect(store.playback.value.canControl, isTrue);
+  return store;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -287,6 +319,102 @@ void main() {
     expect(notifications, retiredNotifications);
   });
 
+  for (final change in ['background', 'account', 'ad', 'episode']) {
+    test(
+      'native sending rechecks $change after CSRF without using a portal',
+      () async {
+        final sender = DanmakuSendFixture();
+        final store = await nativeSendingStore(sender);
+        addTearDown(store.dispose);
+        final token = Completer<http.Response>(), waiting = Completer<void>();
+        sender.handler = (request) async {
+          if (request.url.path.endsWith('getCSRFToken.php')) {
+            waiting.complete();
+            return token.future;
+          }
+          return sender.response(request);
+        };
+        final sending = store.sendDanmaku('offline message');
+        final rejected = expectLater(
+          sending,
+          throwsA(
+            communityCode(
+              const ['account', 'episode'].contains(change)
+                  ? 'stale'
+                  : 'unavailable',
+            ),
+          ),
+        );
+        await waiting.future;
+        switch (change) {
+          case 'background':
+            await store.setApplicationActive(false);
+          case 'account':
+            store.accountProfile = const AccountProfile(
+              id: 'other',
+              displayName: 'Other',
+            );
+          case 'ad':
+            store.playback.value = const PlaybackState(
+              phase: PlaybackPhase.advertisement,
+            );
+          case 'episode':
+            await store.play(
+              const Anime(
+                id: '1',
+                title: 'Sample',
+                cover: '',
+                latestVideoId: '40191',
+              ),
+            );
+        }
+        token.complete(http.Response('offline-csrf', 200));
+        await rejected;
+        expect(sender.posts, isEmpty);
+        expect(store.needsOfficialPortal, isFalse);
+      },
+    );
+  }
+
+  test(
+    'acknowledgement from an old episode never appears in its replacement',
+    () async {
+      final sender = DanmakuSendFixture();
+      final store = await nativeSendingStore(sender);
+      addTearDown(store.dispose);
+      final response = Completer<http.Response>(), posted = Completer<void>();
+      sender.handler = (request) async {
+        if (request.method == 'POST') {
+          posted.complete();
+          return response.future;
+        }
+        return sender.response(request);
+      };
+      final sending = store.sendDanmaku('old episode');
+      await posted.future;
+      await expectLater(
+        store.sendDanmaku('duplicate'),
+        throwsA(communityCode('busy')),
+      );
+      await store.play(
+        const Anime(
+          id: '1',
+          title: 'Sample',
+          cover: '',
+          latestVideoId: '40191',
+        ),
+      );
+      response.complete(http.Response('{"sn":91}', 200));
+      await sending;
+      expect(sender.posts.length, 1);
+      expect(
+        store.nativeHttpPlayback!.danmaku.where((item) => item.id == '91'),
+        isEmpty,
+      );
+      expect(store.nativeHttpPlayback!.videoId, '40191');
+    },
+  );
+
   testWidgets('integrated HTTP player mounts no portal and routes controls', (
     tester,
   ) async {
@@ -294,6 +422,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final fixture = HttpFixture(ads: false);
+    final senderFixture = DanmakuSendFixture();
     final store = AppStore(
       storage: MemoryStorage(),
       dictionaries: const {},
@@ -307,6 +436,7 @@ void main() {
       ),
       enableNativeHttpPlayback: true,
       nativeHttpApiFactory: fixture.api,
+      danmakuSender: senderFixture.sender,
     );
     final portal = FakePortal();
     await store.attach(portal);
@@ -345,7 +475,7 @@ void main() {
       'Test & native',
     );
     expect(find.byKey(const ValueKey('player-danmaku-button')), findsOneWidget);
-    expect(find.byKey(const ValueKey('player-danmaku-send')), findsNothing);
+    expect(find.byKey(const ValueKey('player-danmaku-send')), findsOneWidget);
     final currentPlayer = store.nativeHttpPlayback!.player;
     await tester.tap(find.byKey(const ValueKey('player-danmaku-button')));
     await tester.pump();
@@ -380,6 +510,60 @@ void main() {
     );
     expect(portal.scripts, isEmpty);
     expect(portal.communityRequests, isEmpty);
+    expect(senderFixture.requests, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('player-danmaku-send')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('danmakuLoginRequired'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('community-input-60')),
+      '原生發送草稿',
+    );
+    store.accountProfile = const AccountProfile(
+      id: 'reader',
+      displayName: 'Reader',
+    );
+    await tester.runAsync(
+      () => store.setDanmakuSettings(store.danmakuSettings),
+    );
+    await tester.pump();
+    senderFixture.handler = (request) async => request.method == 'POST'
+        ? http.Response('{"error":1}', 200)
+        : senderFixture.response(request);
+    final sendButton = find.byIcon(CupertinoIcons.arrow_up_circle_fill);
+    await tester.tap(sendButton);
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(find.text('原生發送草稿'), findsOneWidget);
+    expect(
+      store.nativeHttpPlayback!.danmaku.where((item) => item.id == '91'),
+      isEmpty,
+    );
+    senderFixture.handler = null;
+    await tester.tap(sendButton);
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    expect(find.text('原生發送草稿'), findsNothing);
+    expect(
+      store.nativeHttpPlayback!.danmaku
+          .singleWhere((item) => item.id == '91')
+          .text,
+      '原生發送草稿',
+    );
+    await tester.runAsync(store.nativeHttpPlayback!.loadDanmaku);
+    expect(
+      store.nativeHttpPlayback!.danmaku.where((item) => item.id == '91').length,
+      1,
+    );
+    expect(portal.communityRequests, isEmpty);
+    expect(portal.scripts, isEmpty);
+    Navigator.of(tester.element(find.byType(DanmakuPanel))).pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
     fixture.handler = (request) async => request.url.path.endsWith('/danmu.php')
         ? http.Response('', 503)
         : fixture.response(request);

@@ -63,11 +63,12 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
   String _color = '#FFFFFF';
   Object? _error;
   late final String? _videoId = widget.store.playingVideoId;
+  late final String _document = widget.store.operation.id;
   AppStore get store => widget.store;
 
   Future<void> _send() async {
     if (_sending) return;
-    if (_videoId != store.playingVideoId) {
+    if (_videoId != store.playingVideoId || _document != store.operation.id) {
       setState(() => _error = const CommunityException('stale'));
       return;
     }
@@ -82,7 +83,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
         position: _position,
         size: _size,
       );
-      if (mounted) _draft.clear();
+      if (mounted &&
+          _videoId == store.playingVideoId &&
+          _document == store.operation.id) {
+        _draft.clear();
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error);
     } finally {
@@ -100,10 +105,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     builder: (context, _) {
       final settings = store.danmakuSettings;
       final canSend =
-          !store.usesNativeHttpPlayback &&
+          store.accountProfile != null &&
           store.danmakuSettings.enabled &&
           store.playback.value.canControl &&
-          store.playingVideoId == _videoId;
+          store.playingVideoId == _videoId &&
+          store.operation.id == _document;
       return GlassScaffold(
         key: ValueKey(
           widget.composerOnly ? 'danmaku-composer' : 'danmaku-panel',
@@ -329,7 +335,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                   if (widget.composerOnly && !canSend) ...[
                     const SizedBox(height: 16),
                     Text(
-                      store.t('danmakuWaitForContent'),
+                      store.t(
+                        store.accountProfile == null
+                            ? 'danmakuLoginRequired'
+                            : 'danmakuWaitForContent',
+                      ),
                       style: TextStyle(
                         color: secondary(context),
                         fontSize: 12,

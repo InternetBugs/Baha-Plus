@@ -1,4 +1,6 @@
 import 'fake_metadata.dart';
+import 'fake_account.dart';
+import 'package:baha_plus/core/community.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -41,10 +43,17 @@ class MemoryStorage implements DeviceStorage {
 
 class FakePortal implements OfficialPortal {
   Object? loadError;
-  final communityRequests = <Json>[];
-  Json communityResponse = {'ok': false, 'code': 'unavailable'};
-  Completer<Json>? communityPending;
-  Future<Json> Function(String, Json)? communityHandler;
+  final accountApi = FakeAccountApi();
+  List<Json> get communityRequests => accountApi.communityRequests;
+  Json get communityResponse => accountApi.communityResponse;
+  set communityResponse(Json value) => accountApi.communityResponse = value;
+  Completer<Json>? get communityPending => accountApi.communityPending;
+  set communityPending(Completer<Json>? value) =>
+      accountApi.communityPending = value;
+  Future<Json> Function(String, Json)? get communityHandler =>
+      accountApi.communityHandler;
+  set communityHandler(Future<Json> Function(String, Json)? value) =>
+      accountApi.communityHandler = value;
   @override
   Future<Json> community(String action, Json arguments) async {
     communityRequests.add({'action': action, ...arguments});
@@ -87,8 +96,10 @@ class FakePortal implements OfficialPortal {
 Future<AppStore> _createStore({
   DeviceStorage? storage,
   AnimeSearch? animeSearch,
+  FakeAccountApi? accountApi,
 }) => AppStore.create(
   metadataApi: FakeMetadata(),
+  accountApi: accountApi ?? FakeAccountApi(),
   storage: storage ?? MemoryStorage(),
   animeSearch: animeSearch ?? FakeSearch(),
 );
@@ -262,7 +273,8 @@ void main() {
     'logout visits the official endpoint and clears caches only after a verified guest response',
     () async {
       final disk = MemoryStorage();
-      final store = await _createStore(storage: disk);
+      final api = FakeAccountApi();
+      final store = await _createStore(storage: disk, accountApi: api);
       addTearDown(store.dispose);
       store.catalog = catalog;
       final portal = FakePortal();
@@ -288,7 +300,8 @@ void main() {
         source: OfficialSite.home,
         isMainFrame: true,
       );
-      await send(account);
+      api.accountLoader = () async => account;
+      await store.syncAccount();
       await Future<void>.delayed(Duration.zero);
       expect(await AccountCache(disk).load(), isNotNull);
       expect(store.accountProfile?.id, 'fixture-user');
@@ -444,34 +457,28 @@ void main() {
     expect(store.accountProfile?.id, 'fixture-user');
   });
 
-  test(
-    'account sync returns from the login site to the official account origin',
-    () async {
-      final store = await _createStore(storage: MemoryStorage());
-      addTearDown(store.dispose);
-      final portal = FakePortal();
-      await store.attach(portal);
-      await store.connectAccount();
-      store.updateNavigation(
-        Uri.parse('https://user.gamer.com.tw/login.php'),
-        canGoBack: true,
-      );
-      final before = portal.scripts.length;
-      await store.syncAccount();
-      expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
-      expect(store.browserVisible, isTrue);
-      expect(store.operation.intent, BrowserIntent.account);
-      expect(
-        portal.scripts
-            .skip(before)
-            .any((script) => script.contains("post({type:'account-guest'})")),
-        isFalse,
-      );
-      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
-      expect(store.operation.intent, BrowserIntent.accountRefresh);
-      expect(portal.scripts.last, contains("post({type:'account-guest'})"));
-    },
-  );
+  test('native account refresh leaves an open login document intact', () async {
+    final api = FakeAccountApi()..accountLoader = () async => null;
+    final store = await _createStore(accountApi: api);
+    addTearDown(store.dispose);
+    final portal = FakePortal();
+    await store.attach(portal);
+    await store.connectAccount();
+    store.updateNavigation(
+      Uri.parse('https://user.gamer.com.tw/login.php'),
+      canGoBack: true,
+    );
+    final visits = portal.visited.length;
+    final document = store.operation.id;
+    await store.syncAccount();
+    expect(api.accountReads, 1);
+    expect(portal.visited.length, visits);
+    expect(store.operation.id, document);
+    expect(store.browserVisible, isTrue);
+    await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
+    expect(portal.scripts.last, contains('Only login/logout identity'));
+    expect(portal.scripts.last, isNot(contains('/anime/v3/history.php')));
+  });
 
   test(
     'login reload replaces the old sync request and starts sync in the new document',
@@ -508,87 +515,81 @@ void main() {
       expect(portal.scripts.length, before + 1);
       expect(portal.scripts.last, contains('const watch = true'));
       expect(portal.scripts.last, isNot(contains('__BAHA_WATCH_ACCOUNT__')));
-      expect(store.operation.id, isNot(newRequest));
+      expect(store.operation.id, newRequest);
     },
   );
 
   test(
-    'identified login survives a failed data sync and clears another account snapshot',
+    'identified login survives a failed native sync and clears another account snapshot',
     () async {
       final disk = MemoryStorage();
-      final store = await _createStore(storage: disk);
+      final api = FakeAccountApi()
+        ..accountLoader = () async => {
+          'profile': {'id': 'old-user', 'displayName': '舊帳號'},
+          'favorites': [catalog.items.first.toJson()],
+          'history': [],
+        };
+      final store = await _createStore(storage: disk, accountApi: api);
       addTearDown(store.dispose);
       store.catalog = catalog;
-      final portal = FakePortal();
-      await store.attach(portal);
-      store.updateNavigation(OfficialSite.home, canGoBack: false);
-      Future<void> send(Json body) => store.receive(
-        jsonEncode({...body, 'requestId': store.operation.id}),
+      await store.attach(FakePortal());
+      await store.syncAccount();
+      expect(store.favorites, hasLength(1));
+      api.accountLoader = () async =>
+          throw const CommunityException('unavailable');
+      store.operation = BrowserRequest(intent: BrowserIntent.account);
+      await store.receive(
+        jsonEncode({
+          'type': 'account-authenticated',
+          'requestId': store.operation.id,
+          'profile': {'id': 'new-user', 'displayName': '新帳號'},
+        }),
         origin: OfficialSite.home,
         source: OfficialSite.home,
         isMainFrame: true,
       );
-      await store.syncAccount();
-      await send({
-        'type': 'account-synced',
-        'profile': {'id': 'old-user', 'displayName': '舊帳號'},
-        'favorites': [catalog.items.first.toJson()],
-        'history': [],
-      });
-      await store.syncAccount();
-      final request = store.operation.id;
-      store.browserVisible = true;
-      await send({
-        'type': 'account-authenticated',
-        'profile': {'id': 'new-user', 'displayName': '新帳號'},
-      });
-      expect(store.operation.id, request);
-      expect(store.busy, isTrue);
+      expect(store.busy, isFalse);
       expect(store.browserVisible, isFalse);
       expect(store.accountProfile?.id, 'new-user');
       expect(store.favorites, isEmpty);
       expect(store.history, isEmpty);
       expect(store.accountSynced, isFalse);
-      await send({'type': 'account-error'});
-      expect(store.busy, isFalse);
-      expect(store.accountProfile?.id, 'new-user');
       expect(store.accountNeedsRefresh, isTrue);
       expect(store.notice, store.t('accountSyncError'));
       await Future<void>.delayed(Duration.zero);
       expect(await AccountCache(disk).load(), isNull);
-
+      api.accountLoader = () async => null;
       await store.syncAccount();
-      await send({'type': 'account-guest'});
       expect(store.accountProfile, isNull);
-      expect(store.accountNeedsRefresh, isFalse);
     },
   );
 
   test(
-    'same account keeps its last synced data when refresh fails after login identification',
+    'same account keeps its cached data when native refresh fails after login identification',
     () async {
-      final store = await _createStore();
+      const profile = {'id': 'fixture-user', 'displayName': '測試暱稱'};
+      final api = FakeAccountApi()
+        ..accountLoader = () async => {
+          'profile': profile,
+          'favorites': [catalog.items.first.toJson()],
+          'history': [],
+        };
+      final store = await _createStore(accountApi: api);
       addTearDown(store.dispose);
-      store.catalog = catalog;
-      await store.attach(FakePortal());
-      store.updateNavigation(OfficialSite.home, canGoBack: false);
-      Future<void> send(Json body) => store.receive(
-        jsonEncode({...body, 'requestId': store.operation.id}),
+      await store.syncAccount();
+      api.accountLoader = () async =>
+          throw const CommunityException('unavailable');
+      store.operation = BrowserRequest(intent: BrowserIntent.account);
+      await store.receive(
+        jsonEncode({
+          'type': 'account-authenticated',
+          'requestId': store.operation.id,
+          'profile': profile,
+        }),
         origin: OfficialSite.home,
         source: OfficialSite.home,
         isMainFrame: true,
       );
-      const profile = {'id': 'fixture-user', 'displayName': '測試暱稱'};
-      await store.syncAccount();
-      await send({
-        'type': 'account-synced',
-        'profile': profile,
-        'favorites': [catalog.items.first.toJson()],
-        'history': [],
-      });
-      await store.syncAccount();
-      await send({'type': 'account-authenticated', 'profile': profile});
-      await send({'type': 'account-error'});
       expect(store.accountProfile?.id, 'fixture-user');
       expect(store.accountSynced, isTrue);
       expect(store.favorites.single.id, catalog.items.first.id);
@@ -631,46 +632,37 @@ void main() {
   );
 
   test(
-    'account data updates automatically on history entry and foreground without duplicate requests',
+    'native account refresh deduplicates history entry and refreshes on foreground',
     () async {
-      final store = await _createStore(storage: MemoryStorage());
+      final pending = Completer<Json?>();
+      final api = FakeAccountApi()..accountLoader = () => pending.future;
+      final store = await _createStore(accountApi: api);
       addTearDown(store.dispose);
-      store.catalog = catalog;
-      final portal = FakePortal();
-      await store.attach(portal);
-      store.updateNavigation(OfficialSite.home, canGoBack: false);
-      Future<void> finish() => store.receive(
-        jsonEncode({
-          'type': 'account-synced',
-          'requestId': store.operation.id,
-          'favorites': [],
-          'history': [],
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: true,
-      );
-      await store.syncAccount();
-      await finish();
-      final before = portal.scripts.length;
+      await store.attach(FakePortal());
+      final refresh = store.syncAccount();
       store.selectTab(3);
-      expect(portal.scripts.length, before + 1);
       store.selectTab(3);
       await store.syncAccount();
-      expect(portal.scripts.length, before + 1);
-      await finish();
+      expect(api.accountReads, 1);
+      pending.complete({
+        'profile': {'id': 'reader', 'displayName': '讀者'},
+        'favorites': [],
+        'history': [],
+      });
+      await refresh;
       await store.setApplicationActive(false);
       await store.setApplicationActive(true);
-      expect(portal.scripts.length, before + 2);
-      await finish();
+      expect(api.accountReads, 2);
       expect(store.accountSynced, isTrue);
+      expect(store.needsOfficialPortal, isFalse);
     },
   );
 
   test(
-    'closing the login page automatically returns to the official account for hidden sync',
+    'closing login refreshes account natively without another browser document',
     () async {
-      final store = await _createStore(storage: MemoryStorage());
+      final api = FakeAccountApi()..accountLoader = () async => null;
+      final store = await _createStore(accountApi: api);
       addTearDown(store.dispose);
       final portal = FakePortal();
       await store.attach(portal);
@@ -679,12 +671,13 @@ void main() {
         Uri.parse('https://user.gamer.com.tw/login.php'),
         canGoBack: true,
       );
+      final visits = portal.visited.length;
       await store.closeBrowser();
       expect(store.browserVisible, isFalse);
-      expect(portal.visited.last, OfficialSite.home.resolve('mygather.php'));
-      expect(store.operation.intent, BrowserIntent.accountRefresh);
-      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
-      expect(portal.scripts.last, contains("post({type:'account-guest'})"));
+      expect(portal.visited.length, visits);
+      expect(store.operation.intent, BrowserIntent.idle);
+      expect(api.accountReads, 1);
+      expect(store.needsOfficialPortal, isFalse);
     },
   );
 
@@ -709,40 +702,35 @@ void main() {
         );
       }
       final disk = MemoryStorage();
-      final store = await _createStore(storage: disk);
+      final api = FakeAccountApi();
+      final store = await _createStore(storage: disk, accountApi: api);
       addTearDown(store.dispose);
       await store.attach(FakePortal());
       store.updateNavigation(
         OfficialSite.home.resolve('mygather.php'),
         canGoBack: false,
       );
-      Future<void> send(Json body) => store.receive(
-        jsonEncode({...body, 'requestId': store.operation.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.home.resolve('mygather.php'),
-        isMainFrame: true,
-      );
-      await store.syncAccount();
-      await send({
-        'type': 'account-synced',
+      api.accountLoader = () async => {
         'profile': profile,
         'favorites': [],
         'history': [],
-      });
+      };
+      await store.syncAccount();
       expect(store.accountProfile?.id, 'fixture-user');
       await Future<void>.delayed(Duration.zero);
       expect(disk.values[AccountCache.key], isNotEmpty);
       await store.syncAccount();
-      await send({'type': 'account-guest'});
+      api.accountLoader = () async => null;
+      await store.syncAccount();
       expect(store.accountProfile, isNull);
       expect(store.accountSynced, isFalse);
       await store.syncAccount();
-      await send({
-        'type': 'account-synced',
+      api.accountLoader = () async => {
         'profile': profile,
         'favorites': [],
         'history': [],
-      });
+      };
+      await store.syncAccount();
       await store.connectAccount();
       expect(store.accountProfile, isNull);
     },
@@ -752,33 +740,27 @@ void main() {
     'account snapshot restores on restart and clears after official logout',
     () async {
       final disk = MemoryStorage();
-      final store = await _createStore(storage: disk);
+      final api = FakeAccountApi();
+      final store = await _createStore(storage: disk, accountApi: api);
       addTearDown(store.dispose);
       store.catalog = catalog;
       await store.attach(FakePortal());
       store.updateNavigation(OfficialSite.home, canGoBack: false);
+      api.accountLoader = () async => {
+        'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
+        'favorites': [catalog.items.first.toJson()],
+        'history': [
+          {
+            'anime': catalog.items.first.toJson(),
+            'videoId': '20',
+            'episodeLabel': '第一集',
+            'progress': 0.5,
+            'watchedAt': '2026-11-08T06:42:00.000Z',
+            'nextVideoId': '21',
+          },
+        ],
+      };
       await store.syncAccount();
-      await store.receive(
-        jsonEncode({
-          'type': 'account-synced',
-          'requestId': store.operation.id,
-          'profile': {'id': 'fixture-user', 'displayName': '測試暱稱'},
-          'favorites': [catalog.items.first.toJson()],
-          'history': [
-            {
-              'anime': catalog.items.first.toJson(),
-              'videoId': '20',
-              'episodeLabel': '第一集',
-              'progress': 0.5,
-              'watchedAt': '2026-11-08T06:42:00.000Z',
-              'nextVideoId': '21',
-            },
-          ],
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: true,
-      );
       await Future<void>.delayed(Duration.zero);
       final restored = await _createStore(storage: disk);
       addTearDown(restored.dispose);
@@ -795,16 +777,8 @@ void main() {
       restored.catalog = catalog;
       await restored.attach(FakePortal());
       restored.updateNavigation(OfficialSite.home, canGoBack: false);
+      (restored.accountApi as FakeAccountApi).accountLoader = () async => null;
       await restored.syncAccount();
-      await restored.receive(
-        jsonEncode({
-          'type': 'account-guest',
-          'requestId': restored.operation.id,
-        }),
-        origin: OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: true,
-      );
       await Future<void>.delayed(Duration.zero);
       final afterLogout = await _createStore(storage: disk);
       addTearDown(afterLogout.dispose);

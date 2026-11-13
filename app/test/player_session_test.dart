@@ -88,14 +88,6 @@ void main() {
           InAppWebViewPlatform.instance = previousPlatform;
         }
       });
-      final store = (await tester.runAsync(
-        () => AppStore.create(
-          metadataApi: FakeMetadata(),
-          storage: MemoryStorage(),
-          animeSearch: FakeSearch(),
-        ),
-      ))!;
-      addTearDown(store.dispose);
       final portal = _SessionPortal()
         ..communityResponse = {
           'ok': true,
@@ -104,6 +96,15 @@ void main() {
           'nextPage': 0,
           'comments': <Json>[],
         };
+      final store = (await tester.runAsync(
+        () => AppStore.create(
+          metadataApi: FakeMetadata(),
+          accountApi: portal.accountApi,
+          storage: MemoryStorage(),
+          animeSearch: FakeSearch(),
+        ),
+      ))!;
+      addTearDown(store.dispose);
       await store.attach(portal);
       await store.play(
         const Anime(

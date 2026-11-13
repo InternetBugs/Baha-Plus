@@ -41,16 +41,22 @@ class NativeHttpPreparation {
   final NativeHttpAd? ad;
 }
 
-/// Closed-origin, in-memory guest cookies. Never imports browser/account data.
+/// Closed-origin, in-memory cookies. Guest playback and account submissions
+/// each own a separate jar; the playback jar never imports browser cookies.
 class NativeHttpCookieJar {
+  NativeHttpCookieJar({
+    Set<String> allowedHosts = const {'ani.gamer.com.tw', 'api.gamer.com.tw'},
+  }) : _allowedHosts = Set.unmodifiable(allowedHosts);
+
+  final Set<String> _allowedHosts;
   final _cookies =
       <String, ({Cookie cookie, bool hostOnly, DateTime? until})>{};
 
-  static bool _trusted(Uri uri) =>
+  bool _trusted(Uri uri) =>
       uri.scheme == 'https' &&
       uri.port == 443 &&
       uri.userInfo.isEmpty &&
-      const ['ani.gamer.com.tw', 'api.gamer.com.tw'].contains(uri.host);
+      _allowedHosts.contains(uri.host);
 
   void receive(Uri uri, String raw, {DateTime? now}) {
     if (!_trusted(uri)) return;

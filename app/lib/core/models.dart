@@ -203,6 +203,12 @@ class AccountProfile {
 
   final String id, displayName;
   final String? avatar;
+
+  Json toJson() => {
+    'id': id,
+    'displayName': displayName,
+    if (avatar != null) 'avatar': avatar,
+  };
 }
 
 class Metadata {
@@ -309,4 +315,14 @@ class WatchEntry {
   final String? progressLabel;
   final DateTime? watchedAt;
   final String? nextVideoId;
+
+  Json toJson() => {
+    'anime': anime.toJson(),
+    'videoId': videoId,
+    'episodeLabel': episodeLabel,
+    if (progress != null) 'progress': progress,
+    if (progressLabel != null) 'progressLabel': progressLabel,
+    if (watchedAt != null) 'watchedAt': watchedAt!.toUtc().toIso8601String(),
+    if (nextVideoId != null) 'nextVideoId': nextVideoId,
+  };
 }

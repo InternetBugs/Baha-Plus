@@ -809,7 +809,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   List<Widget> _danmakuActions() {
     final enabled = store.danmakuSettings.enabled;
     return [
-      if (enabled && !store.usesNativeHttpPlayback) ...[
+      if (enabled) ...[
         GlassIconButton(
           key: const ValueKey('player-danmaku-send'),
           size: 36,

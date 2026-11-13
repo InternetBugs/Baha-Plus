@@ -1,4 +1,6 @@
 import 'fake_metadata.dart';
+import 'fake_account.dart';
+import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
 import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -32,6 +34,15 @@ void main() {
     final store = (await tester.runAsync(
       () => AppStore.create(
         metadataApi: FakeMetadata(),
+        accountApi: FakeAccountApi()
+          ..communityResponse = {
+            'ok': true,
+            'messageId': '123',
+            'total': 0,
+            'nextPage': 0,
+            'comments': <Json>[],
+          },
+        danmakuSender: DanmakuSendFixture().sender,
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
       ),
@@ -265,18 +276,12 @@ void main() {
         canGoBack: false,
       );
       Future<void> synced(List<Map<String, dynamic>> history) async {
+        (store.accountApi as FakeAccountApi).accountLoader = () async => {
+          'profile': {'id': 'fixture-user', 'displayName': '測試帳號'},
+          'favorites': [],
+          'history': history,
+        };
         await store.syncAccount();
-        await store.receive(
-          jsonEncode({
-            'type': 'account-synced',
-            'requestId': store.operation.id,
-            'favorites': [],
-            'history': history,
-          }),
-          origin: OfficialSite.home,
-          source: OfficialSite.home.resolve('mygather.php'),
-          isMainFrame: true,
-        );
         await frames(tester);
       }
 
@@ -284,11 +289,15 @@ void main() {
       expect(find.text(store.t('noHistory')), findsOneWidget);
       expect(find.text(store.t('historyHint')), findsNothing);
       expect(find.text(store.t('syncAccount')), findsNothing);
-      final before = portal.scripts.length;
+      final before = (store.accountApi as FakeAccountApi).accountReads;
+      final scripts = portal.scripts.length;
       await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
       await frames(tester);
-      expect(portal.scripts.length, greaterThan(before));
-      expect(portal.scripts.last, contains('account-synced'));
+      expect(
+        (store.accountApi as FakeAccountApi).accountReads,
+        greaterThan(before),
+      );
+      expect(portal.scripts.length, scripts);
       await synced([
         {
           'anime': {
@@ -595,15 +604,7 @@ void main() {
         OfficialSite.home.resolve('mygather.php'),
         canGoBack: false,
       );
-      await store.syncAccount();
-      Future<void> send(Map<String, dynamic> body) => store.receive(
-        jsonEncode({...body, 'requestId': store.operation.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.home.resolve('mygather.php'),
-        isMainFrame: true,
-      );
-      await send({
-        'type': 'account-synced',
+      (store.accountApi as FakeAccountApi).accountLoader = () async => {
         'profile': {
           'id': 'fixture-user',
           'displayName': '測試暱稱',
@@ -612,7 +613,14 @@ void main() {
         },
         'favorites': [],
         'history': [],
-      });
+      };
+      await store.syncAccount();
+      Future<void> send(Map<String, dynamic> body) => store.receive(
+        jsonEncode({...body, 'requestId': store.operation.id}),
+        origin: OfficialSite.home,
+        source: OfficialSite.home.resolve('mygather.php'),
+        isMainFrame: true,
+      );
       await frames(tester);
       final portrait = tester.widget<AccountPortrait>(
         find.descendant(
@@ -727,6 +735,10 @@ void main() {
     'the entire playback page is native and controls follow the current official episode',
     (tester) async {
       final store = await launch(tester);
+      store.accountProfile = const AccountProfile(
+        id: 'reader',
+        displayName: '讀者',
+      );
       final portal = FakePortal()
         ..communityResponse = {
           'ok': true,
@@ -817,8 +829,8 @@ void main() {
       await frames(tester);
       await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
       await frames(tester);
-      expect(portal.communityRequests.last['text'], '測試彈幕');
-      expect(portal.communityRequests.last['videoId'], '20');
+      expect(store.sentDanmaku.single.text, '測試彈幕');
+      expect(portal.communityRequests, isEmpty);
       expect(find.text('測試彈幕'), findsNothing);
       await tester.tap(find.bySemanticsLabel(store.t('close')).last);
       await frames(tester);

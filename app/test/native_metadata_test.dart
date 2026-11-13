@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
@@ -15,6 +14,7 @@ import 'package:http/testing.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'core_test.dart' show FakePortal, FakeSearch, MemoryStorage;
+import 'fake_account.dart';
 import 'fake_metadata.dart';
 
 const _anime = Anime(
@@ -73,10 +73,15 @@ class _PortalState extends State<_Portal> {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  Future<AppStore> create(FakeMetadata api, {MemoryStorage? storage}) async {
+  Future<AppStore> create(
+    FakeMetadata api, {
+    MemoryStorage? storage,
+    FakeAccountApi? accountApi,
+  }) async {
     final store = await AppStore.create(
       storage: storage ?? MemoryStorage(),
       metadataApi: api,
+      accountApi: accountApi ?? FakeAccountApi(),
       animeSearch: FakeSearch(),
       updates: AppUpdates(
         versionLoader: () async => '1.0.0',
@@ -278,10 +283,14 @@ void main() {
   );
 
   testWidgets(
-    'official portal is created for playback and disposed after teardown/account sync',
+    'playback portal unmounts after media cleanup while native account sync is pending',
     (tester) async {
       final api = FakeMetadata()..catalogLoader = () async => _catalog();
-      final store = (await tester.runAsync(() => create(api)))!;
+      final pending = Completer<Json?>();
+      final accountApi = FakeAccountApi()..accountLoader = () => pending.future;
+      final store = (await tester.runAsync(
+        () => create(api, accountApi: accountApi),
+      ))!;
       final lifecycle = _PortalLifecycle();
       await launch(tester, store, lifecycle);
       expect(lifecycle.created, 0);
@@ -291,19 +300,18 @@ void main() {
       expect(lifecycle.portal.visited.single, OfficialSite.video('20'));
       final closing = store.closeBrowser();
       await tester.pump();
+      expect(lifecycle.disposed, 1);
+      expect(store.accountLoading, isTrue);
+      expect(store.needsOfficialPortal, isFalse);
+      expect(lifecycle.portal.visited, [OfficialSite.video('20')]);
       expect(
-        lifecycle.disposed,
-        0,
-        reason: 'Keep the session alive until cleanup finishes.',
+        lifecycle.portal.scripts.any(
+          (script) => script.contains('account-authenticated'),
+        ),
+        isFalse,
       );
-      await tester.pump(const Duration(seconds: 1));
+      pending.complete(null);
       await closing;
-      await store.receive(
-        jsonEncode({'type': 'account-guest', 'requestId': store.operation.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.home.resolve('mygather.php'),
-        isMainFrame: true,
-      );
       await frames(tester);
       expect(lifecycle.disposed, 1);
       expect(store.needsOfficialPortal, isFalse);
@@ -311,6 +319,8 @@ void main() {
       await frames(tester);
       expect(lifecycle.created, 2);
       expect(lifecycle.portal.visited.last, OfficialSite.video('20'));
+      await store.closeBrowser();
+      await frames(tester);
     },
   );
 }

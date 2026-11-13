@@ -59,6 +59,7 @@ void main() {
   Future<AppStore> playingStore(_MediaPortal portal) async {
     final store = await AppStore.create(
       metadataApi: FakeMetadata(),
+      accountApi: portal.accountApi,
       storage: MemoryStorage(),
       animeSearch: FakeSearch(),
     );
@@ -213,14 +214,21 @@ void main() {
       final portal = _MediaPortal();
       final store = await playingStore(portal);
       await store.closeBrowser();
-      await store.syncAccount();
-      expect(store.operation.intent, BrowserIntent.accountRefresh);
+      final pending = Completer<Json?>();
+      portal.accountApi.accountLoader = () => pending.future;
+      final sync = store.syncAccount();
+      expect(store.accountLoading, isTrue);
+      expect(store.operation.intent, BrowserIntent.idle);
+      final navigations = portal.visited.length;
       calls.clear();
       final before = portal.scripts.length;
       await store.navigationFinished(OfficialSite.video('20'));
       expect(portal.scripts[before], contains('session.metadata = null'));
       expect(calls.single.method, 'releasePlayback');
       expect(store.showsPlayer, isFalse);
+      expect(portal.visited.length, navigations);
+      pending.complete(null);
+      await sync;
     },
   );
 

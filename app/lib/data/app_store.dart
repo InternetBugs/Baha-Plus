@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../core/browser_request.dart';
 import '../core/community.dart';
+import '../core/native_danmaku.dart';
 import '../core/models.dart';
 import '../core/playback_state.dart';
 import '../core/search_folding.dart';
@@ -14,6 +15,8 @@ import 'app_updates.dart';
 import 'app_diagnostics.dart';
 import 'native_http_api.dart';
 import 'native_http_playback.dart';
+import 'native_danmaku_sender.dart';
+import 'native_account_api.dart';
 
 abstract interface class OfficialPortal {
   Future<void> load(Uri uri);
@@ -61,10 +64,14 @@ class AppStore extends ChangeNotifier {
     AppDiagnostics? diagnostics,
     this.enableNativeHttpPlayback = nativeHttpPlaybackEnabled,
     this.nativeHttpApiFactory,
+    NativeDanmakuSender? danmakuSender,
+    NativeAccountApi? accountApi,
     this.language = 'zh-Hant',
     this.appearance = 'system',
     this.catalog = const Catalog(),
-  }) : searchService =
+  }) : danmakuSender = danmakuSender ?? NativeDanmakuSender(),
+       accountApi = accountApi ?? NativeAccountApi(),
+       searchService =
            animeSearch ??
            OfficialAnimeSearch(toTraditional: folding.toTraditional),
        updates = updates ?? AppUpdates(),
@@ -87,6 +94,8 @@ class AppStore extends ChangeNotifier {
     OfficialAppApi? metadataApi,
     AppUpdates? updates,
     AppDiagnostics? diagnostics,
+    NativeAccountApi? accountApi,
+    NativeDanmakuSender? danmakuSender,
   }) async {
     final disk = storage ?? PreferencesStorage();
     final dictionaries = <String, Map<String, String>>{};
@@ -149,6 +158,8 @@ class AppStore extends ChangeNotifier {
       metadataApi: metadataApi,
       updates: updates,
       diagnostics: diagnostics,
+      accountApi: accountApi,
+      danmakuSender: danmakuSender,
       scripts: scripts,
       language: const ['zh-Hans', 'zh-Hant'].contains(language)
           ? language!
@@ -208,7 +219,15 @@ class AppStore extends ChangeNotifier {
   final AppDiagnostics diagnostics;
   final bool enableNativeHttpPlayback;
   final NativeHttpApi Function()? nativeHttpApiFactory;
+  final NativeDanmakuSender danmakuSender;
+  final NativeAccountApi accountApi;
+  int _accountGeneration = 0;
+  int _accountSnapshotRevision = 0;
+  bool accountLoading = false;
+  (Anime, bool)? _favoriteAfterLogin;
+  bool get favoriteLoginPending => _favoriteAfterLogin != null;
   NativeHttpPlayback? nativeHttpPlayback;
+  List<NativeDanmaku> sentDanmaku = const [];
   bool get usesNativeHttpPlayback => nativeHttpPlayback != null && showsPlayer;
   String? _lastDiagnosticPlayback;
   DateTime? _lastDiagnosticSample;
@@ -288,7 +307,7 @@ class AppStore extends ChangeNotifier {
   BrowserRequest operation = BrowserRequest(intent: BrowserIntent.catalog);
   OfficialPortal? _portal;
   Completer<OfficialPortal?>? _portalReady;
-  int _communityOperations = 0, _portalTeardowns = 0;
+  int _portalTeardowns = 0;
   bool _portalHostActive = false;
   void setPortalHostActive(bool active) {
     _portalHostActive = active;
@@ -298,7 +317,6 @@ class AppStore extends ChangeNotifier {
       (browserVisible && !usesNativeHttpPlayback) ||
       (busy && !usesNativeHttpPlayback) ||
       _pendingUri != null ||
-      _communityOperations > 0 ||
       _portalTeardowns > 0 ||
       (operation.intent == BrowserIntent.detail && detailLoading);
   Uri? _pendingUri;
@@ -317,7 +335,7 @@ class AppStore extends ChangeNotifier {
   String? _accountSyncDocument;
   Completer<bool>? _logoutResult;
   bool _logoutVerifying = false;
-  Future<void> _accountCacheWrite = Future<void>.value();
+  Future<void>? _accountCacheWrite;
   int _preferredQuality = 0;
   String? _qualityRestoredDocument;
   DateTime? _qualityRetryAfter;
@@ -540,70 +558,32 @@ class AppStore extends ChangeNotifier {
       _readNotifications.contains(item.id);
 
   Future<Json> community(String action, Json arguments) async {
-    // Do not let automatic comment previews mount an account WebView or
-    // replace the HTTP playback ticket. Native community support is separate.
-    if (usesNativeHttpPlayback) {
+    if (!_applicationActive || _disposed || loggingOut) {
       throw const CommunityException('unavailable');
     }
-    if (!_applicationActive ||
-        _disposed ||
-        (_portal == null && !_portalHostActive)) {
-      throw const CommunityException('unavailable');
+    final generation = _accountGeneration;
+    final owner = accountProfile?.id.toLowerCase();
+    final document = operation.id;
+    void checkCurrent() {
+      if (_disposed ||
+          loggingOut ||
+          !_applicationActive ||
+          generation != _accountGeneration ||
+          owner != accountProfile?.id.toLowerCase() ||
+          (!communityReadActions.contains(action) &&
+              document != operation.id)) {
+        throw const CommunityException('stale');
+      }
     }
-    _communityOperations++;
-    try {
-      var portal = _portal;
-      if (portal == null) {
-        // Comment previews can request data from initState. Defer the portal
-        // notification until the current widget build has finished.
-        await Future<void>.value();
-        if (_disposed || !_applicationActive) {
-          throw const CommunityException('unavailable');
-        }
-        _emit();
-        final ready = _portalReady ??= Completer<OfficialPortal?>();
-        await syncAccount();
-        portal =
-            _portal ??
-            await ready.future.timeout(
-              const Duration(seconds: 12),
-              onTimeout: () => null,
-            );
-      }
-      if (portal == null || !_applicationActive || _disposed) {
-        throw const CommunityException('unavailable');
-      }
-      for (var attempt = 0; attempt < 2; attempt++) {
-        try {
-          final result = await portal.community(action, {
-            ...arguments,
-            if (accountProfile != null) 'owner': accountProfile!.id,
-          });
-          if (result['ok'] != true) {
-            throw CommunityException(result['code'] as String? ?? 'network');
-          }
-          return result;
-        } on CommunityException catch (error) {
-          // Background account sync can replace its ticket without replacing the
-          // official document. Retry only reads; a write must never be repeated.
-          if (attempt != 0 ||
-              error.code != 'stale' ||
-              !communityReadActions.contains(action) ||
-              _disposed ||
-              !_applicationActive) {
-            rethrow;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 150));
-          if (_disposed || !_applicationActive) {
-            throw const CommunityException('unavailable');
-          }
-        }
-      }
-      throw const CommunityException('stale');
-    } finally {
-      _communityOperations--;
-      _emit();
+
+    final result = await accountApi.community(action, {
+      ...arguments,
+      'owner': ?owner,
+    }, checkCurrent: checkCurrent);
+    if (result['ok'] != true) {
+      throw CommunityException(result['code'] as String? ?? 'network');
     }
+    return result;
   }
 
   Future<CommentPage> loadComments(
@@ -666,20 +646,61 @@ class AppStore extends ChangeNotifier {
     int position = 0,
     int size = 1,
   }) async {
-    if (usesNativeHttpPlayback) throw const CommunityException('login');
     if (!showsPlayer ||
         !playback.value.canControl ||
         playingVideoId == null ||
         !DanmakuSettings.validMessage(text)) {
       throw const CommunityException('input');
     }
-    await _writeCommunity('danmaku', 'danmaku-send', {
-      'videoId': playingVideoId,
-      'text': text.trim(),
-      'color': color,
-      'position': position,
-      'size': size,
-    });
+    if (!_communityWrites.add('danmaku')) {
+      throw const CommunityException('busy');
+    }
+    final session = nativeHttpPlayback;
+    final document = operation.id;
+    final videoId = playingVideoId!;
+    final owner = accountProfile?.id;
+    try {
+      if (owner == null || loggingOut) throw const CommunityException('login');
+      void checkCurrent() {
+        if (_disposed ||
+            operation.id != document ||
+            nativeHttpPlayback != session ||
+            !showsPlayer ||
+            playingVideoId != videoId ||
+            accountProfile?.id.toLowerCase() != owner.toLowerCase()) {
+          throw const CommunityException('stale');
+        }
+        if (!_applicationActive ||
+            loggingOut ||
+            !playback.value.canControl ||
+            !danmakuSettings.enabled) {
+          throw const CommunityException('unavailable');
+        }
+      }
+
+      final item = await danmakuSender.send(
+        videoId: videoId,
+        owner: owner,
+        text: text,
+        color: color,
+        position: position,
+        size: size,
+        checkCurrent: checkCurrent,
+        currentPosition: () => playback.value.position,
+      );
+      if (!_disposed &&
+          nativeHttpPlayback == session &&
+          operation.id == document) {
+        if (session != null) {
+          session.addSentDanmaku(item);
+        } else {
+          sentDanmaku = [...sentDanmaku, item];
+          _emit();
+        }
+      }
+    } finally {
+      _communityWrites.remove('danmaku');
+    }
   }
 
   Future<void> setDanmakuSettings(DanmakuSettings value) async {
@@ -780,12 +801,8 @@ class AppStore extends ChangeNotifier {
         episode: Episode(id: item.videoId, label: ''),
       );
     } catch (_) {
-      browserTitle = item.title;
-      await _load(
-        OfficialSite.video(item.videoId),
-        BrowserIntent.browse,
-        visible: true,
-      );
+      notice = t('accountSyncError');
+      _emit();
     }
   }
 
@@ -1220,6 +1237,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDoc
       _playerWantsToPlay = false;
       _processRecoveryLoading = false;
       _processRecoveryDeadline?.cancel();
+      sentDanmaku = const [];
       playingVideoId = nextVideo;
       playback.value = const PlaybackState();
       _begin(BrowserIntent.play);
@@ -1352,6 +1370,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDoc
 
   Future<void> connectAccount() async {
     if (loggingOut) return;
+    _invalidateAccountRequests();
     _resetNotifications();
     accountProfile = null;
     favorites = [];
@@ -1368,6 +1387,8 @@ if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDoc
 
   Future<bool> logoutAccount() async {
     if (loggingOut || _disposed) return false;
+    _favoriteAfterLogin = null;
+    _invalidateAccountRequests();
     final result = Completer<bool>();
     _logoutResult = result;
     _logoutVerifying = false;
@@ -1418,77 +1439,66 @@ if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDoc
   }
 
   Future<void> toggleFavorite(Anime anime) async {
-    if (_playerFavoriteRequest != null ||
-        (operation.intent == BrowserIntent.favorite && busy)) {
+    final desired = !isFavorite(anime);
+    if (accountProfile == null) {
+      _favoriteAfterLogin = (anime, desired);
+      await connectAccount();
       return;
     }
-    if (showsPlayer &&
-        playingAnime?.id == anime.id &&
-        browserUri == OfficialSite.video(playingVideoId ?? '0')) {
-      await _togglePlayerFavorite(anime);
-      return;
-    }
-    _pendingAnime = anime;
-    _desiredFavorite = !isFavorite(anime);
-    browserTitle = t('favorites');
-    await _load(
-      OfficialSite.search(anime.title),
-      BrowserIntent.favorite,
-      visible: false,
-    );
+    await _setNativeFavorite(anime, desired);
   }
 
-  Future<void> _togglePlayerFavorite(Anime anime) async {
-    final request = BrowserRequest(
-      intent: BrowserIntent.favorite,
-      animeId: anime.id,
-      favoriteTarget: !isFavorite(anime),
-    );
-    final document = operation.id;
-    _playerFavoriteRequest = request;
-    _playerFavoriteAnime = anime;
-    _playerFavoriteDocument = document;
-    _playerFavoriteDeadline = Timer(const Duration(seconds: 30), () {
-      if (_playerFavoriteRequest != request) return;
-      _clearPlayerFavorite();
-      notice = t('accountSyncError');
-      _emit();
-    });
-    final source = scripts['favorite-action']
-        ?.replaceAll('%ANIME_ID%', anime.id)
-        .replaceAll(
-          '__BAHA_DESIRED__',
-          request.favoriteTarget! ? 'true' : 'false',
-        );
+  Future<void> _setNativeFavorite(Anime anime, bool desired) async {
+    final key = 'favorite:${anime.id}';
+    if (loggingOut || _disposed || !_communityWrites.add(key)) return;
+    final owner = accountProfile?.id.toLowerCase();
+    final generation = _accountGeneration;
     try {
-      if (source == null || _portal == null) {
-        throw StateError('Favorite session unavailable');
+      await accountApi.setFavorite(
+        anime,
+        desired,
+        owner: owner,
+        checkCurrent: () {
+          if (_disposed ||
+              loggingOut ||
+              !_applicationActive ||
+              generation != _accountGeneration ||
+              owner != accountProfile?.id.toLowerCase()) {
+            throw const CommunityException('stale');
+          }
+        },
+      );
+      if (!_disposed &&
+          generation == _accountGeneration &&
+          owner == accountProfile?.id.toLowerCase()) {
+        _confirmFavorite(anime, desired);
+        _emit();
+        unawaited(
+          _saveAccountSnapshot({
+            'profile': accountProfile?.toJson(),
+            'favorites': favorites.map((item) => item.toJson()).toList(),
+            'history': history.map((item) => item.toJson()).toList(),
+          }),
+        );
       }
-      // A favorite has its own ticket without changing the player's nonce,
-      // authorization document or native playback ownership.
-      await _portal!.evaluate('''
-(function() {
-const documentTicket = ${jsonEncode(document)};
-const favoriteTicket = ${jsonEncode(request.id)};
-if (window.__bahaDocumentNonce !== documentTicket) return;
-function bahaPostJSON(raw) {
-  if (window.__bahaDocumentNonce !== documentTicket) return;
-  const body = JSON.parse(raw); body.requestId = favoriteTicket;
-  window.baha.postMessage(JSON.stringify(body));
-}
-if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running') ||
-    /^(Just a moment|Checking your browser)/i.test(document.title)) {
-  bahaPostJSON(JSON.stringify({type:'verification-required'})); return;
-}
-$source
-})(); true;
-''');
-    } catch (_) {
-      if (_playerFavoriteRequest == request) {
-        _clearPlayerFavorite();
-        notice = t('accountSyncError');
+    } on CommunityException catch (error) {
+      if (!_disposed && generation == _accountGeneration) {
+        if (error.code == 'login') {
+          _favoriteAfterLogin = (anime, desired);
+          await connectAccount();
+          return;
+        }
+        notice = t(
+          error.code == 'login'
+              ? 'accountHint'
+              : error.code == 'verification'
+              ? 'officialVerificationHint'
+              : 'accountSyncError',
+        );
         _emit();
       }
+    } finally {
+      _communityWrites.remove(key);
     }
   }
 
@@ -1501,6 +1511,7 @@ $source
   }
 
   void _confirmFavorite(Anime anime, bool saved) {
+    _accountSnapshotRevision++;
     favorites = [
       if (saved && !isFavorite(anime)) anime,
       ...favorites.where((item) => saved || item.id != anime.id),
@@ -1510,6 +1521,7 @@ $source
   }
 
   Future<void> play(Anime anime, {Episode? episode}) async {
+    sentDanmaku = const [];
     _cancelResume();
     _awaitingForegroundPlay = false;
     _cancelPlaybackWatchdog();
@@ -1603,7 +1615,9 @@ $source
   }
 
   Future<void> closeBrowser() async {
-    final retainPortal = !usesNativeHttpPlayback;
+    sentDanmaku = const [];
+    if (operation.intent == BrowserIntent.account) _favoriteAfterLogin = null;
+    var retainPortal = !usesNativeHttpPlayback;
     if (retainPortal) _portalTeardowns++;
     try {
       _cancelResume();
@@ -1638,9 +1652,13 @@ $source
         expected: closing,
         releaseSystemMedia: releaseSystemMedia,
       );
+      if (retainPortal) {
+        _portalTeardowns--;
+        retainPortal = false;
+        _emit();
+      }
       if (_disposed || operation.id != closing) return;
       if (refreshAccount) {
-        await Future<void>.delayed(const Duration(seconds: 1));
         if (operation.id == closing && !browserVisible) await syncAccount();
       } else if (operation.id == closing &&
           !browserVisible &&
@@ -1881,33 +1899,61 @@ $source
   Future<void> goBack() async => _portal?.goBack();
 
   Future<void> syncAccount() async {
-    if (loggingOut ||
-        showsPlayer ||
-        (busy &&
-            operation.intent == BrowserIntent.accountRefresh &&
-            _accountSyncDocument == operation.id)) {
-      return;
-    }
-    if (_portal == null ||
-        browserUri == null ||
-        !OfficialSite.trustedOrigin(browserUri!)) {
-      browserTitle = t('officialAccount');
-      await _load(
-        OfficialSite.home.resolve('mygather.php'),
-        browserVisible ? BrowserIntent.account : BrowserIntent.accountRefresh,
-        visible: browserVisible,
+    if (_disposed || loggingOut || accountLoading) return;
+    final generation = _accountGeneration;
+    final revision = _accountSnapshotRevision;
+    accountLoading = true;
+    try {
+      final snapshot = await accountApi.fetchAccount(
+        checkCurrent: () {
+          if (_disposed || loggingOut || generation != _accountGeneration) {
+            throw const CommunityException('stale');
+          }
+        },
       );
-      return;
+      if (_disposed || loggingOut || generation != _accountGeneration) return;
+      if (revision != _accountSnapshotRevision) {
+        accountNeedsRefresh = true;
+        return;
+      }
+      final previousOwner = accountProfile?.id.toLowerCase();
+      accountProfile = snapshot?['profile'] == null
+          ? null
+          : AccountProfile.fromJson(snapshot!['profile'] as Json);
+      if (previousOwner != accountProfile?.id.toLowerCase()) {
+        _resetNotifications();
+      }
+      favorites = [
+        for (final raw in snapshot?['favorites'] as List? ?? [])
+          Anime.fromJson(raw as Json),
+      ];
+      history = [
+        for (final raw in snapshot?['history'] as List? ?? [])
+          WatchEntry.fromJson(raw as Json),
+      ];
+      accountSynced = snapshot != null;
+      accountNeedsRefresh = false;
+      await _saveAccountSnapshot(snapshot);
+    } on CommunityException catch (error) {
+      if (!_disposed && generation == _accountGeneration) {
+        notice = t(
+          error.code == 'verification'
+              ? 'officialVerificationHint'
+              : 'accountSyncError',
+        );
+      }
+    } finally {
+      if (!_disposed && generation == _accountGeneration) {
+        accountLoading = false;
+        _emit();
+      }
     }
-    _begin(BrowserIntent.accountRefresh);
-    _accountSyncDocument = operation.id;
-    notice = null;
-    busy = true;
-    _armDeadline();
-    _emit();
-    await _runScript('account-sync', {
-      '__BAHA_WATCH_ACCOUNT__': browserVisible ? 'true' : 'false',
-    });
+  }
+
+  void _invalidateAccountRequests() {
+    _accountGeneration++;
+    accountLoading = false;
+    accountApi.invalidate();
   }
 
   Future<void> retryFavorite() async {
@@ -1952,7 +1998,8 @@ ${_applicationActive ? '' : _suspendMedia} true;
 
   void navigationStarted() {
     _clearPlayerFavorite();
-    if ((operation.intent == BrowserIntent.accountRefresh ||
+    if ((operation.intent == BrowserIntent.account ||
+            operation.intent == BrowserIntent.accountRefresh ||
             operation.intent == BrowserIntent.logout) &&
         _accountSyncDocument == operation.id) {
       _begin(operation.intent);
@@ -2023,7 +2070,8 @@ ${_applicationActive ? '' : _suspendMedia} true;
         }
       case BrowserIntent.account:
       case BrowserIntent.accountRefresh:
-        await syncAccount();
+        _accountSyncDocument = operation.id;
+        await _runScript('account-sync', {'__BAHA_WATCH_ACCOUNT__': 'true'});
       case BrowserIntent.logout:
         break;
       case BrowserIntent.favorite:
@@ -2140,6 +2188,7 @@ window.__bahaMediaSuspended = false; true;
       return;
     }
     if (body['type'] == 'account-authenticated') {
+      _invalidateAccountRequests();
       final profile = AccountProfile.fromJson(body['profile'] as Json);
       if (accountProfile?.id.toLowerCase() != profile.id.toLowerCase()) {
         _resetNotifications();
@@ -2151,9 +2200,16 @@ window.__bahaMediaSuspended = false; true;
       accountProfile = profile;
       accountNeedsRefresh = true;
       browserVisible = false;
-      busy = true;
-      _armDeadline();
+      busy = false;
+      _pendingUri = null;
+      _begin(BrowserIntent.idle);
       _emit();
+      await syncAccount();
+      final favorite = _favoriteAfterLogin;
+      _favoriteAfterLogin = null;
+      if (favorite != null && accountProfile != null) {
+        await _setNativeFavorite(favorite.$1, favorite.$2);
+      }
       return;
     }
     if (body['type'] == 'player-state' || body['type'] == 'player-detail') {
@@ -2315,14 +2371,17 @@ window.__bahaMediaSuspended = false; true;
   }
 
   Future<void> _saveAccountSnapshot(Json? snapshot) {
-    _accountCacheWrite = _accountCacheWrite.then((_) async {
+    final previous = _accountCacheWrite;
+    final write = () async {
+      if (previous != null) await previous;
       try {
         await AccountCache(storage).save(snapshot);
       } catch (_) {
         // A cache failure must not interrupt the official session.
       }
-    });
-    return _accountCacheWrite;
+    }();
+    _accountCacheWrite = write;
+    return write;
   }
 
   Future<void> _load(
@@ -2547,6 +2606,8 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
     _catalogGeneration++;
     _detailGeneration++;
     nativeHttpPlayback?.dispose();
+    danmakuSender.dispose();
+    accountApi.dispose();
     metadataApi.dispose();
     _finishLogout(false);
     _clearPlayerFavorite();

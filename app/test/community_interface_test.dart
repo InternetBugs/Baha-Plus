@@ -30,18 +30,19 @@ void main() {
   }
 
   Future<(AppStore, FakePortal)> setup(WidgetTester tester) async {
+    final portal = FakePortal();
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final store = (await tester.runAsync(
       () => AppStore.create(
         metadataApi: FakeMetadata(),
+        accountApi: portal.accountApi,
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
       ),
     ))!;
     addTearDown(store.dispose);
-    final portal = FakePortal();
     await store.attach(portal);
     store
         .navigationFailed(); // The fake portal has no catalog navigation to finish.

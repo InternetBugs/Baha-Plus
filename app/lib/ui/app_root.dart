@@ -44,7 +44,9 @@ class _AppRootState extends State<AppRoot>
   double _tabDirection = 1;
   AppStore get store => widget.store;
   bool get _favoritePortalVisible =>
-      widget.mountPortal && store.browserVisible && store.canRetryFavorite;
+      widget.mountPortal &&
+      store.browserVisible &&
+      (store.canRetryFavorite || store.favoriteLoginPending);
 
   @override
   void initState() {
@@ -186,7 +188,7 @@ class _AppRootState extends State<AppRoot>
   );
 
   void _favoritePresentationChanged() {
-    if (store.canRetryFavorite) {
+    if (store.canRetryFavorite || store.favoriteLoginPending) {
       _favoriteScrollOffsets ??= {
         for (final title in _titles)
           if (title.scrollController.hasClients)
@@ -246,7 +248,9 @@ class _AppRootState extends State<AppRoot>
       }
       // A guest response can temporarily empty the favorites tab. Restore its
       // position after the account snapshot is available and laid out again.
-      if (!store.canRetryFavorite && !store.busy) {
+      if (!store.canRetryFavorite &&
+          !store.favoriteLoginPending &&
+          !store.busy) {
         final offsets = _favoriteScrollOffsets;
         _favoriteScrollOffsets = null;
         for (final entry

@@ -44,6 +44,7 @@ class NativeHttpPlayback extends ChangeNotifier {
   final NativeHttpApi api;
   List<NativeDanmaku> _danmaku = const [];
   List<NativeDanmaku> get danmaku => _danmaku;
+  final _sentDanmaku = <String, NativeDanmaku>{};
   bool danmakuLoading = false;
   String? danmakuFailureStage;
   final Duration Function()? _nowOverride;
@@ -189,7 +190,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     try {
       final items = await api.danmaku();
       if (!_live(revision)) return;
-      _danmaku = items;
+      _danmaku = _mergeDanmaku(items);
       diagnostics.record('player.http-danmaku', {'count': items.length});
     } catch (error) {
       if (!_live(revision)) return;
@@ -207,6 +208,21 @@ class NativeHttpPlayback extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  List<NativeDanmaku> _mergeDanmaku(List<NativeDanmaku> items) =>
+      List.unmodifiable(
+        ({
+          for (final item in items) item.id: item,
+          ..._sentDanmaku,
+        }.values.toList()..sort((a, b) => a.time.compareTo(b.time))),
+      );
+
+  void addSentDanmaku(NativeDanmaku item) {
+    if (_disposed || !_contentStarted) return;
+    _sentDanmaku[item.id] = item;
+    _danmaku = _mergeDanmaku(_danmaku);
+    notifyListeners();
   }
 
   Future<void> _install(
@@ -460,6 +476,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     _revision++;
     _timer?.cancel();
     _danmaku = const [];
+    _sentDanmaku.clear();
     api.dispose();
     final current = player;
     player = null;
