@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:baha_plus/core/models.dart';
@@ -51,6 +52,7 @@ void main() {
   Future<AppStore> launch(_ProcessPortal portal) async {
     final disk = MemoryStorage()..values['baha.device.quality'] = '1080';
     final store = await AppStore.create(
+      metadataApi: FakeMetadata(),
       storage: disk,
       animeSearch: FakeSearch(),
     );
@@ -101,8 +103,11 @@ void main() {
     bool attachPortal = true,
   }) async {
     final store = (await tester.runAsync(
-      () =>
-          AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+      () => AppStore.create(
+        metadataApi: FakeMetadata(),
+        storage: MemoryStorage(),
+        animeSearch: FakeSearch(),
+      ),
     ))!;
     await tester.pumpWidget(_StoreOwner(store));
     if (attachPortal) await store.attach(portal);

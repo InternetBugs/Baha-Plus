@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
@@ -334,7 +335,11 @@ Future<_Host> _mountHost(
   InAppWebViewPlatform.instance = webViews;
   VideoPlayerPlatform.instance = video;
   final store = (await tester.runAsync(
-    () => AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+    () => AppStore.create(
+      metadataApi: FakeMetadata(),
+      storage: MemoryStorage(),
+      animeSearch: FakeSearch(),
+    ),
   ))!;
   final host = _Host(tester, store, webViews, controller, video);
   addTearDown(() async {

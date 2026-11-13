@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
@@ -45,6 +46,7 @@ void main() {
       return null;
     });
     store = await AppStore.create(
+      metadataApi: FakeMetadata(),
       storage: MemoryStorage(),
       animeSearch: FakeSearch(),
     );

@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,6 +39,7 @@ void main() {
   Future<(AppStore, FakePortal, MemoryStorage)> setup() async {
     final disk = MemoryStorage();
     final store = await AppStore.create(
+      metadataApi: FakeMetadata(),
       storage: disk,
       animeSearch: FakeSearch(),
     );
@@ -268,6 +270,7 @@ void main() {
         const DanmakuSettings(opacity: .6, top: false),
       );
       final restored = await AppStore.create(
+        metadataApi: FakeMetadata(),
         storage: disk,
         animeSearch: FakeSearch(),
       );

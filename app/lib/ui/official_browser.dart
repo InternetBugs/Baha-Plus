@@ -18,8 +18,9 @@ import '../data/windows_official_bridge.dart';
 import 'player_page.dart';
 import 'native_video_surface.dart';
 
-/// One persistent native WebView owns the official login and player session.
+/// One native WebView owns an active official login/player/account operation.
 /// Only typed public/account projections cross the origin-restricted bridge.
+/// AppRoot releases this view when the operation and its teardown finish.
 class OfficialBrowser extends StatefulWidget {
   const OfficialBrowser({required this.store, super.key});
   final AppStore store;
@@ -546,80 +547,6 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
     }
     if (result?.error != null || result?.value is! String) {
       throw const CommunityException('network');
-    }
-    return jsonDecode(result!.value as String) as Json;
-  }
-
-  @override
-  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount}) async {
-    if (uri.scheme != 'https' ||
-        uri.host != 'api.gamer.com.tw' ||
-        uri.port != 443 ||
-        uri.userInfo.isNotEmpty ||
-        !const [
-          '/anime/v1/search.php',
-          '/anime/v1/anime_list.php',
-        ].contains(uri.path)) {
-      throw const FormatException('Invalid public catalog endpoint');
-    }
-    final deadline = DateTime.now().add(const Duration(seconds: 12));
-    InAppWebViewController? controller;
-    while (mounted && DateTime.now().isBefore(deadline)) {
-      controller = _controller;
-      final source = await controller?.getUrl();
-      if (_publicDocumentReady &&
-          source != null &&
-          OfficialSite.trustedOrigin(Uri.parse(source.toString()))) {
-        break;
-      }
-      controller = null;
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-    if (!mounted || controller == null) {
-      throw StateError('Official catalog connection is not ready');
-    }
-    final result = await controller
-        .callAsyncJavaScript(
-          arguments: {'url': uri.toString(), 'useAccount': useAccount},
-          functionBody: '''
-const endpoint = new URL(url);
-if (location.origin !== 'https://ani.gamer.com.tw' ||
-    endpoint.origin !== 'https://api.gamer.com.tw' ||
-    !['/anime/v1/search.php', '/anime/v1/anime_list.php'].includes(endpoint.pathname)) {
-  throw Error('Invalid public catalog request');
-}
-const abort = new AbortController();
-const timer = setTimeout(() => abort.abort(), 12000);
-try {
-  const response = await fetch(endpoint.href, {
-    credentials: useAccount ? 'include' : 'omit',
-    headers: {Accept: 'application/json'},
-    signal: abort.signal
-  });
-  if (!response.ok || new URL(response.url).origin !== endpoint.origin ||
-      new URL(response.url).pathname !== endpoint.pathname) throw Error('Catalog unavailable');
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > 5000000) throw Error('Catalog too large');
-  const body = JSON.parse(text);
-  if (!Array.isArray(body?.data?.animeList)) throw Error('Invalid catalog response');
-  return JSON.stringify({data: {
-    totalPage: body.data.totalPage,
-    animeList: body.data.animeList.map(item => ({
-      animeSn: item.animeSn, videoSn: item.videoSn, title: item.title,
-      cover: item.cover, totalEpisode: item.totalEpisode, dateInfo: item.dateInfo
-    }))
-  }});
-} finally { clearTimeout(timer); }
-''',
-        )
-        .timeout(const Duration(seconds: 15));
-    final source = await controller.getUrl();
-    if (!mounted ||
-        result?.error != null ||
-        source == null ||
-        !OfficialSite.trustedOrigin(Uri.parse(source.toString())) ||
-        result?.value is! String) {
-      throw StateError('Official catalog request failed');
     }
     return jsonDecode(result!.value as String) as Json;
   }

@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
@@ -55,6 +56,7 @@ void main() {
         addTearDown(tester.view.reset);
         final store = (await tester.runAsync(
           () => AppStore.create(
+            metadataApi: FakeMetadata(),
             storage: MemoryStorage(),
             animeSearch: FakeSearch(),
           ),

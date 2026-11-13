@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 
 import 'package:baha_plus/core/models.dart';
@@ -112,8 +113,11 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final store = (await tester.runAsync(
-      () =>
-          AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+      () => AppStore.create(
+        metadataApi: FakeMetadata(),
+        storage: MemoryStorage(),
+        animeSearch: FakeSearch(),
+      ),
     ))!;
     addTearDown(store.dispose);
     final portal = _SeekPortal()

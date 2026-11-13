@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
@@ -45,8 +46,11 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = (await tester.runAsync(
-      () =>
-          AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+      () => AppStore.create(
+        metadataApi: FakeMetadata(),
+        storage: MemoryStorage(),
+        animeSearch: FakeSearch(),
+      ),
     ))!;
     addTearDown(store.dispose);
     store.history = entries;

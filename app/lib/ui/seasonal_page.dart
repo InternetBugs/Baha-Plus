@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
-import 'catalog_pages.dart' show ShowAnime;
+import 'catalog_pages.dart' show ShowAnime, CatalogStatus;
 import 'chrome.dart';
 
 class SeasonalPage extends StatefulWidget {
@@ -85,6 +85,7 @@ class _SeasonalPageState extends State<SeasonalPage> {
             controller: _title,
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
           ),
+          CatalogStatus(store: store),
           for (final group in _groups().entries) ...[
             SliverToBoxAdapter(
               child: Padding(

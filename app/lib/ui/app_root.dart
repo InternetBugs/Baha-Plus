@@ -48,6 +48,7 @@ class _AppRootState extends State<AppRoot>
   @override
   void initState() {
     super.initState();
+    store.setPortalHostActive(widget.mountPortal);
     _lastTab = store.tab;
     _tabAnimation = AnimationController(
       vsync: this,
@@ -65,7 +66,15 @@ class _AppRootState extends State<AppRoot>
       unawaited(store.setApplicationActive(_mediaActive(state)));
     }
     _scheduleUpdateCheck();
+    _scheduleCatalogRefresh();
   }
+
+  void _scheduleCatalogRefresh() =>
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !store.catalogLoading) {
+          unawaited(store.refreshCatalog());
+        }
+      });
 
   void _scheduleUpdateCheck() =>
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -257,7 +266,10 @@ class _AppRootState extends State<AppRoot>
   @override
   void didUpdateWidget(covariant AppRoot oldWidget) {
     super.didUpdateWidget(oldWidget);
+    store.setPortalHostActive(widget.mountPortal);
     if (oldWidget.store != store) {
+      oldWidget.store.setPortalHostActive(false);
+      store.setPortalHostActive(widget.mountPortal);
       oldWidget.store.updates.cancelCheck();
       _playbackEnvironment.dispose();
       _playbackEnvironment = PlaybackEnvironment(store);
@@ -268,6 +280,7 @@ class _AppRootState extends State<AppRoot>
       _lastTab = store.tab;
       _tabAnimation.value = 1;
       _scheduleUpdateCheck();
+      _scheduleCatalogRefresh();
     }
     _favoritePortalEntry?.markNeedsBuild();
     _favoritePresentationChanged();
@@ -284,26 +297,31 @@ class _AppRootState extends State<AppRoot>
   bool _mediaActive(AppLifecycleState state) =>
       state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
 
-  void _account() => GlassModalSheet.show<void>(
-    context: context,
-    initialState: GlassSheetState.full,
-    fullSize: .94,
-    detents: const {GlassSheetDetent.large},
-    fullTopBorderRadius: 36,
-    topBorderRadius: 36,
-    horizontalMargin: 0,
-    bottomMargin: 0,
-    showDragIndicator: false,
-    // The full-height account page already paints an opaque background.
-    maintainContentGlass: false,
-    expandedColor: const Color(0xfff2f2f7),
-    expandedDarkColor: const Color(0xff111113),
-    builder: (_) => AccountPage(
-      store: store,
-      onNotifications: _notifications,
-      onCheckUpdates: () => unawaited(_checkUpdates()),
-    ),
-  );
+  void _account() {
+    if (widget.mountPortal && !store.browserVisible && !store.busy) {
+      unawaited(store.syncAccount());
+    }
+    GlassModalSheet.show<void>(
+      context: context,
+      initialState: GlassSheetState.full,
+      fullSize: .94,
+      detents: const {GlassSheetDetent.large},
+      fullTopBorderRadius: 36,
+      topBorderRadius: 36,
+      horizontalMargin: 0,
+      bottomMargin: 0,
+      showDragIndicator: false,
+      // The full-height account page already paints an opaque background.
+      maintainContentGlass: false,
+      expandedColor: const Color(0xfff2f2f7),
+      expandedDarkColor: const Color(0xff111113),
+      builder: (_) => AccountPage(
+        store: store,
+        onNotifications: _notifications,
+        onCheckUpdates: () => unawaited(_checkUpdates()),
+      ),
+    );
+  }
 
   void _notifications() => Navigator.push(
     context,
@@ -387,15 +405,17 @@ class _AppRootState extends State<AppRoot>
           ),
         ),
       );
-      final portalLayer = Positioned.fill(
-        key: const ValueKey('portal-layer'),
-        child: Offstage(
-          offstage: !store.browserVisible,
-          child: _favoritePortalVisible
-              ? const SizedBox.shrink()
-              : _officialPortal(context),
-        ),
-      );
+      final portalLayer = !widget.mountPortal || !store.needsOfficialPortal
+          ? null
+          : Positioned.fill(
+              key: const ValueKey('portal-layer'),
+              child: Offstage(
+                offstage: !store.browserVisible,
+                child: _favoritePortalVisible
+                    ? const SizedBox.shrink()
+                    : _officialPortal(context),
+              ),
+            );
       return PopScope(
         canPop: !store.browserVisible,
         onPopInvokedWithResult: (didPop, result) {
@@ -404,9 +424,9 @@ class _AppRootState extends State<AppRoot>
         child: Stack(
           // Offstage retains the full layout and official session but submits
           // no platform-view layer for the glass to sample on native pages.
-          children: !widget.mountPortal
-              ? [nativeLayer]
-              : [nativeLayer, portalLayer],
+          // Public catalog/detail reads have no platform view, including an
+          // offstage one. Retain the official session only while it is in use.
+          children: [nativeLayer, ?portalLayer],
         ),
       );
     },
@@ -442,6 +462,12 @@ class _AppRootState extends State<AppRoot>
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
           trailing: _accountActions(),
         ),
+        if (store.tab == 0 ||
+            store.tab == 1 ||
+            (store.tab == 2 &&
+                store.query.isEmpty &&
+                store.libraryFilter != 'favorites'))
+          CatalogStatus(store: store),
         if (store.tab == 4 || store.tab == 2)
           SliverToBoxAdapter(
             child: Padding(
@@ -572,6 +598,7 @@ class _AppRootState extends State<AppRoot>
 
   @override
   void dispose() {
+    store.setPortalHostActive(false);
     store.updates.cancelCheck();
     _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);

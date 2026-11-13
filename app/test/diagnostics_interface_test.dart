@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:io';
 import 'package:baha_plus/data/app_diagnostics.dart';
 import 'package:baha_plus/data/app_store.dart';
@@ -50,6 +51,7 @@ void main() {
     final store = (await tester.runAsync(() async {
       await diagnostics.initialize();
       return AppStore.create(
+        metadataApi: FakeMetadata(),
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
         diagnostics: diagnostics,

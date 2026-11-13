@@ -9,6 +9,38 @@ import 'chrome.dart';
 
 typedef ShowAnime = void Function(Anime anime);
 
+class CatalogStatus extends StatelessWidget {
+  const CatalogStatus({required this.store, super.key});
+  final AppStore store;
+
+  @override
+  Widget build(BuildContext context) => SliverToBoxAdapter(
+    child: store.catalogFailed
+        ? Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  store.t('catalogUnavailable'),
+                  style: TextStyle(color: secondary(context), height: 1.6),
+                ),
+                CupertinoButton(
+                  onPressed: store.refreshCatalog,
+                  child: Text(store.t('retry')),
+                ),
+              ],
+            ),
+          )
+        : store.catalogLoading && store.catalog.items.isEmpty
+        ? const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CupertinoActivityIndicator()),
+          )
+        : const SizedBox.shrink(),
+  );
+}
+
 class AnimeWaterfall extends StatelessWidget {
   const AnimeWaterfall({
     required this.store,

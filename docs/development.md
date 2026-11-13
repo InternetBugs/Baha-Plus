@@ -69,9 +69,12 @@ Windows 桌面 Debug 的工具要求、构建入口及本机验证方法见 [Win
 ```sh
 cd app
 flutter test integration_test/catalog_smoke_test.dart -d emulator-5554 --no-uninstall
+flutter test integration_test/native_metadata_smoke_test.dart -d emulator-5554 --no-uninstall
 ```
 
 该测试使用真实搜索接口及公开番剧资料，并等待主视图与剧集缩略图实际解码，不会主动播放影片或修改追番。保留 `--no-uninstall`，避免 Flutter 测试工具默认卸载应用并清理设备数据；也可使用本地脚本的 `-Action Integration`。测试包使用测试入口，日常体验应重新构建并安装普通 `lib/main.dart` 入口的 APK。
+
+`native_metadata_smoke_test.dart` 另行验证原生目录、搜索和有影片 ID 的详情读取，并断言这些页面没有挂载隐藏 WebView。失败处理、WebView 生命周期及本机内存采样方法见[原生目录与影片资料](native-metadata.md)。
 
 ## iOS 与发布
 

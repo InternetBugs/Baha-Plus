@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:ui' as ui;
 
 import 'package:baha_plus/core/models.dart';
@@ -89,6 +90,7 @@ void main() {
       });
       final store = (await tester.runAsync(
         () => AppStore.create(
+          metadataApi: FakeMetadata(),
           storage: MemoryStorage(),
           animeSearch: FakeSearch(),
         ),

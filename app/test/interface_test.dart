@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:convert';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -29,8 +30,11 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final store = (await tester.runAsync(
-      () =>
-          AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+      () => AppStore.create(
+        metadataApi: FakeMetadata(),
+        storage: MemoryStorage(),
+        animeSearch: FakeSearch(),
+      ),
     ))!;
     addTearDown(store.dispose);
     await tester.pumpWidget(

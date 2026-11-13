@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -57,6 +58,7 @@ void main() {
 
   Future<AppStore> playingStore(_MediaPortal portal) async {
     final store = await AppStore.create(
+      metadataApi: FakeMetadata(),
       storage: MemoryStorage(),
       animeSearch: FakeSearch(),
     );

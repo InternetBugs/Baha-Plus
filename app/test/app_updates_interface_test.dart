@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/app_updates.dart';
@@ -43,6 +44,7 @@ void main() {
     );
     final store = (await tester.runAsync(
       () => AppStore.create(
+        metadataApi: FakeMetadata(),
         storage: MemoryStorage(),
         animeSearch: FakeSearch(),
         updates: updates,

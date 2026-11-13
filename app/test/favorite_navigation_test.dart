@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:convert';
 import 'package:baha_plus/core/browser_request.dart';
 import 'package:baha_plus/core/models.dart';
@@ -65,9 +66,25 @@ Future<_Session> _launch(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   final store = (await tester.runAsync(
-    () => AppStore.create(storage: MemoryStorage(), animeSearch: FakeSearch()),
+    () => AppStore.create(
+      metadataApi: FakeMetadata(),
+      storage: MemoryStorage(),
+      animeSearch: FakeSearch(),
+    ),
   ))!;
   addTearDown(store.dispose);
+  (store.metadataApi as FakeMetadata).detailLoader = (animeId, videoId) async =>
+      AnimeDetail.fromJson({
+        'title': 'Favorite Anime $animeId',
+        'description': 'Official synopsis.',
+        'episodes': [
+          {'id': videoId, 'label': '1'},
+        ],
+        'metadata': [
+          for (var index = 0; index < 20; index++)
+            {'label': 'Metadata $index', 'value': 'Official value $index'},
+        ],
+      });
   store.catalog = Catalog(
     items: [
       for (var index = 1; index <= 30; index++)
@@ -316,8 +333,11 @@ void main() {
         final sourceOffset = source.offset;
         final detailElement = tester.element(find.byType(DetailPage));
         final route = ModalRoute.of(detailElement)!;
-        final browser = session.browserKey.currentState;
+        expect(session.browserKey.currentState, isNull);
         await tester.tap(_favoriteButton(store));
+        await _frames(tester);
+        final browser = session.browserKey.currentState;
+        expect(browser, isNotNull);
         await store.navigationFinished(
           OfficialSite.search(store.selectedAnime!.title),
         );
@@ -339,7 +359,7 @@ void main() {
         expect(store.browserVisible, isFalse);
         expect(route.isCurrent, isTrue);
         expect(tester.element(find.byType(DetailPage)), same(detailElement));
-        expect(session.browserKey.currentState, same(browser));
+        expect(session.browserKey.currentState, isNull);
         expect(source.offset, sourceOffset);
         expect(store.tab, 2);
         expect(store.libraryFilter, 'season');
@@ -350,7 +370,7 @@ void main() {
           'saved': true,
         }, requestId: favoriteRequest);
         expect(store.isFavorite(store.selectedAnime!), isFalse);
-        // Closing verification can start the ordinary hidden catalog refresh.
+        // Closing verification can refresh the native catalog.
         store.navigationFailed();
         expect(tester.takeException(), isNull);
       },

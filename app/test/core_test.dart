@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -53,18 +54,6 @@ class FakePortal implements OfficialPortal {
 
   final visited = <Uri>[];
   final scripts = <String>[];
-  final publicRequests = <Uri>[];
-  final publicRequestAccounts = <bool>[];
-  Json publicResponse = {
-    'data': {'animeList': []},
-  };
-  @override
-  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount}) async {
-    publicRequests.add(uri);
-    publicRequestAccounts.add(useAccount);
-    return publicResponse;
-  }
-
   @override
   Future<void> load(Uri uri) async {
     if (loadError case final error?) throw error;
@@ -99,6 +88,7 @@ Future<AppStore> _createStore({
   DeviceStorage? storage,
   AnimeSearch? animeSearch,
 }) => AppStore.create(
+  metadataApi: FakeMetadata(),
   storage: storage ?? MemoryStorage(),
   animeSearch: animeSearch ?? FakeSearch(),
 );
@@ -1036,17 +1026,14 @@ void main() {
       expect(store.catalog.items, isEmpty);
       final portal = FakePortal();
       await store.attach(portal);
-      store.updateNavigation(OfficialSite.home, canGoBack: false);
-      final request = store.operation;
-      await store.receive(
-        jsonEncode({...fixture, 'type': 'catalog', 'requestId': request.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.home,
-        isMainFrame: true,
-      );
+      final metadata = store.metadataApi as FakeMetadata;
+      metadata.catalogLoader = () async => catalog;
+      await store.refreshCatalog();
       expect(store.catalog.items.length, catalog.items.length);
       expect(store.catalogSource, 'live');
-      store.navigationFailed();
+      metadata.catalogLoader = null;
+      await store.refreshCatalog();
+      expect(store.catalogFailed, isTrue);
       expect(store.catalog.encode(), catalog.encode());
       final restarted = await _createStore(storage: disk);
       addTearDown(restarted.dispose);
@@ -1083,12 +1070,12 @@ void main() {
   });
 
   test(
-    'public search uses the owned official network channel without navigating away',
+    'public search uses native anonymous metadata without navigating away',
     () async {
       final service = OfficialAnimeSearch(toTraditional: (text) => text);
       final store = await _createStore(animeSearch: service);
       addTearDown(store.dispose);
-      final portal = FakePortal()
+      final metadata = store.metadataApi as FakeMetadata
         ..publicResponse = {
           'data': {
             'history': ['ignored-private-search-history'],
@@ -1103,19 +1090,21 @@ void main() {
             ],
           },
         };
-      await store.attach(portal);
       store.query = '測試';
       await store.search();
-      expect(portal.publicRequests.single.path, '/anime/v1/search.php');
-      expect(portal.publicRequests.single.queryParameters['kw'], '測試');
-      expect(portal.publicRequestAccounts, [true]);
+      expect(metadata.publicRequests.single.path, '/anime/v1/search.php');
+      expect(metadata.publicRequests.single.queryParameters['kw'], '測試');
       expect(store.searchResults.single.id, '10');
       expect(store.browserVisible, isFalse);
-      expect(portal.visited, [OfficialSite.home]);
+      expect(store.needsOfficialPortal, isFalse);
       expect(store.favorites, isEmpty);
       expect(store.history, isEmpty);
       await service.recentSeries();
-      expect(portal.publicRequestAccounts, [true, false, false]);
+      expect(metadata.publicRequests.map((uri) => uri.path), [
+        '/anime/v1/search.php',
+        '/anime/v1/anime_list.php',
+        '/anime/v1/anime_list.php',
+      ]);
     },
   );
 
@@ -1186,6 +1175,9 @@ void main() {
       addTearDown(store.dispose);
       store.catalog = Catalog(items: [item], fetchedAt: '2026-11-06T00:00:00Z');
       await store.attach(FakePortal());
+      (store.metadataApi as FakeMetadata).catalogLoader = () async =>
+          Catalog(items: [item], fetchedAt: '2026-11-06T00:00:00Z');
+      await store.refreshCatalog();
       for (var i = 0; i < 20 && store.postersLoading; i++) {
         await Future<void>.delayed(Duration.zero);
       }

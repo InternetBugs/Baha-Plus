@@ -9,6 +9,7 @@ import '../core/playback_state.dart';
 import '../core/search_folding.dart';
 import 'device_storage.dart';
 import 'official_search.dart';
+import 'official_app_api.dart';
 import 'app_updates.dart';
 import 'app_diagnostics.dart';
 
@@ -18,7 +19,6 @@ abstract interface class OfficialPortal {
   Future<void> goBack();
   Future<dynamic> evaluate(String script);
   Future<bool> playerCommand(String document, String action, double? value);
-  Future<Json> fetchPublicCatalog(Uri uri, {required bool useAccount});
   Future<Json> community(String action, Json arguments);
 }
 
@@ -50,6 +50,7 @@ class AppStore extends ChangeNotifier {
     required this.folding,
     required this.scripts,
     AnimeSearch? animeSearch,
+    OfficialAppApi? metadataApi,
     AppUpdates? updates,
     AppDiagnostics? diagnostics,
     this.language = 'zh-Hant',
@@ -59,15 +60,23 @@ class AppStore extends ChangeNotifier {
            animeSearch ??
            OfficialAnimeSearch(toTraditional: folding.toTraditional),
        updates = updates ?? AppUpdates(),
+       metadataApi = metadataApi ?? OfficialAppApi(),
        diagnostics = diagnostics ?? AppDiagnostics.instance,
        cache = CatalogCache(storage),
        catalogSource = catalog.items.isEmpty ? 'empty' : 'cache' {
+    if (searchService case final OfficialAnimeSearch search) {
+      search.useTransport(
+        (uri, {required useAccount}) =>
+            this.metadataApi.fetchPublicCatalog(uri),
+      );
+    }
     playback.addListener(_recordPlayback);
   }
 
   static Future<AppStore> create({
     DeviceStorage? storage,
     AnimeSearch? animeSearch,
+    OfficialAppApi? metadataApi,
     AppUpdates? updates,
     AppDiagnostics? diagnostics,
   }) async {
@@ -129,6 +138,7 @@ class AppStore extends ChangeNotifier {
       dictionaries: dictionaries,
       folding: SearchFolding(folding, traditionalMapping: traditional),
       animeSearch: animeSearch,
+      metadataApi: metadataApi,
       updates: updates,
       diagnostics: diagnostics,
       scripts: scripts,
@@ -185,6 +195,7 @@ class AppStore extends ChangeNotifier {
 
   final DeviceStorage storage;
   final AnimeSearch searchService;
+  final OfficialAppApi metadataApi;
   final AppUpdates updates;
   final AppDiagnostics diagnostics;
   String? _lastDiagnosticPlayback;
@@ -255,6 +266,8 @@ class AppStore extends ChangeNotifier {
   bool playerLocked = false;
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
   bool detailLoading = false, detailFailed = false;
+  bool catalogLoading = false, catalogFailed = false;
+  int _catalogGeneration = 0, _detailGeneration = 0;
   bool browserVisible = false, browserError = false, busy = false;
   bool verificationRequired = false, browserCanGoBack = false;
   String browserTitle = '';
@@ -262,6 +275,20 @@ class AppStore extends ChangeNotifier {
   Uri? browserUri;
   BrowserRequest operation = BrowserRequest(intent: BrowserIntent.catalog);
   OfficialPortal? _portal;
+  Completer<OfficialPortal?>? _portalReady;
+  int _communityOperations = 0, _portalTeardowns = 0;
+  bool _portalHostActive = false;
+  void setPortalHostActive(bool active) {
+    _portalHostActive = active;
+  }
+
+  bool get needsOfficialPortal =>
+      browserVisible ||
+      busy ||
+      _pendingUri != null ||
+      _communityOperations > 0 ||
+      _portalTeardowns > 0 ||
+      (operation.intent == BrowserIntent.detail && detailLoading);
   Uri? _pendingUri;
   Anime? _pendingAnime;
   bool _desiredFavorite = false, _disposed = false;
@@ -308,37 +335,65 @@ class AppStore extends ChangeNotifier {
       _readNotifications.contains(item.id);
 
   Future<Json> community(String action, Json arguments) async {
-    final portal = _portal;
-    if (portal == null || !_applicationActive || _disposed) {
+    if (!_applicationActive ||
+        _disposed ||
+        (_portal == null && !_portalHostActive)) {
       throw const CommunityException('unavailable');
     }
-    for (var attempt = 0; attempt < 2; attempt++) {
-      try {
-        final result = await portal.community(action, {
-          ...arguments,
-          if (accountProfile != null) 'owner': accountProfile!.id,
-        });
-        if (result['ok'] != true) {
-          throw CommunityException(result['code'] as String? ?? 'network');
-        }
-        return result;
-      } on CommunityException catch (error) {
-        // Background account sync can replace its ticket without replacing the
-        // official document. Retry only reads; a write must never be repeated.
-        if (attempt != 0 ||
-            error.code != 'stale' ||
-            !communityReadActions.contains(action) ||
-            _disposed ||
-            !_applicationActive) {
-          rethrow;
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 150));
+    _communityOperations++;
+    try {
+      var portal = _portal;
+      if (portal == null) {
+        // Comment previews can request data from initState. Defer the portal
+        // notification until the current widget build has finished.
+        await Future<void>.value();
         if (_disposed || !_applicationActive) {
           throw const CommunityException('unavailable');
         }
+        _emit();
+        final ready = _portalReady ??= Completer<OfficialPortal?>();
+        await syncAccount();
+        portal =
+            _portal ??
+            await ready.future.timeout(
+              const Duration(seconds: 12),
+              onTimeout: () => null,
+            );
       }
+      if (portal == null || !_applicationActive || _disposed) {
+        throw const CommunityException('unavailable');
+      }
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          final result = await portal.community(action, {
+            ...arguments,
+            if (accountProfile != null) 'owner': accountProfile!.id,
+          });
+          if (result['ok'] != true) {
+            throw CommunityException(result['code'] as String? ?? 'network');
+          }
+          return result;
+        } on CommunityException catch (error) {
+          // Background account sync can replace its ticket without replacing the
+          // official document. Retry only reads; a write must never be repeated.
+          if (attempt != 0 ||
+              error.code != 'stale' ||
+              !communityReadActions.contains(action) ||
+              _disposed ||
+              !_applicationActive) {
+            rethrow;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+          if (_disposed || !_applicationActive) {
+            throw const CommunityException('unavailable');
+          }
+        }
+      }
+      throw const CommunityException('stale');
+    } finally {
+      _communityOperations--;
+      _emit();
     }
-    throw const CommunityException('stale');
   }
 
   Future<CommentPage> loadComments(
@@ -770,7 +825,10 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
       query = '';
     }
     _emit();
-    if (value == 3 && !browserVisible && !busy && _portal != null) {
+    if (value == 3 &&
+        !browserVisible &&
+        !busy &&
+        (_portal != null || _portalHostActive)) {
       unawaited(syncAccount());
     }
     if (_usesOfficialSearch &&
@@ -806,23 +864,23 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> attach(OfficialPortal portal) async {
     _portal = portal;
-    if (searchService case final OfficialAnimeSearch search) {
-      search.useTransport(portal.fetchPublicCatalog);
-    }
+    final ready = _portalReady;
+    _portalReady = null;
+    if (ready != null && !ready.isCompleted) ready.complete(portal);
     if (_pendingUri != null) {
       final uri = _pendingUri!;
       _pendingUri = null;
       if (showsPlayer) _watchPlayback(playback.value);
       await portal.load(uri);
-    } else {
-      await refreshCatalog();
     }
-    unawaited(_refreshPosters());
   }
 
   void detach(OfficialPortal portal) {
     if (!identical(_portal, portal)) return;
     _portal = null;
+    browserUri = null;
+    browserCanGoBack = false;
+    _accountSyncDocument = null;
     _cancelPlaybackWatchdog();
     _processRecoveryDeadline?.cancel();
   }
@@ -924,8 +982,40 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> refreshCatalog() async {
-    if (browserVisible) return;
-    await _load(OfficialSite.home, BrowserIntent.catalog, visible: false);
+    if (_disposed || browserVisible) return;
+    final generation = ++_catalogGeneration;
+    catalogLoading = true;
+    catalogFailed = false;
+    _emit();
+    try {
+      final fetched = await metadataApi.fetchCatalog();
+      if (_disposed || generation != _catalogGeneration) return;
+      _rememberPosters(catalog.items);
+      final updated = _mergePosters(fetched);
+      catalog = updated;
+      catalogSource = 'live';
+      diagnostics.record('catalog.completed', {'count': updated.items.length});
+      _emit();
+      try {
+        await cache.save(updated);
+      } catch (_) {
+        if (!_disposed && generation == _catalogGeneration) {
+          notice = t('storageError');
+        }
+      }
+      if (!_disposed && generation == _catalogGeneration) {
+        unawaited(_refreshPosters());
+      }
+    } catch (_) {
+      if (_disposed || generation != _catalogGeneration) return;
+      catalogFailed = true;
+      diagnostics.record('catalog.failed');
+    } finally {
+      if (!_disposed && generation == _catalogGeneration) {
+        catalogLoading = false;
+        _emit();
+      }
+    }
   }
 
   Future<void> openOfficial() async {
@@ -936,12 +1026,43 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<void> openDetail(Anime anime) async {
+    if (_disposed) return;
+    final generation = ++_detailGeneration;
     selectedAnime = anime;
     detail = null;
     detailLoading = true;
     detailFailed = false;
     _pendingAnime = anime;
     _emit();
+    final videoId = anime.latestVideoId;
+    if (videoId != null) {
+      // Retire an older HTML detail request, while leaving playback/account
+      // operations intact during an independent metadata read.
+      if (operation.intent == BrowserIntent.detail) {
+        _begin(BrowserIntent.idle);
+        busy = false;
+        _pendingUri = null;
+      }
+      try {
+        final fetched = await metadataApi.fetchDetail(
+          animeId: anime.id,
+          videoId: videoId,
+        );
+        if (_disposed || generation != _detailGeneration) return;
+        detail = fetched;
+        diagnostics.record('detail.completed');
+      } catch (_) {
+        if (_disposed || generation != _detailGeneration) return;
+        detailFailed = true;
+        diagnostics.record('detail.failed');
+      } finally {
+        if (!_disposed && generation == _detailGeneration) {
+          detailLoading = false;
+          _emit();
+        }
+      }
+      return;
+    }
     if (browserUri != null && OfficialSite.trustedOrigin(browserUri!)) {
       _begin(BrowserIntent.detail);
       _armDeadline();
@@ -999,7 +1120,7 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
   }
 
   Future<bool> logoutAccount() async {
-    if (loggingOut || _portal == null || _disposed) return false;
+    if (loggingOut || _disposed) return false;
     final result = Completer<bool>();
     _logoutResult = result;
     _logoutVerifying = false;
@@ -1176,41 +1297,47 @@ $source
   }
 
   Future<void> closeBrowser() async {
-    _cancelPlaybackWatchdog();
-    _playerWantsToPlay = false;
-    _lastGoodPlayback = null;
-    _playerCheckpoint = null;
-    _terminatedPlayerDocument = null;
-    _processRecoveryLoading = false;
-    _processRecoveryDeadline?.cancel();
-    _processRecoveries.clear();
-    final document = operation.id;
-    final releaseSystemMedia = browserIsPlayer;
-    final refreshAccount =
-        accountNeedsRefresh ||
-        operation.intent == BrowserIntent.account ||
-        operation.intent == BrowserIntent.accountRefresh;
-    browserVisible = false;
-    playerFullscreen = false;
-    playerLocked = false;
-    busy = false;
-    _begin(BrowserIntent.idle);
-    final closing = operation.id;
-    playback.value = const PlaybackState();
-    _emit();
-    await _releasePlayback(
-      document: document,
-      expected: closing,
-      releaseSystemMedia: releaseSystemMedia,
-    );
-    if (_disposed || operation.id != closing) return;
-    if (refreshAccount) {
-      await Future<void>.delayed(const Duration(seconds: 1));
-      if (operation.id == closing && !browserVisible) await syncAccount();
-    } else if (operation.id == closing &&
-        !browserVisible &&
-        (verificationRequired || catalog.items.isEmpty)) {
-      await refreshCatalog();
+    _portalTeardowns++;
+    try {
+      _cancelPlaybackWatchdog();
+      _playerWantsToPlay = false;
+      _lastGoodPlayback = null;
+      _playerCheckpoint = null;
+      _terminatedPlayerDocument = null;
+      _processRecoveryLoading = false;
+      _processRecoveryDeadline?.cancel();
+      _processRecoveries.clear();
+      final document = operation.id;
+      final releaseSystemMedia = browserIsPlayer;
+      final refreshAccount =
+          accountNeedsRefresh ||
+          operation.intent == BrowserIntent.account ||
+          operation.intent == BrowserIntent.accountRefresh;
+      browserVisible = false;
+      playerFullscreen = false;
+      playerLocked = false;
+      busy = false;
+      _begin(BrowserIntent.idle);
+      final closing = operation.id;
+      playback.value = const PlaybackState();
+      _emit();
+      await _releasePlayback(
+        document: document,
+        expected: closing,
+        releaseSystemMedia: releaseSystemMedia,
+      );
+      if (_disposed || operation.id != closing) return;
+      if (refreshAccount) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (operation.id == closing && !browserVisible) await syncAccount();
+      } else if (operation.id == closing &&
+          !browserVisible &&
+          (verificationRequired || catalog.items.isEmpty)) {
+        await refreshCatalog();
+      }
+    } finally {
+      _portalTeardowns--;
+      _emit();
     }
   }
 
@@ -1402,7 +1529,9 @@ $source
             _accountSyncDocument == operation.id)) {
       return;
     }
-    if (browserUri == null || !OfficialSite.trustedOrigin(browserUri!)) {
+    if (_portal == null ||
+        browserUri == null ||
+        !OfficialSite.trustedOrigin(browserUri!)) {
       browserTitle = t('officialAccount');
       await _load(
         OfficialSite.home.resolve('mygather.php'),
@@ -2003,6 +2132,11 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
   @override
   void dispose() {
     _disposed = true;
+    final ready = _portalReady;
+    if (ready != null && !ready.isCompleted) ready.complete(null);
+    _catalogGeneration++;
+    _detailGeneration++;
+    metadataApi.dispose();
     _finishLogout(false);
     _clearPlayerFavorite();
     _deadline?.cancel();

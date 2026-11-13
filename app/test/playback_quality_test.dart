@@ -1,3 +1,4 @@
+import 'fake_metadata.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -63,6 +64,7 @@ void main() {
 
   Future<AppStore> launch(MemoryStorage disk, FakePortal portal) async {
     final store = await AppStore.create(
+      metadataApi: FakeMetadata(),
       storage: disk,
       animeSearch: FakeSearch(),
     );
