@@ -53,6 +53,7 @@ class NativeVideoSurface extends StatefulWidget {
     required this.errorLabel,
     required this.retryLabel,
     required this.onRetry,
+    this.suppressErrors = false,
     super.key,
   });
   final NativePlayback playback;
@@ -60,6 +61,7 @@ class NativeVideoSurface extends StatefulWidget {
   final DanmakuSettings settings;
   final String errorLabel, retryLabel;
   final VoidCallback onRetry;
+  final bool suppressErrors;
 
   @override
   State<NativeVideoSurface> createState() => NativeVideoSurfaceState();
@@ -165,7 +167,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
       discontinuity: discontinuity,
     );
     _scheduleDrawing(forceRedraw: forceRedraw || discontinuity || !running);
-    final failed = state.phase.name == 'error';
+    final failed = state.phase.name == 'error' && !widget.suppressErrors;
     if (_video != widget.playback.video || _failed != failed) {
       setState(() {
         _video = widget.playback.video;

@@ -96,9 +96,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
       _lifecycleRevision++;
+      unawaited(_hlsCache.setApplicationActive(false));
       unawaited(_nativePlayback?.setApplicationActive(false));
     } else if (state == AppLifecycleState.resumed) {
       _lifecycleRevision++;
+      unawaited(_hlsCache.setApplicationActive(true));
       _lastNativeSync = null;
       unawaited(_nativePlayback?.setApplicationActive(true));
       unawaited(_syncNativeClock());
@@ -148,6 +150,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       _nativeFailureDocument = null;
     }
     final document = _hlsCache.document;
+    unawaited(_hlsCache.setApplicationActive(store.applicationActive));
     if (document != null &&
         (!store.showsPlayer ||
             !store.browserVisible ||
@@ -193,6 +196,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
       return;
     }
     _preparingCacheDocument = document;
+    final lifecycle = _lifecycleRevision;
     try {
       final endpoint = await _hlsCache.prepare(
         document: document,
@@ -211,6 +215,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         await _hlsCache.stop(document);
         return;
       }
+      if (!store.applicationActive || lifecycle != _lifecycleRevision) return;
       final result = await _controller?.callAsyncJavaScript(
         arguments: {
           'ticket': document,
@@ -225,6 +230,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
         await _hlsCache.stop(document);
         return;
       }
+      if (!store.applicationActive || lifecycle != _lifecycleRevision) return;
       if (result?.value == null && result?.error == null) return;
       _cacheAttemptedDocument = document;
       if (result?.value != true || result?.error != null) {
@@ -234,6 +240,7 @@ return await window.__bahaPlayerBridge?.enableCache(ticket, source, base);
         await _hlsCache.update(document, store.playback.value.position);
       }
     } catch (_) {
+      if (!store.applicationActive || lifecycle != _lifecycleRevision) return;
       _cacheAttemptedDocument = document;
       await _hlsCache.stop(document);
     } finally {
@@ -637,7 +644,7 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
     // Capture the timeline before pausing or blocking changes playback intent.
     // Reloading also disposes the native decoder before creating another one.
     unawaited(store.playerProcessTerminated());
-    unawaited(native?.block());
+    unawaited(native?.block(recoverable: true));
   }
 
   Future<void> _receiveOfficialMessage(
@@ -870,9 +877,13 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
           settings: store.danmakuSettings,
           errorLabel: store.t('playerPlaybackError'),
           retryLabel: store.t('retry'),
-          onRetry: store.reloadBrowser,
+          onRetry: store.retryPlayback,
+          suppressErrors:
+              store.resumingPlayback || store.waitingToResumePlayback,
         ),
-      if (_nativeFailureDocument == store.operation.id)
+      if (_nativeFailureDocument == store.operation.id &&
+          !store.resumingPlayback &&
+          !store.waitingToResumePlayback)
         ColoredBox(
           color: Colors.black,
           child: Center(
@@ -886,7 +897,7 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
                 const SizedBox(height: 20),
                 GlassButton.custom(
                   shape: const LiquidRoundedRectangle(borderRadius: 22),
-                  onTap: store.reloadBrowser,
+                  onTap: store.retryPlayback,
                   width: 116,
                   height: 44,
                   child: Text(store.t('retry')),
@@ -895,7 +906,9 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
             ),
           ),
         ),
-      if (store.browserError)
+      if (store.browserError &&
+          !store.resumingPlayback &&
+          !store.waitingToResumePlayback)
         ColoredBox(
           color: background,
           child: Center(
@@ -908,7 +921,7 @@ return await window.__bahaPlayerBridge?.command(ticket, action, value) === true;
                 const SizedBox(height: 20),
                 GlassButton.custom(
                   shape: const LiquidRoundedRectangle(borderRadius: 22),
-                  onTap: store.reloadBrowser,
+                  onTap: store.retryPlayback,
                   width: 116,
                   height: 44,
                   child: Text(store.t('retry')),
@@ -999,7 +1012,10 @@ return JSON.stringify(source ? {...source, userAgent: navigator.userAgent} : nul
           store.updateNativePlayback(
             document,
             value,
-            recoverable: candidate?.recoverable == true,
+            recoverable:
+                (store.resumingPlayback || store.waitingToResumePlayback)
+                ? candidate?.retryable == true
+                : candidate?.recoverable == true,
           );
         },
       );
@@ -1059,7 +1075,7 @@ return JSON.stringify(window.__bahaPlayerBridge?.commitNative() ?? null);
       if (live()) {
         _nativeAttempted = document;
         if (candidate != null && _nativePlayback == candidate) {
-          await candidate.block(committed: true);
+          await candidate.block(committed: true, recoverable: true);
           if (live()) {
             store.updateNativePlayback(
               document,

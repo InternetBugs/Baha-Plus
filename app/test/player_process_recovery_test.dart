@@ -429,7 +429,7 @@ void main() {
   );
 
   test(
-    'a background termination waits for an explicit retry and preserves pause',
+    'a background termination waits for play and preserves its checkpoint',
     () async {
       final portal = _ProcessPortal();
       final store = await launch(portal);
@@ -438,7 +438,8 @@ void main() {
       final visits = portal.visited.length;
       await store.playerProcessTerminated();
       expect(portal.visited, hasLength(visits));
-      expect(store.playback.value.phase, PlaybackPhase.error);
+      expect(store.playback.value.phase, PlaybackPhase.content);
+      expect(store.playback.value.paused, isTrue);
       await store.setApplicationActive(true);
       expect(portal.visited, hasLength(visits));
       await store.reloadBrowser();
@@ -452,6 +453,25 @@ void main() {
         ),
         isTrue,
       );
+    },
+  );
+
+  test(
+    'a background web media error waits behind the paused play surface',
+    () async {
+      final portal = _ProcessPortal();
+      final store = await launch(portal);
+      await report(store);
+      await store.setApplicationActive(false);
+      await report(store, phase: 'error', recoverable: true);
+      await store.setApplicationActive(true);
+      expect(store.waitingToResumePlayback, isTrue);
+      expect(store.playback.value.phase, PlaybackPhase.content);
+      expect(store.playback.value.paused, isTrue);
+      expect(portal.visited, hasLength(1));
+      await store.controlPlayer('play');
+      expect(store.resumingPlayback, isTrue);
+      expect(store.playback.value.phase, PlaybackPhase.loading);
     },
   );
 

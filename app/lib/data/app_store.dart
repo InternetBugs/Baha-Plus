@@ -321,6 +321,196 @@ class AppStore extends ChangeNotifier {
   PlaybackPhase? _watchdogPhase;
   double? _watchdogPosition;
   bool _playerWantsToPlay = false;
+  bool _awaitingForegroundPlay = false, _resumingPlayback = false;
+  int _resumeVersion = 0, _resumeAttempts = 0;
+  Timer? _resumeDeadline, _resumeAttemptDeadline, _resumeRetry;
+  bool get resumingPlayback => _resumingPlayback;
+  bool get waitingToResumePlayback => _awaitingForegroundPlay;
+
+  bool get _hasPlaybackCheckpoint =>
+      playingVideoId != null &&
+      (_playerCheckpoint?['videoId'] == playingVideoId ||
+          _lastGoodPlayback?.canControl == true);
+
+  void _savePlaybackCheckpoint({required bool paused}) {
+    if (playingVideoId == null) return;
+    final timeline = _lastGoodPlayback;
+    if (_playerCheckpoint?['videoId'] == playingVideoId) {
+      _playerCheckpoint = {..._playerCheckpoint!, 'paused': paused};
+    } else if (playingVideoId != null && timeline?.canControl == true) {
+      _playerCheckpoint = {
+        'videoId': playingVideoId,
+        'position': timeline!.position,
+        'rate': timeline.rate,
+        'muted': timeline.muted,
+        'paused': paused,
+      };
+    }
+  }
+
+  PlaybackState _checkpointState({bool loading = false}) {
+    final saved = _playerCheckpoint;
+    final previous = _lastGoodPlayback ?? playback.value;
+    return PlaybackState(
+      phase: loading ? PlaybackPhase.loading : PlaybackPhase.content,
+      surfaceReady: !loading,
+      paused: true,
+      buffering: loading,
+      position: (saved?['position'] as num?)?.toDouble() ?? previous.position,
+      duration: previous.duration,
+      rate: (saved?['rate'] as num?)?.toDouble() ?? previous.rate,
+      muted: saved?['muted'] as bool? ?? previous.muted,
+      buffered: previous.buffered,
+      bufferedRanges: previous.bufferedRanges,
+      qualities: previous.qualities,
+      quality: previous.quality,
+      hasDanmaku: previous.hasDanmaku,
+      danmaku: previous.danmaku,
+    );
+  }
+
+  void _cancelResume() {
+    _resumeVersion++;
+    _resumingPlayback = false;
+    _resumeDeadline?.cancel();
+    _resumeAttemptDeadline?.cancel();
+    _resumeRetry?.cancel();
+  }
+
+  /// A user gesture starts one bounded recovery round. Foreground activation
+  /// alone never grants permission to play.
+  Future<void> resumePlayback() async {
+    if (_disposed ||
+        !_applicationActive ||
+        !showsPlayer ||
+        !browserVisible ||
+        _resumingPlayback ||
+        !_hasPlaybackCheckpoint) {
+      return;
+    }
+    _cancelResume();
+    _savePlaybackCheckpoint(paused: false);
+    _awaitingForegroundPlay = false;
+    _resumingPlayback = true;
+    _playerWantsToPlay = true;
+    _cancelPlaybackWatchdog();
+    final version = _resumeVersion;
+    _resumeAttempts = 0;
+    _resumeDeadline = Timer(const Duration(seconds: 30), () {
+      if (_resumeLive(version)) _resumeFailed();
+    });
+    await _attemptResume(version);
+  }
+
+  Future<void> retryPlayback() =>
+      _hasPlaybackCheckpoint ? resumePlayback() : reloadBrowser();
+
+  bool _resumeLive(int version) =>
+      !_disposed &&
+      _resumingPlayback &&
+      version == _resumeVersion &&
+      _applicationActive &&
+      showsPlayer &&
+      browserVisible;
+
+  Future<void> _attemptResume(int version) async {
+    if (!_resumeLive(version)) return;
+    final attempt = ++_resumeAttempts;
+    _resumeRetry?.cancel();
+    _resumeAttemptDeadline?.cancel();
+    _resumeAttemptDeadline = Timer(const Duration(seconds: 10), () {
+      if (_resumeAttempts == attempt) _retryResume(version);
+    });
+    final replace =
+        _resumeAttempts > 1 ||
+        _terminatedPlayerDocument == operation.id ||
+        playback.value.phase == PlaybackPhase.error;
+    browserError = false;
+    playback.value = _checkpointState(loading: true);
+    _emit();
+    diagnostics.record('player.resume-attempt', {'attempt': _resumeAttempts});
+    try {
+      if (replace) {
+        _terminatedPlayerDocument = operation.id;
+        await reloadBrowser();
+      } else {
+        final accepted = await _sendPlayerCommand(
+          'play',
+          null,
+        ).timeout(const Duration(seconds: 5));
+        if (_resumeLive(version) && _resumeAttempts == attempt && !accepted) {
+          _retryResume(version);
+        }
+      }
+    } catch (_) {
+      if (_resumeLive(version) && _resumeAttempts == attempt) {
+        _retryResume(version);
+      }
+    }
+  }
+
+  void _retryResume(int version) {
+    if (!_resumeLive(version) || _resumeRetry?.isActive == true) return;
+    _resumeAttemptDeadline?.cancel();
+    if (_resumeAttempts >= 3) {
+      _resumeFailed();
+      return;
+    }
+    playback.value = _checkpointState(loading: true);
+    _emit();
+    _resumeRetry = Timer(const Duration(milliseconds: 250), () {
+      unawaited(_attemptResume(version));
+    });
+  }
+
+  void _resumeFailed() {
+    if (!_resumingPlayback || _disposed) return;
+    _cancelResume();
+    _processRecoveryDeadline?.cancel();
+    _processRecoveryLoading = false;
+    _playerWantsToPlay = false;
+    _savePlaybackCheckpoint(paused: true);
+    // Invalidate handoffs already awaiting a platform result. Ignoring their
+    // state alone would still allow a late activate() to start the decoder.
+    _begin(BrowserIntent.play);
+    _terminatedPlayerDocument = operation.id;
+    unawaited(
+      _portal?.evaluate('$_suspendMedia true;').catchError((_) => null),
+    );
+    playback.value = const PlaybackState(phase: PlaybackPhase.error);
+    _emit();
+  }
+
+  /// Return false while a transient failure is covered by the ordinary loading
+  /// spinner. Explicit official denials are never automatically retried.
+  bool _acceptResumeState(PlaybackState value, {required bool recoverable}) {
+    if (!_resumingPlayback) return true;
+    if (value.phase == PlaybackPhase.error) {
+      if (recoverable) {
+        _retryResume(_resumeVersion);
+      } else {
+        _resumeFailed();
+      }
+      return false;
+    }
+    if (value.phase != PlaybackPhase.loading &&
+        value.phase != PlaybackPhase.content) {
+      // Official ads, age checks and login/verification have their own flow.
+      _cancelResume();
+      _processRecoveryLoading = false;
+      _processRecoveryDeadline?.cancel();
+    } else if (value.canControl && !value.buffering && !value.paused) {
+      _cancelResume();
+      _processRecoveryLoading = false;
+      _processRecoveryDeadline?.cancel();
+      _playerCheckpoint = null;
+      _emit();
+    } else if (value.canControl && value.paused) {
+      return false;
+    }
+    return true;
+  }
+
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
@@ -631,10 +821,23 @@ class AppStore extends ChangeNotifier {
   Future<void> setApplicationActive(bool active) async {
     diagnostics.record('app.lifecycle', {'foreground': active});
     if (_applicationActive == active) return;
+    final suspendedDocument = operation.id;
     _applicationActive = active;
     if (!active) {
+      final recovering = _resumingPlayback;
+      _cancelResume();
       _playerWantsToPlay = false;
       _cancelPlaybackWatchdog();
+      _savePlaybackCheckpoint(paused: true);
+      _awaitingForegroundPlay = _hasPlaybackCheckpoint && showsPlayer;
+      if (recovering) {
+        _processRecoveryLoading = false;
+        _processRecoveryDeadline?.cancel();
+        _begin(BrowserIntent.play);
+        _terminatedPlayerDocument = operation.id;
+        playback.value = _checkpointState();
+      }
+      _emit();
     }
     if (!active && _playerCheckpoint != null) {
       _playerCheckpoint!['paused'] = true;
@@ -646,7 +849,7 @@ class AppStore extends ChangeNotifier {
     final document = operation.id;
     try {
       await _portal?.evaluate('''
-if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
+if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDocument)}) {
   ${active ? 'window.__bahaMediaSuspended = false; window.__bahaPlayerBridge?.resume();' : _suspendMedia}
 } true;
 ''');
@@ -661,6 +864,21 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
 
   Future<void> controlPlayer(String action, [double? value]) async {
     diagnostics.record('player.command', {'action': action, 'value': value});
+    if (action == 'play' &&
+        (_awaitingForegroundPlay ||
+            playback.value.phase == PlaybackPhase.error)) {
+      await resumePlayback();
+      return;
+    }
+    if (action == 'pause' && _resumingPlayback) {
+      _cancelResume();
+      _savePlaybackCheckpoint(paused: true);
+      _awaitingForegroundPlay = true;
+      _begin(BrowserIntent.play);
+      _terminatedPlayerDocument = operation.id;
+      playback.value = _checkpointState();
+      _emit();
+    }
     if (!_applicationActive ||
         !browserVisible ||
         !showsPlayer ||
@@ -967,6 +1185,8 @@ if (window.__bahaDocumentNonce === ${jsonEncode(document)}) {
         uri.path == '/animeVideo.php' &&
         nextVideo != playingVideoId &&
         (playerDetail?.episodes.any((e) => e.id == nextVideo) ?? false)) {
+      _cancelResume();
+      _awaitingForegroundPlay = false;
       _lastGoodPlayback = null;
       _playerCheckpoint = null;
       _terminatedPlayerDocument = null;
@@ -1263,6 +1483,8 @@ $source
   }
 
   Future<void> play(Anime anime, {Episode? episode}) async {
+    _cancelResume();
+    _awaitingForegroundPlay = false;
     _cancelPlaybackWatchdog();
     _playerWantsToPlay = false;
     _lastGoodPlayback = null;
@@ -1299,6 +1521,8 @@ $source
   Future<void> closeBrowser() async {
     _portalTeardowns++;
     try {
+      _cancelResume();
+      _awaitingForegroundPlay = false;
       _cancelPlaybackWatchdog();
       _playerWantsToPlay = false;
       _lastGoodPlayback = null;
@@ -1342,6 +1566,7 @@ $source
   }
 
   Future<void> reloadBrowser() async {
+    if (!_resumingPlayback) _awaitingForegroundPlay = false;
     _cancelPlaybackWatchdog();
     _processRecoveryDeadline?.cancel();
     _processRecoveryLoading = false;
@@ -1362,19 +1587,27 @@ $source
       );
       final loading = _load(target, BrowserIntent.play, visible: true);
       final document = operation.id;
-      _processRecoveryDeadline = Timer(const Duration(minutes: 2), () {
-        if (!_disposed && operation.id == document && _processRecoveryLoading) {
-          _processRecoveryLoading = false;
-          _terminatedPlayerDocument = document;
-          _cancelPlaybackWatchdog();
-          playback.value = const PlaybackState(phase: PlaybackPhase.error);
-          _emit();
-        }
-      });
+      if (!_resumingPlayback) {
+        _processRecoveryDeadline = Timer(const Duration(minutes: 2), () {
+          if (!_disposed &&
+              operation.id == document &&
+              _processRecoveryLoading) {
+            _processRecoveryLoading = false;
+            _terminatedPlayerDocument = document;
+            _cancelPlaybackWatchdog();
+            playback.value = const PlaybackState(phase: PlaybackPhase.error);
+            _emit();
+          }
+        });
+      }
       try {
         await loading.timeout(const Duration(seconds: 30));
       } catch (_) {
         if (!_disposed && operation.id == document) {
+          if (_resumingPlayback) {
+            _retryResume(_resumeVersion);
+            return;
+          }
           _processRecoveryDeadline?.cancel();
           _processRecoveryLoading = false;
           _terminatedPlayerDocument = document;
@@ -1441,6 +1674,16 @@ $source
         ? {...saved, 'paused': paused}
         : null;
     _terminatedPlayerDocument = operation.id;
+    if (_resumingPlayback) {
+      _retryResume(_resumeVersion);
+      return;
+    }
+    if (_awaitingForegroundPlay && _hasPlaybackCheckpoint) {
+      _playerCheckpoint?['paused'] = true;
+      playback.value = _checkpointState();
+      _emit();
+      return;
+    }
     final now = DateTime.now();
     _processRecoveries.removeWhere(
       (time) => now.difference(time) > const Duration(minutes: 30),
@@ -1472,9 +1715,16 @@ $source
   /// Detect a frozen clock even when the platform stops delivering events.
   /// Error reports must opt in so official denials never trigger a reload.
   void _watchPlayback(PlaybackState value, {bool recoverable = false}) {
+    if (_resumingPlayback) return;
     if (value.canControl && !value.buffering) {
       _lastGoodPlayback = value;
       _playerWantsToPlay = !value.paused && !value.ended;
+      if (_awaitingForegroundPlay &&
+          _applicationActive &&
+          _terminatedPlayerDocument != operation.id) {
+        _playerCheckpoint = null;
+        _savePlaybackCheckpoint(paused: true);
+      }
     }
     final loading = value.phase == PlaybackPhase.loading;
     final failed = value.phase == PlaybackPhase.error && recoverable;
@@ -1687,6 +1937,10 @@ window.__bahaMediaSuspended = false; true;
 
   void navigationFailed() {
     diagnostics.record('browser.failed', {'operation': operation.intent.name});
+    if (_resumingPlayback && showsPlayer) {
+      _retryResume(_resumeVersion);
+      return;
+    }
     _cancelPlaybackWatchdog();
     _processRecoveryDeadline?.cancel();
     final recovering = _processRecoveryLoading;
@@ -1805,7 +2059,27 @@ window.__bahaMediaSuspended = false; true;
       }
       if (body['type'] == 'player-state' && !usesNativePlayback) {
         if (_terminatedPlayerDocument == operation.id) return;
-        playback.value = PlaybackState.fromJson(body);
+        final value = PlaybackState.fromJson(body);
+        if (_awaitingForegroundPlay &&
+            value.phase == PlaybackPhase.error &&
+            body['recoverable'] == true &&
+            _hasPlaybackCheckpoint) {
+          _savePlaybackCheckpoint(paused: true);
+          playback.value = _checkpointState();
+          _emit();
+          return;
+        }
+        if (value.phase == PlaybackPhase.error && body['recoverable'] != true) {
+          _awaitingForegroundPlay = false;
+          _emit();
+        }
+        if (!_acceptResumeState(
+          value,
+          recoverable: body['recoverable'] == true,
+        )) {
+          return;
+        }
+        playback.value = value;
         if (body['checkpointRestored'] == true && playback.value.canControl) {
           _playerCheckpoint = null;
           _processRecoveryLoading = false;
@@ -1912,6 +2186,11 @@ window.__bahaMediaSuspended = false; true;
         browserVisible = false;
         await syncAccount();
       case 'verification-required':
+        if (_resumingPlayback) {
+          _cancelResume();
+          _processRecoveryLoading = false;
+          _processRecoveryDeadline?.cancel();
+        }
         verificationRequired = true;
         if (completed.intent == BrowserIntent.favorite) {
           browserVisible = true;
@@ -1972,6 +2251,10 @@ window.__bahaMediaSuspended = false; true;
   }
 
   void _begin(BrowserIntent intent) {
+    if (intent != BrowserIntent.play) {
+      _cancelResume();
+      _awaitingForegroundPlay = false;
+    }
     diagnostics.record('browser.operation', {'intent': intent.name});
     _cancelPlaybackWatchdog();
     if (loggingOut && intent != BrowserIntent.logout) _finishLogout(false);
@@ -2119,6 +2402,20 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
     }
     final changedBackend = !usesNativePlayback;
     nativePlaybackDocument = document;
+    if (!_acceptResumeState(value, recoverable: recoverable)) return;
+    if (_awaitingForegroundPlay &&
+        value.phase == PlaybackPhase.error &&
+        recoverable &&
+        _hasPlaybackCheckpoint) {
+      _savePlaybackCheckpoint(paused: true);
+      playback.value = _checkpointState();
+      _emit();
+      return;
+    }
+    if (value.phase == PlaybackPhase.error && !recoverable) {
+      _awaitingForegroundPlay = false;
+      _emit();
+    }
     playback.value = value;
     if (value.canControl && !value.buffering && _processRecoveryLoading) {
       _processRecoveryLoading = false;
@@ -2131,6 +2428,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
 
   @override
   void dispose() {
+    _cancelResume();
     _disposed = true;
     final ready = _portalReady;
     if (ready != null && !ready.isCompleted) ready.complete(null);

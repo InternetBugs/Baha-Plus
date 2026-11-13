@@ -2,9 +2,10 @@ import Foundation
 import Network
 import JavaScriptCore
 import CryptoKit
+import UIKit
 
-/// An on-device HLS gateway. Actual media downloads use a system background
-/// URLSession, so pausing WebKit does not cancel the next playback window.
+/// An on-device HLS gateway. Read-ahead runs only while the app is foreground,
+/// including a user pause. Backgrounding cancels transfers but retains files.
 @objc final class PlaybackCache: NSObject, URLSessionDownloadDelegate {
     @objc static let shared = PlaybackCache()
     @objc static let identifier = "app.bahaplus.mobile.hls-cache"
@@ -21,6 +22,9 @@ import CryptoKit
     private var resources: [String: Resource] = [:]
     private var playlists: [String: [[String: Any]]] = [:]
     private var tasks: [String: URLSessionDownloadTask] = [:]
+    private var manifestTasks: [UUID: URLSessionDataTask] = [:]
+    private var applicationActive = true
+    private var activityRevision = 0
     private var demandTasks = Set<String>()
     private var failed = Set<String>()
     private var excludedPrefetch = Set<String>()
@@ -36,15 +40,19 @@ import CryptoKit
         let role: String
     }
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: sessionID)
-        configuration.isDiscretionary = false
-        configuration.sessionSendsLaunchEvents = true
+        let configuration = URLSessionConfiguration.ephemeral
         configuration.httpMaximumConnectionsPerHost = 2
         configuration.timeoutIntervalForRequest = 45
         configuration.timeoutIntervalForResource = 600
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+    }()
+    // Drain transfers submitted by older versions; never adopt or restart them.
+    private lazy var legacySession: URLSession = {
+        let configuration = URLSessionConfiguration.background(withIdentifier: sessionID)
+        configuration.sessionSendsLaunchEvents = false
         return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
     }()
     private lazy var manifests: URLSession = {
@@ -55,7 +63,7 @@ import CryptoKit
     }()
     private lazy var foreground: URLSession = {
         // An AVPlayer read must not wait for the background transfer scheduler.
-        // Speculative read-ahead still uses the persistent background session.
+        // Speculative read-ahead has its own foreground-only connection budget.
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 30
@@ -75,10 +83,42 @@ import CryptoKit
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         restore()
+        applicationActive = UIApplication.shared.applicationState != .background
+        NotificationCenter.default.addObserver(self, selector: #selector(enteredBackground(_:)),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(enteredForeground(_:)),
+            name: UIApplication.willEnterForegroundNotification, object: nil)
+        legacySession.getAllTasks { items in items.forEach { $0.cancel() } }
         for item in (try? FileManager.default.contentsOfDirectory(at: root,
             includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
             if UUID(uuidString: item.lastPathComponent) != nil && item.lastPathComponent != token {
                 try? FileManager.default.removeItem(at: item)
+            }
+        }
+    }
+
+    @objc private func enteredBackground(_ notification: Notification) { setApplicationActive(false) }
+    @objc private func enteredForeground(_ notification: Notification) { setApplicationActive(true) }
+
+    @objc func setApplicationActive(_ active: Bool) {
+        queue.async {
+            guard self.applicationActive != active else { return }
+            self.applicationActive = active
+            self.activityRevision += 1
+            if active {
+                self.failed.removeAll()
+                self.prefetch()
+            } else {
+                let pending = Array(self.tasks.values)
+                self.tasks.removeAll()
+                self.demandTasks.removeAll()
+                pending.forEach { $0.cancel() }
+                self.manifestTasks.values.forEach { $0.cancel() }
+                self.manifestTasks.removeAll()
+                for waiting in self.waiters.values {
+                    for (connection, _, _) in waiting { self.reply(connection, status: 503) }
+                }
+                self.waiters.removeAll()
             }
         }
     }
@@ -130,18 +170,13 @@ import CryptoKit
         queue.async {
             self.backgroundCompletion = completion
             self.reconnecting = true
-            self.session.getAllTasks { items in
+            self.legacySession.getAllTasks { items in
                 self.queue.async {
-                    for item in items {
-                        guard let task = item as? URLSessionDownloadTask,
-                              let description = task.taskDescription,
-                              description.hasPrefix(self.token + "\n") else { item.cancel(); continue }
-                        let url = String(description.dropFirst(self.token.count + 1))
-                        guard self.resources[url] != nil else { item.cancel(); continue }
-                        self.tasks[url] = task
-                    }
+                    items.forEach { $0.cancel() }
                     self.reconnecting = false
-                    self.prefetch()
+                    // Launch-time draining can finish before UIKit delivers
+                    // its completion handler. Do not wait for a second event.
+                    if items.isEmpty { self.finishBackgroundEvents() }
                 }
             }
         }
@@ -172,6 +207,8 @@ import CryptoKit
         return request
     }
     private func reset() {
+        manifestTasks.values.forEach { $0.cancel() }
+        manifestTasks.removeAll()
         for task in tasks.values { task.cancel() }
         tasks.removeAll()
         demandTasks.removeAll()
@@ -262,13 +299,20 @@ import CryptoKit
               components.path.hasPrefix("/" + token + "/"),
               !token.isEmpty else { reply(connection, status: 403); return }
         if first[0] == "OPTIONS" { reply(connection, status: 204); return }
+        guard applicationActive else { reply(connection, status: 503); return }
         guard let source = components.queryItems?.first(where: { $0.name == "u" })?.value,
               let resource = resources[source] else { reply(connection, status: 404); return }
         let head = first[0] == "HEAD"
         if resource.kind == "playlist" {
             let ticket = token
-            manifests.dataTask(with: request(resource.url)) { data, response, error in
+            let revision = activityRevision
+            let identifier = UUID()
+            let task = manifests.dataTask(with: request(resource.url)) { data, response, error in
+                self.manifestTasks.removeValue(forKey: identifier)
                 guard ticket == self.token else { self.reply(connection, status: 410); return }
+                guard self.applicationActive, revision == self.activityRevision else {
+                    self.reply(connection, status: 503); return
+                }
                 guard error == nil, let response = response as? HTTPURLResponse,
                       response.statusCode == 200, let finalURL = response.url,
                       self.allowed(finalURL.absoluteString) != nil,
@@ -286,7 +330,9 @@ import CryptoKit
                 }
                 self.reply(connection, status: 200, data: Data(output.utf8),
                     type: "application/vnd.apple.mpegurl", head: head)
-            }.resume()
+            }
+            manifestTasks[identifier] = task
+            task.resume()
             return
         }
         if FileManager.default.fileExists(atPath: file(source).path) {
@@ -326,6 +372,7 @@ import CryptoKit
         return failed ? nil : result
     }
     private func prefetch() {
+        guard applicationActive, !token.isEmpty else { return }
         var wanted = Set<String>()
         var ordered: [String] = []
         for segments in playlists.values {
@@ -363,7 +410,7 @@ import CryptoKit
         }
     }
     private func download(_ source: String, demand: Bool = false) {
-        guard let resource = resources[source], resource.kind != "playlist",
+        guard applicationActive, let resource = resources[source], resource.kind != "playlist",
               !token.isEmpty else { return }
         if let existing = tasks[source] {
             if !demand || demandTasks.contains(source) { return }
@@ -439,6 +486,9 @@ import CryptoKit
         if !reconnecting { prefetch() }
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        finishBackgroundEvents()
+    }
+    private func finishBackgroundEvents() {
         let completion = backgroundCompletion
         backgroundCompletion = nil
         DispatchQueue.main.async { completion?() }

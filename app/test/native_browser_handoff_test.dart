@@ -398,6 +398,64 @@ const _nativeHosts = TargetPlatformVariant({
 
 void main() {
   testWidgets(
+    'foreground play reuses the native decoder after a background round trip',
+    (tester) async {
+      final host = await _mountHost(tester);
+      await host.content();
+      final original = host.native;
+      final document = host.store.operation.id;
+      await host.backgroundRoundTrip();
+      expect(host.native.state.paused, isTrue);
+      expect(host.video.playCalls, [0]);
+      await host.store.controlPlayer('play');
+      await host.flush();
+      expect(host.store.resumingPlayback, isFalse);
+      expect(host.native.state.paused, isFalse);
+      expect(host.video.playCalls, [0, 0]);
+      expect(find.text(host.store.t('retry')), findsNothing);
+      host.expectSessionRetained(original, document);
+    },
+    variant: _nativeHosts,
+  );
+
+  testWidgets(
+    'foreground process-loss recovery shows ordinary loading before native handoff',
+    (tester) async {
+      final host = await _mountHost(tester);
+      await host.content();
+      await host.backgroundRoundTrip();
+      final wrappedController = host.webViews.views.single
+          .controllerFromPlatform<InAppWebViewController>(host.controller);
+      host.webViews.views.single.params.onWebContentProcessDidTerminate!(
+        wrappedController,
+      );
+      await host.flush();
+      expect(host.store.playback.value.paused, isTrue);
+      expect(find.text(host.store.t('retry')), findsNothing);
+      expect(host.controller.loads, hasLength(1));
+      await host.store.controlPlayer('play');
+      await host.flush();
+      expect(host.store.resumingPlayback, isTrue);
+      expect(
+        find.byKey(const ValueKey('player-loading-indicator')),
+        findsOneWidget,
+      );
+      expect(find.text(host.store.t('retry')), findsNothing);
+      expect(host.controller.loads, hasLength(2));
+      expect(host.controller.loads.last.url!.queryParameters['t'], '42');
+      await host.content();
+      await host.waitFor(
+        () => !host.store.resumingPlayback && !host.native.state.paused,
+        reason:
+            'The explicit play request must survive a native session rebuild',
+      );
+      expect(host.video.playCalls, [0, 1]);
+      expect(host.store.playback.value.phase, PlaybackPhase.content);
+    },
+    variant: _nativeHosts,
+  );
+
+  testWidgets(
     'failed native initialization exposes retry and never dispatches content commands to the page',
     (tester) async {
       final host = await _mountHost(tester, failInitialization: true);
@@ -447,11 +505,12 @@ void main() {
       await tester.tap(retry);
       await host.waitFor(
         () =>
-            host.controller.reloads == 1 &&
+            host.controller.loads.length == 2 &&
             host.store.operation.id != failedDocument,
         reason: 'Explicit retry must reload a new playback document',
       );
-      expect(host.controller.reloads, 1);
+      expect(host.controller.reloads, 0);
+      expect(host.controller.loads.last.url!.queryParameters['t'], '37');
       expect(host.store.operation.id, isNot(failedDocument));
       await host.content();
       await host.waitFor(
@@ -536,7 +595,7 @@ void main() {
       await tester.tap(retry);
       await host.waitFor(
         () =>
-            host.controller.reloads == 1 &&
+            host.controller.loads.length == 2 &&
             host.store.operation.id != failedDocument,
         reason: 'Retry after a null source must reload a new playback document',
       );
@@ -554,7 +613,8 @@ void main() {
       expect(host.controller.preparations, 2);
       expect(host.controller.failures, 1);
       expect(host.controller.commits, 1);
-      expect(host.controller.reloads, 1);
+      expect(host.controller.reloads, 0);
+      expect(host.controller.loads, hasLength(2));
       expect(host.video.sources, hasLength(1));
       expect(host.video.playCalls, [0]);
       expect(host.controller.pageCommands, isEmpty);

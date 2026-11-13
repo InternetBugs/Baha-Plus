@@ -32,6 +32,35 @@ void main() {
   });
 
   test(
+    'background cancels native work without stopping the cache session',
+    () async {
+      final cache = IOSHlsCache();
+      await cache.prepare(document: document, videoId: '20', source: source);
+      await cache.update(document, 37);
+      await cache.setApplicationActive(false);
+      await cache.setApplicationActive(false);
+      await cache.update(document, 55);
+      expect(cache.document, document);
+      expect(calls.where((call) => call.method == 'stop'), isEmpty);
+      expect(calls.where((call) => call.method == 'update'), hasLength(1));
+      expect(
+        calls
+            .where((call) => call.method == 'setApplicationActive')
+            .single
+            .arguments,
+        {'active': false},
+      );
+      await cache.setApplicationActive(true);
+      expect(calls.last.method, 'setApplicationActive');
+      expect(calls.last.arguments, {'active': true});
+      // No position change or play command is needed to restart prefetch.
+      expect(cache.document, document);
+      await cache.update(document, 55);
+      expect(calls.last.method, 'update');
+    },
+  );
+
+  test(
     'a validated cache gateway retains the exact authorized source',
     () async {
       final cache = IOSHlsCache();

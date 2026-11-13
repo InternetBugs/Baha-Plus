@@ -886,6 +886,18 @@ test('cache setup rejects ads, stale tickets and remote gateways', async () => {
   f.bridge.dispose();
 });
 
+test('cache setup cannot start a source change while the application is background', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  f.bridge.suspend();
+  assert.equal(await f.bridge.enableCache('ticket',
+    'https://bahamut.akamaized.net/series/master.m3u8',
+    'http://localhost:12345/01234567-89ab-cdef-0123-456789abcdef/'), null);
+  assert.deepEqual(f.sources, []);
+  assert.equal(f.media.paused, true);
+  f.bridge.dispose();
+});
+
 test('a later cache transport error restores official playback once, at the saved position', async () => {
   const f = playerFixture(true);
   await new Promise(resolve => setImmediate(resolve));
@@ -1010,6 +1022,35 @@ test('playback health exposes bounded numeric diagnostics without media URLs', (
   assert.ok(diagnostic.domNodes > 0);
   assert.equal(typeof diagnostic.bufferAhead, 'number');
   assert.ok(!JSON.stringify(diagnostic).includes('http'));
+  f.bridge.dispose();
+});
+
+test('a restored play request starts web playback only while foreground', () => {
+  for (const suspended of [false, true]) {
+    const f = playerFixture();
+    f.context.window.__bahaPlaybackCheckpoint = {
+      videoId: '20', position: 506.8, rate: 1.5, muted: true, paused: false,
+    };
+    f.context.window.__bahaMediaSuspended = suspended;
+    f.media.paused = true;
+    f.tick();
+    assert.equal(f.media.currentTime, 506.8);
+    assert.equal(f.media.paused, suspended);
+    f.bridge.dispose();
+  }
+});
+
+test('a paused web media error cannot reload its source after foreground return', async () => {
+  const f = playerFixture(true);
+  await new Promise(resolve => setImmediate(resolve));
+  f.bridge.suspend();
+  f.bridge.resume();
+  f.media.error = {code: 2};
+  f.tick();
+  f.advance(120000);
+  f.tick();
+  assert.equal(f.media.paused, true);
+  assert.equal(f.sources.length, 0);
   f.bridge.dispose();
 });
 

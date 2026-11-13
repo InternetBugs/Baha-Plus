@@ -888,7 +888,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ),
           if (state.phase == PlaybackPhase.error)
             CupertinoButton(
-              onPressed: store.reloadBrowser,
+              onPressed: store.retryPlayback,
               child: Text(store.t('retry')),
             ),
         ],

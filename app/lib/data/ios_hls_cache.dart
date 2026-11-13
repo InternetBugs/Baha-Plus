@@ -17,6 +17,21 @@ class IOSHlsCache {
   String? _document;
   double? _lastPosition;
   String? get document => _document;
+  bool _applicationActive = true;
+
+  Future<void> setApplicationActive(bool active) async {
+    if (_applicationActive == active) return;
+    _applicationActive = active;
+    try {
+      await _channel.invokeMethod<void>('setApplicationActive', {
+        'active': active,
+      });
+    } on MissingPluginException {
+      // Other platforms do not use the optional loopback cache.
+    } on PlatformException {
+      // Native lifecycle notifications also stop downloads on iOS.
+    }
+  }
 
   static bool validSource(String source) {
     final uri = Uri.tryParse(source);
@@ -103,7 +118,12 @@ class IOSHlsCache {
   }
 
   Future<void> update(String document, double position) async {
-    if (_document != document || !position.isFinite || position < 0) return;
+    if (!_applicationActive ||
+        _document != document ||
+        !position.isFinite ||
+        position < 0) {
+      return;
+    }
     if (_lastPosition != null && (position - _lastPosition!).abs() < 5) return;
     _lastPosition = position;
     try {

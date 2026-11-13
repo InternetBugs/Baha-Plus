@@ -29,6 +29,10 @@
 @implementation AppDelegate
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+  // Cancel transfers left by older builds even when this session uses native
+  // playback and never opens the optional WebView cache channel.
+  [[PlaybackCache shared] setApplicationActive:
+      application.applicationState != UIApplicationStateBackground];
   [NSNotificationCenter.defaultCenter addObserver:self
       selector:@selector(audioSessionInterrupted:)
       name:AVAudioSessionInterruptionNotification object:nil];
@@ -97,6 +101,9 @@
       [[PlaybackCache shared] prepare:arguments completion:^(NSDictionary *value) { result(value); }];
     } else if ([call.method isEqualToString:@"update"]) {
       [[PlaybackCache shared] update:arguments];
+      result(nil);
+    } else if ([call.method isEqualToString:@"setApplicationActive"]) {
+      [[PlaybackCache shared] setApplicationActive:[arguments[@"active"] boolValue]];
       result(nil);
     } else if ([call.method isEqualToString:@"stop"]) {
       NSString *document = [arguments[@"document"] isKindOfClass:[NSString class]] ? arguments[@"document"] : @"";

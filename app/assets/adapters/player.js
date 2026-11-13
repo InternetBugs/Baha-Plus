@@ -120,6 +120,10 @@
     if (c.media.seeking || Math.abs(c.media.currentTime - target) > 1) return true;
     checkpointRestored = true;
     window.__bahaPlaybackCheckpoint = null;
+    if (!saved.paused && !requiresNative() && !lifecycleSuspended &&
+        window.__bahaMediaSuspended !== true && c.media.paused) {
+      c.player.play()?.catch?.(() => {});
+    }
     return false;
   }
   function diagnostics() {
@@ -350,7 +354,7 @@
     } else lastProgress = null;
     const mediaError = c.media?.error?.code;
     const playerError = c.player?.error?.()?.code;
-    if (!requiresNative() && !lifecycleSuspended && c.matches && c.phase === 'error' &&
+    if (!requiresNative() && !lifecycleSuspended && !c.media?.paused && c.matches && c.phase === 'error' &&
         [2, 3, 4].includes(mediaError || playerError) && !(playerError >= 1000) &&
         now >= recoveryAfter && recoveryCount < 2) {
       void recover(c);
@@ -471,6 +475,7 @@
     } catch (_) { return false; }
   }
   async function enableCache(ticket, source, base) {
+    if (lifecycleSuspended || window.__bahaMediaSuspended === true) return null;
     if (ticket !== nonce || window.__bahaDocumentNonce !== nonce || cachePlayer ||
         window.__bahaNativeBackend || !nativeQuality) return false;
     if (nativeQuality.isSwitching()) return null;
@@ -526,7 +531,8 @@
     if (c.player.src === setter) c.player.src = original;
     // A local gateway failure restores the official authorized source and the
     // previous timeline; it never changes the official ad/entitlement state.
-    if (window.__bahaDocumentNonce === nonce) {
+    if (window.__bahaDocumentNonce === nonce && !lifecycleSuspended &&
+        window.__bahaMediaSuspended !== true) {
       await nativeQuality.reload(c.player, c.media, snapshot);
     }
     if (window.__bahaCacheOriginalSource === upstream) {

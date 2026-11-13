@@ -68,6 +68,8 @@
 + (instancetype)shared;
 - (void)prepare:(NSDictionary *)arguments completion:(void (^)(NSDictionary *))completion;
 - (void)stop:(NSString *)document;
+- (void)setApplicationActive:(BOOL)active;
+- (void)reconnect:(void (^)(void))completion;
 @end
 
 @interface RunnerTests : XCTestCase
@@ -340,5 +342,51 @@
     }];
   }];
   [self waitForExpectations:@[finished] timeout:10];
+}
+
+- (void)testForegroundCacheSuspendsWithoutReplacingItsGateway {
+  id<BahaPlaybackCacheTesting> cache = [self cache];
+  NSString *document = @"cccccccccccccccccccccccccccccccccccccccccccccccc";
+  NSDictionary *arguments = @{
+    @"source": @"https://bahamut.akamaized.net/offline-test/master.m3u8",
+    @"document": document, @"videoId": @"20"
+  };
+  XCTestExpectation *finished = [self expectationWithDescription:@"Foreground cache lifecycle"];
+  [cache setApplicationActive:YES];
+  [cache prepare:arguments completion:^(NSDictionary *first) {
+    XCTAssertNotNil(first);
+    NSString *base = first[@"base"];
+    NSURL *unknown = [NSURL URLWithString:[base stringByAppendingString:
+        @"media.ts?u=https%3A%2F%2Fattacker.invalid%2Fa.ts"]];
+    [cache setApplicationActive:NO];
+    [cache prepare:arguments completion:^(NSDictionary *suspended) {
+      XCTAssertEqualObjects(suspended[@"base"], base);
+      // Unknown resources never access the CDN. All requests are rejected
+      // while backgrounded, even though the gateway and its session survive.
+      [[[NSURLSession sharedSession] dataTaskWithURL:unknown
+          completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        XCTAssertNil(error);
+        XCTAssertEqual(((NSHTTPURLResponse *)response).statusCode, 503);
+        [cache setApplicationActive:YES];
+        [cache prepare:arguments completion:^(NSDictionary *resumed) {
+          XCTAssertEqualObjects(resumed[@"base"], base);
+          [[[NSURLSession sharedSession] dataTaskWithURL:unknown
+              completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            XCTAssertNil(error);
+            XCTAssertEqual(((NSHTTPURLResponse *)response).statusCode, 404);
+            [cache stop:document];
+            [finished fulfill];
+          }] resume];
+        }];
+      }] resume];
+    }];
+  }];
+  [self waitForExpectations:@[finished] timeout:10];
+}
+
+- (void)testRetiredBackgroundSessionCompletesWhenNoTransfersRemain {
+  XCTestExpectation *finished = [self expectationWithDescription:@"Drain retired session"];
+  [[self cache] reconnect:^{ [finished fulfill]; }];
+  [self waitForExpectations:@[finished] timeout:5];
 }
 @end

@@ -121,6 +121,7 @@ class NativePlayback extends ChangeNotifier {
   bool _disposed = false, _active = false, _polling = false, _blocked = false;
   bool _seeking = false;
   bool _authorizationAvailable = true;
+  bool _recoverableFailure = false;
   bool _foreground = true;
   int _pauseVersion = 0, _seekRevision = 0;
   int _generation = 0, _quality = 0;
@@ -133,7 +134,9 @@ class NativePlayback extends ChangeNotifier {
   bool get active => _active && !_disposed;
   int get seekRevision => _seekRevision;
   bool get authorizationAvailable => _authorizationAvailable;
-  bool get recoverable => !_blocked && _authorizationAvailable;
+  bool get recoverable =>
+      (!_blocked && _authorizationAvailable) || _recoverableFailure;
+  bool get retryable => !_blocked || _recoverableFailure;
   Future<void> get released => _released;
   int get quality => _quality;
   PlaybackState get state {
@@ -401,7 +404,7 @@ class NativePlayback extends ChangeNotifier {
   void _publish() {
     if (_disposed) return;
     if (active) onState(state);
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   Future<bool> command(String action, double? value) {
@@ -423,7 +426,11 @@ class NativePlayback extends ChangeNotifier {
     switch (action) {
       case 'play':
         if (!_foreground) return false;
+        final pauseVersion = _pauseVersion;
         await current.play();
+        if (!_foreground || pauseVersion != _pauseVersion) {
+          await current.pause();
+        }
       case 'pause':
         await current.pause();
       case 'seek':
@@ -494,10 +501,11 @@ class NativePlayback extends ChangeNotifier {
     _publish();
   }
 
-  Future<void> block({bool committed = false}) async {
+  Future<void> block({bool committed = false, bool recoverable = false}) async {
     if (_disposed || _blocked) return;
     if (committed) _active = true;
     _blocked = true;
+    _recoverableFailure = recoverable;
     try {
       await pause();
     } catch (_) {
