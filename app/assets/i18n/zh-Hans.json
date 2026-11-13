@@ -237,5 +237,13 @@
   "diagnosticsShareFailed": "暂时无法分享日志。请重试，或使用“复制日志”后粘贴到问题反馈中。",
   "diagnosticsCopyFailed": "无法复制日志，请重试或改用“导出并分享日志”。",
   "diagnosticsCopied": "日志已复制。请在问题反馈中粘贴，并补充复现步骤。",
-  "diagnosticsFeedbackFailed": "无法打开反馈页面，请稍后重试。"
+  "diagnosticsFeedbackFailed": "无法打开反馈页面，请稍后重试。",
+  "danmakuLoadError": "弹幕加载失败，视频可继续播放。",
+  "httpGuestPlayback": "访客播放实验，不同步登录账号",
+  "httpAgeConsent": "官方分级：{rating}。请确认你符合观看年龄，并同意观看官方广告。",
+  "httpConfirmPlayback": "确认并播放",
+  "httpSkipAd": "跳过广告",
+  "httpAdCountdown": "广告 · {seconds} 秒后可跳过",
+  "httpParentRequired": "此影片需要家长验证，当前访客播放实验暂不支持。",
+  "httpUnsupportedAd": "当前广告需要尚未支持的后续流程，请稍后重试。"
 }

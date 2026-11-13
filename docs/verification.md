@@ -4,6 +4,12 @@
 
 ## 已验证
 
+- 2026-11-13 在独立分支 `experiment/native-http-playback` 接入访客原生 HTTP 播放实验，
+  通过 `BAHA_NATIVE_HTTP=true` 启用。当前窗口完整 Flutter 回归 461 项、HTTP 专项
+  28 项、JavaScript 127 项、Python 12 项、静态分析、类型与 247 项双语资源检查通过。
+  Android API 35 联机完成真实广告、正片、周期进度回报和原生弹幕；组件检查及运行时
+  均确认 WebView 数量为零。实际播放中按 Home 自动暂停，返回后保留同一播放器并
+  保持暂停。实验仍为访客范围，未进行 iOS 真机验收；详见[原生 HTTP 播放实验](native-http-playback.md)。
 - 2026-11-13 目录、搜索、海报补全和有影片 ID 的详情改用原生 HTTP；读取失败直接显示错误与重试，不回退到 WebView。本机 Android 11 模拟器的真实目录、搜索和详情联机测试通过，详情页的组件检查及 `dumpsys meminfo` 均确认 WebView 数量为零。实现边界与验证记录见[原生目录与影片资料](native-metadata.md)；播放验证、广告及进度继续采用原有实现。
 - 2026-11-09 在 `codex/ios-native-player` 完成基于 Android 原生播放器的 iOS 代码迁移：官方授权和广告后接入 AVPlayer 纹理，共用画质、弹幕和时间线回传，隔离旧 WebView 缓存切源；补齐控制中心定位、音频中断暂停、后台异步完成不自动播放及退出释放顺序。Windows 上 Flutter 静态分析、137 项 Flutter 测试、107 项页面适配器测试、12 项 Python 工具测试、TypeScript 和 205 条双语资源检查通过；关闭两端原生开关后另有 13 项平台／旧缓存回退测试通过。本轮没有 iOS 编译、模拟器或 iPhone 实播证据，不将旧包构建或 Android 性能记录算作本迁移验收。编译、回退与设备测试说明见 [iOS 原生播放迁移](ios-native-player.md)。
 - 2026-11-08 iPhone 实测在约 8 分 27 秒发生视频黑屏。16:09:04 的 WebKit 日志记录网页进程退出；同刻 Jetsam 报告对该进程给出 `per-process-limit`，驻留页数为 131072、页大小 16384 字节，即 2 GiB。Flutter 主进程仍在前台。已确认网页进程达到自身内存上限；具体增长来源仍需 Web Inspector 内存分类和 DOM／视频缓冲诊断，尚未证明已修复。原始设备报告仅保存在忽略的本地产物目录。

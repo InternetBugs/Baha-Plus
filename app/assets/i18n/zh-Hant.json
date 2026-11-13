@@ -237,5 +237,13 @@
   "diagnosticsShareFailed": "暫時無法分享日誌。請重試，或使用「複製日誌」後貼到問題回報中。",
   "diagnosticsCopyFailed": "無法複製日誌，請重試或改用「匯出並分享日誌」。",
   "diagnosticsCopied": "日誌已複製。請在問題回報中貼上，並補充重現步驟。",
-  "diagnosticsFeedbackFailed": "無法開啟回報頁面，請稍後重試。"
+  "diagnosticsFeedbackFailed": "無法開啟回報頁面，請稍後重試。",
+  "danmakuLoadError": "彈幕載入失敗，影片可繼續播放。",
+  "httpGuestPlayback": "訪客播放實驗，不同步登入帳號",
+  "httpAgeConsent": "官方分級：{rating}。請確認你符合觀看年齡，並同意觀看官方廣告。",
+  "httpConfirmPlayback": "確認並播放",
+  "httpSkipAd": "略過廣告",
+  "httpAdCountdown": "廣告 · {seconds} 秒後可略過",
+  "httpParentRequired": "此影片需要家長驗證，目前訪客播放實驗暫不支援。",
+  "httpUnsupportedAd": "目前廣告需要尚未支援的後續流程，請稍後重試。"
 }

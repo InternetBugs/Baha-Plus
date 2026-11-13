@@ -64,6 +64,10 @@ npm run typecheck
 
 Windows 桌面 Debug 的工具要求、构建入口及本机验证方法见 [Windows 调试说明](windows-debug.md)。
 
+`experiment/native-http-playback` 分支提供不依赖播放 WebView 的原生 HTTP 访客实验，
+通过 `BAHA_NATIVE_HTTP=true` 显式启用；接入边界、测试命令和未覆盖范围见
+[原生 HTTP 播放实验](native-http-playback.md)。
+
 连接 Android 模拟器后，可单独运行真实网络集成测试：
 
 ```sh
@@ -163,7 +167,7 @@ iOS 回退模式使用官方 WKWebView 播放，进入后台／息屏时自动�
 
 背景网络任务由 [Apple 后台 URLSession](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/background(withidentifier:)) 调度。这里使用可按时间窗口加载的原始 HLS 分片与本机回放网关，不创建独立的离线整集下载。系统可能延后任务，用户强制退出应用会取消后台传输，不能承诺无限期连续加载。尚需在 macOS/Xcode 构建和 iPhone 上验证原生回环媒体加载、锁屏期间的实际传输和返回后的缓存命中；Windows 离线测试及 Swift 语法解析不能替代这些验收。
 
-弹幕内容继续由官方播放器渲染，播放阶段读取 `m3u8` 插件，弹幕管理器使用 `animePlayer` 插件。Flutter 面板保存官方播放器支持的透明度、字号和滚动／顶部／底部显示设置，并提供官方发送入口。弹幕和留言发送均在 WebView 会话内取得 CSRF，发送前再次确认账号、剧集、文档和正片状态。
+上述 WebView 回退模式的弹幕内容继续由官方播放器渲染，播放阶段读取 `m3u8` 插件，弹幕管理器使用 `animePlayer` 插件。Flutter 面板保存官方播放器支持的透明度、字号和滚动／顶部／底部显示设置，并提供官方发送入口。弹幕和留言发送均在 WebView 会话内取得 CSRF，发送前再次确认账号、剧集、文档和正片状态。`BAHA_NATIVE_HTTP=true` 的实验路径改为原生 HTTP 读取弹幕并由 Flutter 绘制，显示设置直接更新画布，访客会话不提供发送；详见 [原生 HTTP 播放实验](native-http-playback.md)。
 
 发送功能的测试全部使用离线 transport mock：覆盖正确参数、CSRF、服务器拒绝、重复提交、账号切换、切集、广告和过期文档。测试不会向动画疯实际发布弹幕或留言。只读联机检查使用 GET 验证了真实留言与弹幕返回格式。
 

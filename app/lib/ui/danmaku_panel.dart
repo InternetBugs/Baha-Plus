@@ -92,10 +92,15 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([store, store.playback]),
+    listenable: Listenable.merge([
+      store,
+      store.playback,
+      ?store.nativeHttpPlayback,
+    ]),
     builder: (context, _) {
       final settings = store.danmakuSettings;
       final canSend =
+          !store.usesNativeHttpPlayback &&
           store.danmakuSettings.enabled &&
           store.playback.value.canControl &&
           store.playingVideoId == _videoId;
@@ -127,6 +132,17 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                 ),
                 children: [
                   if (!widget.composerOnly) ...[
+                    if (store.nativeHttpPlayback?.danmakuFailureStage != null)
+                      Row(
+                        children: [
+                          Expanded(child: Text(store.t('danmakuLoadError'))),
+                          CupertinoButton(
+                            onPressed: () =>
+                                store.nativeHttpPlayback?.loadDanmaku(),
+                            child: Text(store.t('retry')),
+                          ),
+                        ],
+                      ),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: SizedBox(

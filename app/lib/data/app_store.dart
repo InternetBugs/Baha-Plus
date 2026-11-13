@@ -12,6 +12,8 @@ import 'official_search.dart';
 import 'official_app_api.dart';
 import 'app_updates.dart';
 import 'app_diagnostics.dart';
+import 'native_http_api.dart';
+import 'native_http_playback.dart';
 
 abstract interface class OfficialPortal {
   Future<void> load(Uri uri);
@@ -23,6 +25,10 @@ abstract interface class OfficialPortal {
 }
 
 class AppStore extends ChangeNotifier {
+  // Isolated guest-only experiment, enabled explicitly on this branch.
+  static const nativeHttpPlaybackEnabled = bool.fromEnvironment(
+    'BAHA_NATIVE_HTTP',
+  );
   static const androidNativePlaybackEnabled = bool.fromEnvironment(
     'BAHA_ANDROID_NATIVE',
     defaultValue: true,
@@ -53,6 +59,8 @@ class AppStore extends ChangeNotifier {
     OfficialAppApi? metadataApi,
     AppUpdates? updates,
     AppDiagnostics? diagnostics,
+    this.enableNativeHttpPlayback = nativeHttpPlaybackEnabled,
+    this.nativeHttpApiFactory,
     this.language = 'zh-Hant',
     this.appearance = 'system',
     this.catalog = const Catalog(),
@@ -198,6 +206,10 @@ class AppStore extends ChangeNotifier {
   final OfficialAppApi metadataApi;
   final AppUpdates updates;
   final AppDiagnostics diagnostics;
+  final bool enableNativeHttpPlayback;
+  final NativeHttpApi Function()? nativeHttpApiFactory;
+  NativeHttpPlayback? nativeHttpPlayback;
+  bool get usesNativeHttpPlayback => nativeHttpPlayback != null && showsPlayer;
   String? _lastDiagnosticPlayback;
   DateTime? _lastDiagnosticSample;
 
@@ -283,8 +295,8 @@ class AppStore extends ChangeNotifier {
   }
 
   bool get needsOfficialPortal =>
-      browserVisible ||
-      busy ||
+      (browserVisible && !usesNativeHttpPlayback) ||
+      (busy && !usesNativeHttpPlayback) ||
       _pendingUri != null ||
       _communityOperations > 0 ||
       _portalTeardowns > 0 ||
@@ -402,8 +414,11 @@ class AppStore extends ChangeNotifier {
     await _attemptResume(version);
   }
 
-  Future<void> retryPlayback() =>
-      _hasPlaybackCheckpoint ? resumePlayback() : reloadBrowser();
+  Future<void> retryPlayback() => usesNativeHttpPlayback
+      ? reloadBrowser()
+      : _hasPlaybackCheckpoint
+      ? resumePlayback()
+      : reloadBrowser();
 
   bool _resumeLive(int version) =>
       !_disposed &&
@@ -525,6 +540,11 @@ class AppStore extends ChangeNotifier {
       _readNotifications.contains(item.id);
 
   Future<Json> community(String action, Json arguments) async {
+    // Do not let automatic comment previews mount an account WebView or
+    // replace the HTTP playback ticket. Native community support is separate.
+    if (usesNativeHttpPlayback) {
+      throw const CommunityException('unavailable');
+    }
     if (!_applicationActive ||
         _disposed ||
         (_portal == null && !_portalHostActive)) {
@@ -646,6 +666,7 @@ class AppStore extends ChangeNotifier {
     int position = 0,
     int size = 1,
   }) async {
+    if (usesNativeHttpPlayback) throw const CommunityException('login');
     if (!showsPlayer ||
         !playback.value.canControl ||
         playingVideoId == null ||
@@ -664,7 +685,7 @@ class AppStore extends ChangeNotifier {
   Future<void> setDanmakuSettings(DanmakuSettings value) async {
     danmakuSettings = value;
     _emit();
-    if (showsPlayer) {
+    if (showsPlayer && !usesNativeHttpPlayback) {
       try {
         await _portal?.evaluate(
           'window.__bahaPlayerBridge?.configure(${jsonEncode(operation.id)},'
@@ -846,6 +867,10 @@ class AppStore extends ChangeNotifier {
       await syncAccount();
     }
     if (!browserVisible || !showsPlayer) return;
+    if (usesNativeHttpPlayback) {
+      await nativeHttpPlayback!.setApplicationActive(active);
+      return;
+    }
     final document = operation.id;
     try {
       await _portal?.evaluate('''
@@ -951,7 +976,9 @@ if (window.__bahaDocumentNonce === ${jsonEncode(active ? document : suspendedDoc
   }
 
   Future<bool> _sendPlayerCommand(String action, double? value) async =>
-      await _portal?.playerCommand(operation.id, action, value) ?? false;
+      usesNativeHttpPlayback
+      ? await nativeHttpPlayback!.command(action, value)
+      : await _portal?.playerCommand(operation.id, action, value) ?? false;
 
   Future<void> _restorePreferredQuality() async {
     final state = playback.value;
@@ -1498,10 +1525,19 @@ $source
     playingAnime = anime;
     _pendingAnime = anime;
     browserTitle = anime.title;
-    accountNeedsRefresh = true;
     final videoId = episode?.id ?? anime.latestVideoId;
     playingVideoId = videoId;
     playback.value = const PlaybackState();
+    if (enableNativeHttpPlayback &&
+        nativePlaybackBackend != null &&
+        videoId != null) {
+      await _openNativeHttp(anime, videoId);
+      return;
+    }
+    final oldHttp = nativeHttpPlayback;
+    nativeHttpPlayback = null;
+    await oldHttp?.close();
+    accountNeedsRefresh = true;
     await _load(
       videoId == null
           ? OfficialSite.series(anime.id)
@@ -1509,6 +1545,54 @@ $source
       BrowserIntent.play,
       visible: true,
     );
+  }
+
+  Future<void> _openNativeHttp(
+    Anime anime,
+    String videoId, {
+    Json? checkpoint,
+  }) async {
+    final previous = nativeHttpPlayback;
+    nativeHttpPlayback = null;
+    _pendingUri = null;
+    _begin(BrowserIntent.play);
+    final document = operation.id;
+    browserVisible = true;
+    browserError = false;
+    busy = false;
+    notice = null;
+    browserUri = null;
+    verificationRequired = false;
+    nativeHttpPlayback = NativeHttpPlayback(
+      document: document,
+      videoId: videoId,
+      preferredQuality: _preferredQuality,
+      checkpoint: checkpoint,
+      diagnostics: diagnostics,
+      api: nativeHttpApiFactory?.call(),
+      onState: (state) => updateNativePlayback(document, state),
+    );
+    final session = nativeHttpPlayback!;
+    _emit();
+    await previous?.close();
+    if (_disposed || operation.id != document) return;
+    unawaited(session.prepare(applicationActive: _applicationActive));
+    if (playerDetail == null) {
+      unawaited(() async {
+        try {
+          final result = await metadataApi.fetchDetail(
+            animeId: anime.id,
+            videoId: videoId,
+          );
+          if (!_disposed && operation.id == document) {
+            playerDetail = result;
+            _emit();
+          }
+        } catch (_) {
+          // A metadata failure cannot change the authorization session.
+        }
+      }());
+    }
   }
 
   Future<void> continueWatching(WatchEntry entry) async {
@@ -1519,7 +1603,8 @@ $source
   }
 
   Future<void> closeBrowser() async {
-    _portalTeardowns++;
+    final retainPortal = !usesNativeHttpPlayback;
+    if (retainPortal) _portalTeardowns++;
     try {
       _cancelResume();
       _awaitingForegroundPlay = false;
@@ -1531,10 +1616,12 @@ $source
       _processRecoveryLoading = false;
       _processRecoveryDeadline?.cancel();
       _processRecoveries.clear();
+      final http = nativeHttpPlayback;
+      nativeHttpPlayback = null;
       final document = operation.id;
       final releaseSystemMedia = browserIsPlayer;
       final refreshAccount =
-          accountNeedsRefresh ||
+          (accountNeedsRefresh && http == null) ||
           operation.intent == BrowserIntent.account ||
           operation.intent == BrowserIntent.accountRefresh;
       browserVisible = false;
@@ -1545,6 +1632,7 @@ $source
       final closing = operation.id;
       playback.value = const PlaybackState();
       _emit();
+      await http?.close();
       await _releasePlayback(
         document: document,
         expected: closing,
@@ -1560,12 +1648,33 @@ $source
         await refreshCatalog();
       }
     } finally {
-      _portalTeardowns--;
+      if (retainPortal) _portalTeardowns--;
       _emit();
     }
   }
 
   Future<void> reloadBrowser() async {
+    if (usesNativeHttpPlayback) {
+      _cancelResume();
+      _awaitingForegroundPlay = false;
+      _cancelPlaybackWatchdog();
+      _terminatedPlayerDocument = null;
+      await _openNativeHttp(
+        playingAnime!,
+        playingVideoId!,
+        checkpoint:
+            _playerCheckpoint ??
+            (_lastGoodPlayback == null
+                ? null
+                : {
+                    'position': _lastGoodPlayback!.position,
+                    'rate': _lastGoodPlayback!.rate,
+                    'muted': _lastGoodPlayback!.muted,
+                    'paused': false,
+                  }),
+      );
+      return;
+    }
     if (!_resumingPlayback) _awaitingForegroundPlay = false;
     _cancelPlaybackWatchdog();
     _processRecoveryDeadline?.cancel();
@@ -2224,11 +2333,14 @@ window.__bahaMediaSuspended = false; true;
     if (!OfficialSite.allowedNavigation(uri)) return;
     final document = operation.id;
     final releaseSystemMedia = browserIsPlayer;
+    final http = intent == BrowserIntent.play ? null : nativeHttpPlayback;
+    if (http != null) nativeHttpPlayback = null;
     _begin(intent);
     final expected = operation.id;
     if (intent != BrowserIntent.play) {
       playerFullscreen = false;
       playerLocked = false;
+      await http?.close();
       await _releasePlayback(
         document: document,
         expected: expected,
@@ -2434,6 +2546,7 @@ document.querySelectorAll('video,audio').forEach(function(media) { media.pause()
     if (ready != null && !ready.isCompleted) ready.complete(null);
     _catalogGeneration++;
     _detailGeneration++;
+    nativeHttpPlayback?.dispose();
     metadataApi.dispose();
     _finishLogout(false);
     _clearPlayerFavorite();

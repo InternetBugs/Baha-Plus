@@ -10,6 +10,7 @@ import 'catalog_pages.dart';
 import 'chrome.dart';
 import 'detail_page.dart';
 import 'official_browser.dart';
+import 'native_http_player.dart';
 import 'seasonal_page.dart';
 import 'notifications_page.dart';
 
@@ -405,7 +406,16 @@ class _AppRootState extends State<AppRoot>
           ),
         ),
       );
-      final portalLayer = !widget.mountPortal || !store.needsOfficialPortal
+      final httpLayer = !widget.mountPortal || !store.usesNativeHttpPlayback
+          ? null
+          : Positioned.fill(
+              key: const ValueKey('native-http-player-layer'),
+              child: NativeHttpPlayer(store: store),
+            );
+      final portalLayer =
+          !widget.mountPortal ||
+              !store.needsOfficialPortal ||
+              store.usesNativeHttpPlayback
           ? null
           : Positioned.fill(
               key: const ValueKey('portal-layer'),
@@ -426,7 +436,7 @@ class _AppRootState extends State<AppRoot>
           // no platform-view layer for the glass to sample on native pages.
           // Public catalog/detail reads have no platform view, including an
           // offstage one. Retain the official session only while it is in use.
-          children: [nativeLayer, ?portalLayer],
+          children: [nativeLayer, ?portalLayer, ?httpLayer],
         ),
       );
     },
