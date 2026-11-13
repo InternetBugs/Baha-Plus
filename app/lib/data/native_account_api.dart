@@ -303,8 +303,8 @@ class NativeAccountApi {
         result = {
           'ok': true,
           'messageId': '${body['messageId']}',
-          'total': body['commentCount'],
-          'nextPage': body['nextPage'] ?? 0,
+          'total': _integer(body['commentCount']),
+          'nextPage': _integer(body['nextPage']),
           'comments': _comments(body['comments']).reversed.toList(),
         };
         CommentPage.fromJson(result);
@@ -478,6 +478,20 @@ class NativeAccountApi {
   static bool _error(dynamic value) =>
       value != null && value != false && value != 0 && value != '';
 
+  static int _integer(dynamic value, {int minimum = 0}) {
+    if (value == null || value == '') return 0;
+    final parsed =
+        value is String &&
+            value.length <= 10 &&
+            RegExp(r'^-?[0-9]+$').hasMatch(value)
+        ? int.tryParse(value)
+        : value;
+    if (parsed is! int || parsed < minimum || parsed > 100000000) {
+      throw const CommunityException('format');
+    }
+    return parsed;
+  }
+
   static List<Json> _comments(dynamic raw) {
     if (raw is! List || raw.length > 200) {
       throw const CommunityException('format');
@@ -485,7 +499,14 @@ class NativeAccountApi {
     final result = <Json>[];
     for (final value in raw) {
       final row = value as Json;
-      final vote = row['isLike'] as num? ?? 0;
+      final vote = _integer(row['isLike'], minimum: -100000000);
+      final image = row['image'];
+      if (image != null &&
+          image is! Json &&
+          !(image is List && image.isEmpty)) {
+        throw const CommunityException('format');
+      }
+      final replies = row['commentCount'];
       final item = <String, dynamic>{
         'id': '${row['id']}',
         'name': row['name'],
@@ -493,11 +514,13 @@ class NativeAccountApi {
         'text': row['text'] ?? '',
         'time': '${row['time'] ?? ''}',
         'avatar': _image(row['propic'] as String?),
-        'image': _image((row['image'] as Json?)?['B'] as String?),
-        'likes': row['likeCount'] ?? 0,
-        'dislikes': row['dislikeCount'] ?? 0,
-        'replies': row['commentCount'] ?? row['children'] ?? 0,
-        'vote': vote.sign.toInt(),
+        'image': _image(image is Json ? image['B'] as String? : null),
+        'likes': _integer(row['likeCount']),
+        'dislikes': _integer(row['dislikeCount']),
+        'replies': _integer(
+          replies == null || replies == '' ? row['children'] : replies,
+        ),
+        'vote': vote.sign,
         'folded': row['isFolded'] == true,
       };
       OfficialComment.fromJson(item);

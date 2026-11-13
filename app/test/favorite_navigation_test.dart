@@ -58,6 +58,7 @@ Future<_Session> _launch(
   bool saved = false,
   String filter = 'season',
   int tab = 2,
+  ValueNotifier<int>? parentRevision,
 }) async {
   tester.view.physicalSize = const Size(400, 850);
   tester.view.devicePixelRatio = 1;
@@ -108,6 +109,8 @@ Future<_Session> _launch(
   store.updateNavigation(OfficialSite.home, canGoBack: false);
   store.navigationFailed();
   final browserKey = GlobalKey<_BrowserState>();
+  final revision = parentRevision ?? ValueNotifier(0);
+  if (parentRevision == null) addTearDown(revision.dispose);
   await tester.pumpWidget(
     LiquidGlassWidgets.wrap(
       brightnessResolver: Theme.maybeBrightnessOf,
@@ -124,9 +127,12 @@ Future<_Session> _launch(
             child: child!,
           ),
         ),
-        home: AppRoot(
-          store: store,
-          portalBuilder: (_) => _Browser(key: browserKey, store: store),
+        home: ValueListenableBuilder<int>(
+          valueListenable: revision,
+          builder: (context, value, child) => AppRoot(
+            store: store,
+            portalBuilder: (_) => _Browser(key: browserKey, store: store),
+          ),
         ),
       ),
     ),
@@ -192,6 +198,26 @@ Finder _favoriteButton(AppStore store) => find.descendant(
 );
 
 void main() {
+  testWidgets(
+    'parent rebuild preserves routes without rebuilding the overlay during build',
+    (tester) async {
+      final revision = ValueNotifier(0);
+      addTearDown(revision.dispose);
+      final session = await _launch(tester, parentRevision: revision);
+      await _openLibraryDetail(tester, session.store);
+      final root = tester.element(find.byType(AppRoot, skipOffstage: false));
+      final detail = tester.element(find.byType(DetailPage));
+      revision.value++;
+      await _frames(tester);
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.element(find.byType(AppRoot, skipOffstage: false)),
+        same(root),
+      );
+      expect(tester.element(find.byType(DetailPage)), same(detail));
+    },
+  );
+
   for (final saved in [false, true]) {
     testWidgets(
       '${saved ? 'removing' : 'adding'} a native favorite preserves detail and source scroll',

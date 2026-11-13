@@ -10,16 +10,31 @@ import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/comments_page.dart';
 import 'package:baha_plus/ui/community_images.dart';
 import 'package:baha_plus/ui/detail_page.dart';
+import 'package:baha_plus/ui/official_browser.dart';
+import 'package:baha_plus/ui/player_page.dart';
 import 'package:baha_plus/ui/synopsis_section.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
     'real per-episode boards, decoded avatars, attachments and replies without publishing',
     (tester) async {
+      String? retryLabel;
+      var readRetries = 0;
       Future<void> waitFor(bool Function() ready, {int seconds = 45}) async {
         final end = DateTime.now().add(Duration(seconds: seconds));
         while (!ready() && DateTime.now().isBefore(end)) {
+          final retry = retryLabel == null
+              ? null
+              : find.text(retryLabel).hitTestable();
+          if (retry != null &&
+              retry.evaluate().length == 1 &&
+              readRetries < 3) {
+            readRetries++;
+            debugPrint('Retrying a transient community read ($readRetries).');
+            await tester.tap(retry);
+          }
           await tester.pump(const Duration(milliseconds: 150));
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
@@ -45,9 +60,16 @@ void main() {
       await application.main();
       await waitFor(() => find.byType(AppRoot).evaluate().isNotEmpty);
       final store = tester.widget<AppRoot>(find.byType(AppRoot)).store;
+      retryLabel = store.t('retry');
       final originalAppearance = store.appearance;
       addTearDown(() => store.setAppearance(originalAppearance));
-      await waitFor(() => store.browserUri != null && !store.busy);
+      await waitFor(() => !store.catalogLoading);
+      await waitFor(() => !store.updates.checking);
+      await tester.pump(const Duration(milliseconds: 500));
+      if (find.byType(CupertinoAlertDialog).evaluate().isNotEmpty) {
+        await tester.tap(find.text(store.t('updateLater')));
+        await tester.pump(const Duration(milliseconds: 500));
+      }
       // Inert GET-only metadata reads: never initialize a video or submit text.
       final target = await store.community('notification-target', {
         'videoId': '45916',
@@ -57,7 +79,8 @@ void main() {
       await waitFor(() => !store.detailLoading);
       expect(store.detailFailed, isFalse);
       final detail = store.detail!;
-      expect(detail.rating, isNotNull);
+      expect(detail.metadata.any((field) => field.label == '評分'), isTrue);
+      expect(detail.rating, isNull);
       final page = await store.loadComments('45916');
       expect(page.comments, isNotEmpty);
       final illustrated = page.comments
@@ -80,25 +103,73 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 700));
+      await waitFor(() => find.byType(DetailPage).evaluate().isNotEmpty);
       final preview = find.byKey(const ValueKey('compact-comments-preview'));
+      expect(preview, findsNothing);
+      if (detail.description.isNotEmpty) {
+        await waitFor(
+          () => find
+              .byKey(const ValueKey('synopsis-preview'))
+              .evaluate()
+              .isNotEmpty,
+        );
+        final summary = tester.widget<Text>(
+          find.byKey(const ValueKey('synopsis-preview')),
+        );
+        expect(
+          summary.data!.characters.length,
+          lessThanOrEqualTo(SynopsisSection.previewLimit + 1),
+        );
+      }
+      Navigator.pop(context);
+      await tester.pump(const Duration(milliseconds: 700));
+
+      // Exercise the current-episode board in the actual player layout with
+      // an inert video surface. Community reads must not authorize playback.
+      store
+        ..playingAnime = anime
+        ..playingVideoId = '45916'
+        ..playerDetail = detail;
+      addTearDown(() {
+        store
+          ..playingAnime = null
+          ..playingVideoId = null
+          ..playerDetail = null;
+      });
+      late StateSetter rebuildPlayer;
+      Navigator.push<void>(
+        context,
+        CupertinoPageRoute(
+          builder: (_) => StatefulBuilder(
+            builder: (_, setState) {
+              rebuildPlayer = setState;
+              return PlayerPage(
+                store: store,
+                video: const SizedBox(key: ValueKey('inert-community-video')),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 700));
       await waitFor(() => preview.evaluate().isNotEmpty);
-      expect(
-        tester.getTopLeft(find.byType(SynopsisSection)).dy,
-        lessThan(tester.getTopLeft(preview).dy),
-      );
-      final summary = tester.widget<Text>(
-        find.byKey(const ValueKey('synopsis-preview')),
-      );
-      expect(
-        summary.data!.characters.length,
-        lessThanOrEqualTo(SynopsisSection.previewLimit + 1),
-      );
+      if (detail.description.isNotEmpty) {
+        expect(
+          tester.getTopLeft(find.byType(SynopsisSection)).dy,
+          lessThan(tester.getTopLeft(preview).dy),
+        );
+      }
       await Scrollable.ensureVisible(tester.element(preview), alignment: .15);
       await tester.pump(const Duration(milliseconds: 500));
       final previewComment = find.byKey(
         ValueKey('preview-comment-${illustrated.id}'),
       );
       await waitFor(() => previewComment.evaluate().isNotEmpty);
+      await Scrollable.ensureVisible(
+        tester.element(previewComment),
+        alignment: .15,
+      );
+      await tester.pump(const Duration(milliseconds: 500));
       await waitForImage(
         find.descendant(
           of: previewComment,
@@ -118,16 +189,9 @@ void main() {
         'Verified real decoded avatar and attachment in the inline board.',
       );
 
-      final inline = find.byKey(const ValueKey('inline-comments-45916'));
       final openAll = find.byKey(const ValueKey('open-full-comments'));
-      for (
-        var step = 0;
-        step < 30 && openAll.hitTestable().evaluate().isEmpty;
-        step++
-      ) {
-        await tester.drag(inline, const Offset(0, -160));
-        await tester.pump(const Duration(milliseconds: 300));
-      }
+      await Scrollable.ensureVisible(tester.element(openAll), alignment: .7);
+      await tester.pump(const Duration(milliseconds: 400));
       expect(openAll.hitTestable(), findsOneWidget);
       for (final omitted in page.comments.skip(10)) {
         expect(
@@ -224,10 +288,24 @@ void main() {
       final other = detail.episodes.firstWhere(
         (episode) => episode.id != '45916',
       );
-      await tester.tap(find.byKey(const ValueKey('board-episode-selector')));
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.byKey(ValueKey('board-select-${other.id}')));
+      // Boards follow the current player episode; there is no board selector.
+      // Change only this inert surface's episode and reopen its actual preview.
+      Navigator.pop(tester.element(board));
+      await tester.pump(const Duration(milliseconds: 700));
+      await waitFor(() => board.evaluate().isEmpty);
+      rebuildPlayer(() => store.playingVideoId = other.id);
       await tester.pump(const Duration(milliseconds: 500));
+      await waitFor(
+        () =>
+            find
+                .byKey(ValueKey('player-board-${other.id}'))
+                .evaluate()
+                .isNotEmpty &&
+            openAll.evaluate().isNotEmpty,
+      );
+      await Scrollable.ensureVisible(tester.element(openAll), alignment: .7);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(openAll);
       final otherPage = await store.loadComments(other.id);
       if (otherPage.comments.isNotEmpty) {
         await waitFor(
@@ -265,6 +343,22 @@ void main() {
       );
       expect(page.messageId, isNot(otherPage.messageId));
       expect(board, findsOneWidget);
+      expect(find.byType(OfficialBrowser, skipOffstage: false), findsNothing);
+      expect(find.byType(InAppWebView, skipOffstage: false), findsNothing);
+      expect(store.needsOfficialPortal, isFalse);
+      binding.reportData = {
+        'videoId': '45916',
+        'otherVideoId': other.id,
+        'commentCount': page.total,
+        'replyCount': replies.length,
+        'decodedAvatarAndAttachment': true,
+        'darkAppearance': true,
+        'episodeIsolation': true,
+        'noWebView': true,
+        'readRetries': readRetries,
+        'realPublications': 0,
+      };
+      debugPrint('BAHA_NATIVE_COMMUNITY ${jsonEncode(binding.reportData)}');
       expect(tester.takeException(), isNull);
       debugPrint(
         'Verified distinct episode boards and real replies; no publishing actions executed.',

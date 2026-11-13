@@ -227,6 +227,84 @@ void main() {
   );
 
   test(
+    'official numeric strings and empty image arrays remain valid comments',
+    () async {
+      final fixture = AccountFixture()..cookie = '';
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async => http.Response(
+        jsonEncode({
+          'messageId': '123',
+          'commentCount': '2',
+          'nextPage': '0',
+          'comments': [
+            {
+              ...fixture.rawComment('1'),
+              'likeCount': '3',
+              'dislikeCount': '0',
+              'commentCount': '2',
+              'isLike': '-1',
+              'image': [],
+            },
+            {
+              ...fixture.rawComment('2'),
+              'commentCount': '',
+              'children': '1',
+              'image': {'B': accountAnime.cover},
+            },
+          ],
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+      final page = CommentPage.fromJson(
+        await fixture.community('comments', {
+          'videoId': '20',
+          'order': 1,
+          'page': 0,
+        }),
+      );
+      expect(page.total, 2);
+      expect(page.nextPage, 0);
+      expect(page.comments.first.image, accountAnime.cover);
+      expect(page.comments.first.replies, 1);
+      expect(page.comments.last.image, isNull);
+      expect(page.comments.last.likes, 3);
+      expect(page.comments.last.replies, 2);
+      expect(page.comments.last.vote, -1);
+      final replies = await fixture.community('replies', {'commentId': '1'});
+      expect((replies['comments'] as List).first['replies'], 2);
+    },
+  );
+
+  test('malformed comment counts and attachment arrays are rejected', () async {
+    for (final invalid in [
+      {'commentCount': 'unknown'},
+      {'likeCount': -1},
+      {'dislikeCount': 1.5},
+      {'children': 100000001},
+      {
+        'image': [accountAnime.cover],
+      },
+    ]) {
+      final fixture = AccountFixture()..cookie = '';
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (_) async => http.Response(
+        jsonEncode({
+          'comments': [
+            {...fixture.rawComment('1'), ...invalid},
+          ],
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+      await expectLater(
+        fixture.community('replies', {'commentId': '1'}),
+        throwsA(nativeError('format')),
+      );
+    }
+  });
+
+  test(
     'favorite sends the real pair of series IDs once and respects desired state',
     () async {
       final fixture = AccountFixture();

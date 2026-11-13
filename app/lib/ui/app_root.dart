@@ -287,7 +287,11 @@ class _AppRootState extends State<AppRoot>
       _scheduleUpdateCheck();
       _scheduleCatalogRefresh();
     }
-    _favoritePortalEntry?.markNeedsBuild();
+    // The persistent entry belongs to the Navigator's overlay, which is
+    // outside this subtree while a theme or language change rebuilds us.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _favoritePortalEntry?.markNeedsBuild();
+    });
     _favoritePresentationChanged();
   }
 

@@ -1,8 +1,8 @@
 # 原生 HTTP 播放实验
 
-本轮在 `experiment/native-http-playback` 分支整合 Android TV 项目已验证的
-`nativeApi` 访客播放协议。基线为 `c6db10f`。本分支没有替换 `main` 的正式播放流程，
-也没有发布安装包。
+本轮从 `c6db10f` 建立 `experiment/native-http-playback`，整合 Android TV 项目已验证的
+`nativeApi` 访客播放协议。现已按用户要求合入本地 `main`，实验分支已删除。
+`BAHA_NATIVE_HTTP` 仍默认关闭，普通构建继续使用原有正式播放流程；尚未推送或发布。
 
 ## 启用与运行
 
@@ -106,6 +106,8 @@ flutter test test/native_http_api_test.dart test/native_http_playback_test.dart 
   test/favorite_navigation_test.dart test/community_test.dart
 flutter test integration_test/native_danmaku_sender_smoke_test.dart \
   -d <device> --no-uninstall
+flutter test integration_test/native_account_smoke_test.dart \
+  integration_test/community_smoke_test.dart -d <device> --no-uninstall
 flutter test integration_test/native_http_playback_smoke_test.dart \
   -d <device> --no-uninstall \
   --dart-define=BAHA_NATIVE_HTTP=true \
@@ -157,6 +159,25 @@ TypeScript、248 条双语资源与差异格式检查均通过。覆盖原生账
 本轮验证未向官方实际发布弹幕或留言，也未使用真实账号修改收藏或推嘘。
 记录见本机 `artifacts/native-account-regression-final.log`、
 `native-account-js-tests-final.log` 与 `native-account-teardown-tests.log`。
+
+2026-11-14 合入本地 `main` 后的模拟器复核：
+
+- Android 15／API 35、x86_64 上原生账号临时 HttpOnly Cookie 与 27 个 mock 请求通过，
+  原生弹幕发送设备 mock 通过，未进行真实账号写入或公开发布。
+- 真实目录、搜索、详情及原生留言界面通过。联机发现留言回复数可能是字符串，
+  无附图的 `image` 可能为空数组，已修复兼容并增加拒绝畸形格式的回归。
+  留言头像、附图、放大、回复、深色模式及不同剧集隔离均通过。
+- 默认官方流程交接 ExoPlayer 的真实播放、控制、60 秒持续播放及退出释放通过。
+  HTTP 实验的真实广告为 30.03 秒，正片媒体累计推进 63.175 秒，3 次进度回报成功，
+  其中 1 次为周期回报；原生弹幕读取 707 条、可见 8 条及显隐切换通过。
+  运行时 WebView 数量为零，实际按 Home 并返回后保持暂停与同一原生实例，
+  后台及返回位置均为 75000 毫秒。
+
+本轮证据保存在忽略的 `artifacts/native-migration-device/`：
+`account-community-integration.log`、`native-community-final.log`、
+`community-default-playback.log`、`native-http-runtime.json` 及 `community/` 截图。
+早期批次因过时的留言测试布局断言失败，最终留言单项复跑通过；不能将早期批次整体
+描述为通过。完整离线回归及本轮主题重建修复记录见[本地验收](verification.md)。
 
 ## 尚未覆盖
 

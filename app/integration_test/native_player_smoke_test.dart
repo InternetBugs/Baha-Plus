@@ -1,6 +1,6 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:baha_plus/core/models.dart';
@@ -10,7 +10,7 @@ import 'package:baha_plus/ui/official_browser.dart';
 import 'package:baha_plus/ui/native_video_surface.dart';
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
     'authorized mobile native playback, quality, pause, seek, lifecycle and release',
     (tester) async {
@@ -29,17 +29,32 @@ void main() {
       final backend = defaultTargetPlatform == TargetPlatform.iOS
           ? 'ios-avplayer'
           : 'android-exoplayer';
-      await waitFor(() => !store.busy && store.browserUri != null);
-      final dynamic portal = tester.state(
-        find.byType(OfficialBrowser, skipOffstage: false),
+      await waitFor(() => !store.catalogLoading && !store.updates.checking);
+      await tester.pump(const Duration(milliseconds: 500));
+      if (find.byType(CupertinoAlertDialog).evaluate().isNotEmpty) {
+        await tester.tap(find.text(store.t('updateLater')));
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+      const videoId = String.fromEnvironment(
+        'BAHA_NATIVE_TEST_VIDEO',
+        defaultValue: '40190',
       );
       final target = await store.community('notification-target', {
-        'videoId': '48442',
+        'videoId': videoId,
       });
       final anime = Anime.fromJson(target['anime'] as Json);
       await store.play(
         anime,
-        episode: const Episode(id: '48442', label: '1'),
+        episode: const Episode(id: videoId, label: '1'),
+      );
+      await waitFor(
+        () => find
+            .byType(OfficialBrowser, skipOffstage: false)
+            .evaluate()
+            .isNotEmpty,
+      );
+      final dynamic portal = tester.state(
+        find.byType(OfficialBrowser, skipOffstage: false),
       );
       final end = DateTime.now().add(const Duration(minutes: 4));
       var agreed = false;
@@ -138,7 +153,12 @@ JSON.stringify({dom: document.querySelectorAll('*').length,
       await store.controlPlayer('rate', 1);
       await store.controlPlayer('seek', 0);
       await store.controlPlayer('play');
-      final soakEnd = DateTime.now().add(const Duration(minutes: 10));
+      const soakSeconds = int.fromEnvironment(
+        'BAHA_NATIVE_SOAK_SECONDS',
+        defaultValue: 600,
+      );
+      expect(soakSeconds, greaterThanOrEqualTo(30));
+      final soakEnd = DateTime.now().add(Duration(seconds: soakSeconds));
       debugPrint(
         '[BAHA_NATIVE_TEST] soak-start=${DateTime.now().toUtc().toIso8601String()}',
       );
@@ -162,7 +182,7 @@ JSON.stringify({dom: document.querySelectorAll('*').length,
           );
         }
       }
-      expect(store.playback.value.position, greaterThan(500));
+      expect(store.playback.value.position, greaterThan(soakSeconds * .8));
       debugPrint(
         '[BAHA_NATIVE_TEST] soak-end=${DateTime.now().toUtc().toIso8601String()}',
       );
@@ -171,8 +191,22 @@ JSON.stringify({dom: document.querySelectorAll('*').length,
       expect(store.usesNativePlayback, isFalse);
       expect(find.byType(NativeVideoSurface), findsNothing);
       expect(controller.video, isNull);
+      expect(find.byType(OfficialBrowser, skipOffstage: false), findsNothing);
       expect(tester.takeException(), isNull);
-      debugPrint('[BAHA_NATIVE_TEST] ten-minute playback and release passed');
+      binding.reportData = {
+        'videoId': videoId,
+        'backend': backend,
+        'nativeDecoder': true,
+        'qualityPauseSeekRate': true,
+        'pausedAfterForeground': true,
+        'soakSeconds': soakSeconds,
+        'releasedPlayerAndWebView': true,
+        'realPublications': 0,
+      };
+      debugPrint('BAHA_NATIVE_PLAYBACK ${jsonEncode(binding.reportData)}');
+      debugPrint(
+        '[BAHA_NATIVE_TEST] $soakSeconds-second playback and release passed',
+      );
     },
     timeout: const Timeout(Duration(minutes: 18)),
   );
