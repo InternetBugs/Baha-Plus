@@ -143,7 +143,8 @@ flutter build ios --no-codesign
 账号资料、收藏、观看记录、留言／回复、推嘘与通知统一由 Dart 的 `NativeAccountApi`
 和 `OfficialHttpClient` 处理。账号 Cookie 经平台原生 CookieManager 读取，仅保留在
 当前请求的内存中；无需先挂载隐藏 WebView。官方部分响应仍为 HTML，使用 Dart 解析，
-不会执行页面脚本。登录与登出继续使用官方页面，登录桥接只报告身份。收藏请求不会
+不会执行页面脚本。登录继续使用官方页面，登录桥接只报告身份；登出由原生 HTTP
+读取官方确认令牌后 POST 提交，同时清理本机账号缓存与 Cookie。收藏请求不会
 替换详情路由、滚动位置或播放票据，登录失效后可在原详情上方完成登录并继续目标操作。
 
 播放菜单在留言板上方显示官网平均分、评分人数和五档星级分布；选集详情不加载留言板，评分卡位于作品资料之后的页面最底部。评分统计由原生 HTTP 匿名读取官方接口。内嵌留言区保留官方建议顺序，最多显示前十条；下方的液态玻璃“查看完整留言板”按钮打开二级页面，后续分页在二级页面加载。每集使用独立的官方留言板 ID，切集时分别保留本机草稿与回复对象。
@@ -159,7 +160,7 @@ AVPlayer 解码、Flutter 绘制弹幕；播放与留言页不挂载隐藏 WebVi
 
 旧 WebView 播放、原生接管、JavaScript 时钟同步及 iOS 回环 HLS 缓存已删除。
 Android／iOS 统一使用 ExoPlayer／AVPlayer；旧播放开关不再提供回退路径。
-`OfficialBrowser` 只处理登录／登出、手动官网浏览及没有影片 ID 的详情。
+`OfficialBrowser` 只处理登录、手动官网浏览及没有影片 ID 的详情。
 历史迁移与设备验收记录保留在 [Android 迁移记录](android-native-player.md)和
 [iOS 迁移记录](ios-native-player.md)，其中的旧构建命令不再适用。
 

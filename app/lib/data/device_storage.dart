@@ -5,6 +5,7 @@ import '../core/models.dart';
 abstract interface class DeviceStorage {
   Future<String?> read(String key);
   Future<void> write(String key, String value);
+  Future<void> clearAccountData();
 }
 
 class PreferencesStorage implements DeviceStorage {
@@ -14,6 +15,18 @@ class PreferencesStorage implements DeviceStorage {
   @override
   Future<void> write(String key, String value) =>
       _preferences.setString(key, value);
+
+  @override
+  Future<void> clearAccountData() async {
+    final keys = (await _preferences.getKeys())
+        .where(
+          (key) =>
+              key.startsWith('baha.account.') ||
+              key.startsWith('baha.notifications.read.'),
+        )
+        .toSet();
+    if (keys.isNotEmpty) await _preferences.clear(allowList: keys);
+  }
 }
 
 class CatalogCache {

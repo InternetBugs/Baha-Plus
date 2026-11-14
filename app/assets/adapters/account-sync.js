@@ -1,6 +1,6 @@
 (function() {
   if (location.origin !== 'https://ani.gamer.com.tw') return;
-  // Only login/logout identity crosses this bridge. Account collections and
+  // Only login identity crosses this bridge. Account collections and
   // history are fetched independently by the native HTTP client.
   window.__bahaAccountSync?.dispose();
   const ticket = window.__bahaDocumentNonce, source = location.href;

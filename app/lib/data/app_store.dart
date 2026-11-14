@@ -250,7 +250,7 @@ class AppStore extends ChangeNotifier {
   int? accountPortraitVersion;
   bool _profileRefreshing = false;
   bool accountSynced = false, accountNeedsRefresh = false;
-  bool get loggingOut => _logoutResult != null;
+  bool get loggingOut => _loggingOut;
   bool get hasAccount => accountProfile != null || accountSynced;
   bool searching = false, searchFailed = false;
   int tab = 0;
@@ -295,8 +295,7 @@ class AppStore extends ChangeNotifier {
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
   String? _accountSyncDocument;
-  Completer<bool>? _logoutResult;
-  bool _logoutVerifying = false;
+  bool _loggingOut = false;
   Future<void>? _accountCacheWrite;
   int _preferredQuality = 0;
   Future<void> _qualityPreferenceWrite = Future<void>.value();
@@ -534,9 +533,11 @@ class AppStore extends ChangeNotifier {
       item == null ? notifications.map((e) => e.id) : [item.id],
     );
     _emit();
-    await _savePreference(
-      'baha.notifications.read.$owner',
-      jsonEncode(_readNotifications.toList().reversed.take(500).toList()),
+    final read = jsonEncode(
+      _readNotifications.toList().reversed.take(500).toList(),
+    );
+    await _writeAccountData(
+      () => storage.write('baha.notifications.read.$owner', read),
     );
   }
 
@@ -986,58 +987,51 @@ class AppStore extends ChangeNotifier {
 
   Future<bool> logoutAccount() async {
     if (loggingOut || _disposed) return false;
+    _loggingOut = true;
     _favoriteAfterLogin = null;
     _invalidateAccountRequests();
-    final result = Completer<bool>();
-    _logoutResult = result;
-    _logoutVerifying = false;
-    browserTitle = t('logout');
-    try {
-      await _load(OfficialSite.logout, BrowserIntent.logout, visible: false);
-      return await result.future;
-    } catch (_) {
-      if (_logoutResult == result) _finishLogout(false);
-      return false;
-    }
-  }
-
-  void _finishLogout(bool success) {
-    final result = _logoutResult;
-    if (result == null) return;
-    _logoutResult = null;
-    _logoutVerifying = false;
-    _accountSyncDocument = null;
-    _begin(BrowserIntent.idle);
-    busy = false;
-    result.complete(success);
-    _emit();
-  }
-
-  Future<void> _receiveLogout(Json body) async {
-    final result = _logoutResult;
-    if (result == null) return;
-    if (!_logoutVerifying || _accountSyncDocument != operation.id) return;
-    if (body['type'] != 'account-guest') {
-      if (body['type'] == 'verification-required') {
-        verificationRequired = true;
-      }
-      _finishLogout(false);
-      return;
-    }
     _resetNotifications();
     accountProfile = null;
+    accountPortraitVersion = null;
     favorites = [];
     history = [];
     accountSynced = false;
     accountNeedsRefresh = false;
     browserVisible = false;
     browserCanGoBack = false;
+    browserUri = null;
+    browserError = false;
+    verificationRequired = false;
+    busy = false;
+    notice = null;
     _pendingUri = null;
-    await _saveAccountSnapshot(null);
-    if (_logoutResult == result) _finishLogout(true);
+    _accountSyncDocument = null;
+    playerFullscreen = false;
+    playerLocked = false;
+    _lastGoodPlayback = null;
+    final playbackSession = nativeHttpPlayback;
+    nativeHttpPlayback = null;
+    playbackSession?.dispose();
+    playback.value = const PlaybackState();
+    _begin(BrowserIntent.idle);
+    _emit();
+    try {
+      await Future.wait([
+        accountApi.logout(),
+        _writeAccountData(storage.clearAccountData, strict: true),
+        if (playbackSession != null) playbackSession.released,
+      ]);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _loggingOut = false;
+      _emit();
+    }
   }
 
   Future<void> toggleFavorite(Anime anime) async {
+    if (loggingOut || _disposed) return;
     final desired = !isFavorite(anime);
     if (accountProfile == null) {
       _favoriteAfterLogin = (anime, desired);
@@ -1112,6 +1106,7 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<void> play(Anime anime, {Episode? episode}) async {
+    if (loggingOut || _disposed) return;
     _lastGoodPlayback = null;
     if (playingAnime?.id != anime.id) {
       playerDetail = selectedAnime?.id == anime.id ? detail : null;
@@ -1405,8 +1400,7 @@ class AppStore extends ChangeNotifier {
 
   void navigationStarted() {
     if (usesNativeHttpPlayback) return;
-    if ((operation.intent == BrowserIntent.account ||
-            operation.intent == BrowserIntent.logout) &&
+    if (operation.intent == BrowserIntent.account &&
         _accountSyncDocument == operation.id) {
       _begin(operation.intent);
       _accountSyncDocument = null;
@@ -1419,31 +1413,6 @@ class AppStore extends ChangeNotifier {
   Future<void> navigationFinished(Uri? uri) async {
     if (usesNativeHttpPlayback) return;
     browserUri = uri;
-    if (operation.intent == BrowserIntent.logout) {
-      try {
-        if (uri == null || !OfficialSite.allowedNavigation(uri)) {
-          _finishLogout(false);
-        } else if (!_logoutVerifying) {
-          // The official endpoint can redirect to another Bahamut page.
-          // Verify the resulting session in a fresh Anime account document.
-          _logoutVerifying = true;
-          await _load(
-            OfficialSite.home.resolve('mygather.php'),
-            BrowserIntent.logout,
-            visible: false,
-          );
-        } else if (OfficialSite.trustedOrigin(uri) &&
-            uri.path == '/mygather.php') {
-          _accountSyncDocument = operation.id;
-          await _runScript('account-sync', {'__BAHA_WATCH_ACCOUNT__': 'false'});
-        } else {
-          _finishLogout(false);
-        }
-      } catch (_) {
-        _finishLogout(false);
-      }
-      return;
-    }
     if (uri == null || !OfficialSite.trustedOrigin(uri)) {
       busy = false;
       _emit();
@@ -1457,8 +1426,6 @@ class AppStore extends ChangeNotifier {
       case BrowserIntent.account:
         _accountSyncDocument = operation.id;
         await _runScript('account-sync', {'__BAHA_WATCH_ACCOUNT__': 'true'});
-      case BrowserIntent.logout:
-        break;
       case BrowserIntent.idle:
       case BrowserIntent.browse:
         busy = false;
@@ -1471,10 +1438,6 @@ class AppStore extends ChangeNotifier {
   void navigationFailed() {
     if (usesNativeHttpPlayback) return;
     diagnostics.record('browser.failed', {'operation': operation.intent.name});
-    if (operation.intent == BrowserIntent.logout) {
-      _finishLogout(false);
-      return;
-    }
     final failed = operation;
     _deadline?.cancel();
     operation = BrowserRequest(
@@ -1506,10 +1469,6 @@ class AppStore extends ChangeNotifier {
     );
     if (body == null) return;
     diagnostics.record('browser.result', {'type': body['type']});
-    if (completed.intent == BrowserIntent.logout) {
-      await _receiveLogout(body);
-      return;
-    }
     if (body['type'] == 'account-authenticated') {
       _invalidateAccountRequests();
       final profile = AccountProfile.fromJson(body['profile'] as Json);
@@ -1568,18 +1527,21 @@ class AppStore extends ChangeNotifier {
     _emit();
   }
 
-  Future<void> _saveAccountSnapshot(Json? snapshot) {
+  Future<void> _saveAccountSnapshot(Json? snapshot) =>
+      _writeAccountData(() => AccountCache(storage).save(snapshot));
+
+  Future<void> _writeAccountData(
+    Future<void> Function() action, {
+    bool strict = false,
+  }) {
     final previous = _accountCacheWrite;
     final write = () async {
       if (previous != null) await previous;
-      try {
-        await AccountCache(storage).save(snapshot);
-      } catch (_) {
-        // A cache failure must not interrupt the official session.
-      }
+      await action();
     }();
-    _accountCacheWrite = write;
-    return write;
+    // Serialize clearing after all display-data writes, including read markers.
+    _accountCacheWrite = write.catchError((Object _) {});
+    return strict ? write : _accountCacheWrite!;
   }
 
   Future<void> _load(
@@ -1615,7 +1577,6 @@ class AppStore extends ChangeNotifier {
 
   void _begin(BrowserIntent intent) {
     diagnostics.record('browser.operation', {'intent': intent.name});
-    if (loggingOut && intent != BrowserIntent.logout) _finishLogout(false);
     _deadline?.cancel();
     operation = BrowserRequest(
       intent: intent,
@@ -1726,7 +1687,6 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
     danmakuSender.dispose();
     accountApi.dispose();
     metadataApi.dispose();
-    _finishLogout(false);
     _deadline?.cancel();
     _searchDebounce?.cancel();
     _searchGeneration++;

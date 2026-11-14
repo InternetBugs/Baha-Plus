@@ -16,6 +16,53 @@ class NativeAccountApi {
     : transport = transport ?? OfficialHttpClient();
 
   final OfficialHttpClient transport;
+
+  /// Notify the official service using the existing session, then remove the
+  /// device session even when the service is unreachable.
+  Future<void> logout() async {
+    try {
+      await transport.session((session) async {
+        final page = parse(await session.get(OfficialSite.logout));
+        // GET only renders the official confirmation page. The button posts
+        // this per-session token; parse it as data without executing scripts.
+        String? token;
+        for (final form in page.querySelectorAll('form')) {
+          if (OfficialSite.logout.resolve(form.attributes['action'] ?? '') ==
+                  OfficialSite.logout &&
+              form.attributes['method']?.toUpperCase() == 'POST') {
+            token = form
+                .querySelector('input[name="token"]')
+                ?.attributes['value'];
+            if (token != null) break;
+          }
+        }
+        if (token == null) {
+          for (final script in page.querySelectorAll('script:not([src])')) {
+            if (!_logoutFunction.hasMatch(script.text)) continue;
+            token = _logoutToken.firstMatch(script.text)?[1];
+            if (token != null) break;
+          }
+        }
+        if (token == null) {
+          if (session.cookies.header(OfficialSite.logout).isEmpty) return;
+          throw const CommunityException('format');
+        }
+        if (!_validLogoutToken.hasMatch(token)) {
+          throw const CommunityException('format');
+        }
+        await session.post(OfficialSite.logout, {'token': token});
+      });
+    } finally {
+      await transport.clearCookies();
+    }
+  }
+
+  static final _logoutFunction = RegExp(r'function\s+logout\s*\(\s*\)\s*\{');
+  static final _logoutToken = RegExp(
+    r'''\.name\s*=\s*['"]token['"]\s*;[\s\S]{0,256}?\.value\s*=\s*['"]([A-Za-z0-9_-]{16,256})['"]''',
+  );
+  static final _validLogoutToken = RegExp(r'^[A-Za-z0-9_-]{16,256}$');
+
   static final _id = RegExp(r'^[1-9][0-9]{0,19}$');
   static final _videoId = RegExp(r'^[1-9][0-9]{0,9}$');
   static final _gather = RegExp(r'toggleGather\(\s*(\d+)\s*,\s*(\d+)\s*,');

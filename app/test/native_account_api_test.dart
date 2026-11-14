@@ -23,6 +23,24 @@ const accountAnime = Anime(
   latestVideoId: '20',
 );
 const nativeProfile = {'id': 'reader', 'displayName': '讀者'};
+const logoutToken = 'test-logout-confirmation-token';
+const logoutConfirmation =
+    '''
+<script>
+function logout() {
+  var f = document.createElement('form');
+  f.method = 'POST';
+  f.action = 'logout.php';
+  var input = document.createElement('input');
+  input.name = 'token';
+  input.type = 'hidden';
+  input.value = '$logoutToken';
+  f.appendChild(input);
+  document.body.append(f);
+  f.submit();
+}
+</script>
+''';
 Matcher nativeError(String code) =>
     isA<CommunityException>().having((e) => e.code, 'code', code);
 
@@ -30,6 +48,8 @@ class AccountFixture {
   String owner = 'reader', cookie = 'session-a';
   bool saved = false, paginate = false, live = true, scriptedMenu = true;
   int cookieReads = 0;
+  int cookieClears = 0;
+  Duration timeout = const Duration(seconds: 12);
   final requests = <http.Request>[];
   Future<http.Response> Function(http.Request)? handler;
 
@@ -141,6 +161,11 @@ class AccountFixture {
   late final api = NativeAccountApi(
     transport: OfficialHttpClient(
       cookieLoader: cookies,
+      cookieClearer: () async {
+        cookieClears++;
+        cookie = '';
+      },
+      timeout: timeout,
       client: MockClient((request) async {
         requests.add(request);
         final result = handler == null
@@ -164,6 +189,128 @@ class AccountFixture {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'logout reads the confirmation token and posts it before clearing device cookies',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        expect(request.url, OfficialSite.logout);
+        expect(request.headers['cookie'], 'session=session-a');
+        expect(request.headers['origin'], OfficialSite.logout.origin);
+        expect(request.headers['referer'], OfficialSite.logout.toString());
+        expect(fixture.cookieClears, 0);
+        expect(request.followRedirects, isFalse);
+        if (request.method == 'GET') {
+          return http.Response(logoutConfirmation, 200);
+        }
+        expect(request.method, 'POST');
+        expect(request.bodyFields, {'token': logoutToken});
+        return http.Response(
+          '',
+          302,
+          headers: {'location': 'https://www.gamer.com.tw/'},
+        );
+      };
+      await fixture.api.logout();
+      expect(fixture.requests, hasLength(2));
+      expect(fixture.cookieClears, 1);
+      expect(fixture.cookie, isEmpty);
+    },
+  );
+
+  for (final status in [200, 500]) {
+    test('logout clears device cookies after HTTP $status', () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async => http.Response(
+        request.method == 'GET' ? logoutConfirmation : '',
+        request.method == 'GET' ? 200 : status,
+      );
+      if (status == 200) {
+        await fixture.api.logout();
+      } else {
+        await expectLater(
+          fixture.api.logout(),
+          throwsA(nativeError('unavailable')),
+        );
+      }
+      expect(fixture.cookieClears, 1);
+      expect(fixture.cookie, isEmpty);
+    });
+  }
+
+  for (final method in ['GET', 'POST']) {
+    test('logout clears device cookies when $method times out', () async {
+      final fixture = AccountFixture()
+        ..timeout = const Duration(milliseconds: 20);
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        if (request.method != method) {
+          return http.Response(logoutConfirmation, 200);
+        }
+        return Completer<http.Response>().future;
+      };
+      await expectLater(fixture.api.logout(), throwsA(nativeError('network')));
+      expect(fixture.cookieClears, 1);
+      expect(fixture.cookie, isEmpty);
+    });
+  }
+
+  test(
+    'logout refuses an external redirect and still clears device cookies',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (_) async => http.Response(
+        '',
+        302,
+        headers: {'location': 'https://attacker.test/'},
+      );
+      await expectLater(
+        fixture.api.logout(),
+        throwsA(nativeError('unavailable')),
+      );
+      expect(fixture.requests, hasLength(1));
+      expect(fixture.cookieClears, 1);
+    },
+  );
+
+  test('logout never posts without a valid confirmation token', () async {
+    final fixture = AccountFixture();
+    addTearDown(fixture.api.dispose);
+    fixture.handler = (_) async =>
+        http.Response('<h1>Confirm logout</h1>', 200);
+    await expectLater(fixture.api.logout(), throwsA(nativeError('format')));
+    expect(fixture.posts, isEmpty);
+    expect(fixture.cookieClears, 1);
+  });
+
+  test(
+    'logout supports an official confirmation form and login redirect',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        if (request.method == 'GET') {
+          return http.Response(
+            '<form method="post" action="logout.php">'
+            '<input name="token" value="$logoutToken"></form>',
+            200,
+          );
+        }
+        expect(request.bodyFields, {'token': logoutToken});
+        return http.Response(
+          '',
+          302,
+          headers: {'location': 'https://user.gamer.com.tw/login.php'},
+        );
+      };
+      await fixture.api.logout();
+      expect(fixture.cookieClears, 1);
+    },
+  );
 
   test(
     'profile refresh reads current public data without sending cookies',

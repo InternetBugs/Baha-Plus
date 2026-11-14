@@ -12,9 +12,17 @@ class FakeAccountApi extends NativeAccountApi {
   Future<Json?> Function()? accountLoader;
   Future<Json?> Function()? profileLoader;
   Future<void> Function(Anime, bool)? favoriteHandler;
+  Future<void> Function()? logoutHandler;
+  int logoutCalls = 0;
   int accountReads = 0;
   int profileReads = 0;
   final favoriteRequests = <(String, bool)>[];
+
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+    await logoutHandler?.call();
+  }
 
   @override
   Future<Json?> fetchProfile({void Function()? checkCurrent}) async {

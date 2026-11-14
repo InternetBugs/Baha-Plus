@@ -10,7 +10,7 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import '../data/windows_official_bridge.dart';
 
-/// Hosts official login/logout, browsing and details without a video ID.
+/// Hosts official login, browsing and details without a video ID.
 /// Playback and account data use native HTTP independently of this view.
 class OfficialBrowser extends StatefulWidget {
   const OfficialBrowser({required this.store, super.key});

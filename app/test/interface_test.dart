@@ -2,7 +2,7 @@ import 'fake_playback.dart';
 import 'fake_metadata.dart';
 import 'fake_account.dart';
 import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
-import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -11,6 +11,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/core/models.dart';
+import 'package:baha_plus/core/community.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/app_root.dart';
@@ -618,12 +619,6 @@ void main() {
         'history': [],
       };
       await store.syncAccount();
-      Future<void> send(Map<String, dynamic> body) => store.receive(
-        jsonEncode({...body, 'requestId': store.operation.id}),
-        origin: OfficialSite.home,
-        source: OfficialSite.home.resolve('mygather.php'),
-        isMainFrame: true,
-      );
       await frames(tester);
       final portrait = tester.widget<AccountPortrait>(
         find.descendant(
@@ -663,17 +658,17 @@ void main() {
       expect(store.operation.id, request);
       expect(portal.visited.length, navigations);
       expect(store.accountProfile?.id, 'fixture-user');
+      final pendingLogout = Completer<void>();
+      final api = store.accountApi as FakeAccountApi;
+      api.logoutHandler = () => pendingLogout.future;
       await tester.tap(logout);
       await frames(tester);
-      expect(portal.visited.last, OfficialSite.logout);
+      expect(api.logoutCalls, 1);
+      expect(portal.visited.length, navigations);
       expect(store.loggingOut, isTrue);
-      expect(find.text('測試暱稱'), findsOneWidget);
-      await store.navigationFinished(OfficialSite.logout);
-      await store.navigationFinished(OfficialSite.home.resolve('mygather.php'));
-      final confirmed = send({'type': 'account-guest'});
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      expect(find.text('測試暱稱'), findsNothing);
+      pendingLogout.complete();
       await frames(tester);
-      await confirmed;
       expect(find.text('測試暱稱'), findsNothing);
       expect(find.text('@fixture-user'), findsNothing);
       expect(find.text(store.t('localProfile')), findsOneWidget);
@@ -690,49 +685,38 @@ void main() {
     },
   );
 
-  testWidgets('failed logout keeps the account and offers another attempt', (
-    tester,
-  ) async {
-    final store = await launch(tester);
-    final portal = FakePortal();
-    await store.attach(portal);
-    portal.loadError = StateError('unavailable');
-    store.accountProfile = const AccountProfile(
-      id: 'fixture-user',
-      displayName: '測試暱稱',
-    );
-    await tester.tap(find.byType(AccountAvatar).hitTestable());
-    await frames(tester);
-    expect(find.text(store.t('connectAccount')), findsNothing);
-    await tester.tap(find.text(store.t('logout')));
-    await frames(tester);
-    expect(find.text(store.t('logoutFailed')), findsOneWidget);
-    expect(store.accountProfile?.id, 'fixture-user');
-    await tester.tap(
-      find.widgetWithText(CupertinoDialogAction, store.t('close')),
-    );
-    await frames(tester);
-    portal.loadError = null;
-    await tester.tap(find.text(store.t('logout')));
-    await frames(tester);
-    expect(portal.visited.last, OfficialSite.logout);
-    await store.navigationFinished(OfficialSite.logout);
-    final accountPage = OfficialSite.home.resolve('mygather.php');
-    await store.navigationFinished(accountPage);
-    final confirmed = store.receive(
-      jsonEncode({'type': 'account-guest', 'requestId': store.operation.id}),
-      origin: OfficialSite.home,
-      source: accountPage,
-      isMainFrame: true,
-    );
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-    await frames(tester);
-    await confirmed;
-    expect(find.text(store.t('connectAccount')), findsOneWidget);
-    expect(find.text(store.t('logout')), findsNothing);
-    expect(store.hasAccount, isFalse);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'failed logout reports the error after clearing local account data',
+    (tester) async {
+      final store = await launch(tester);
+      final portal = FakePortal();
+      await store.attach(portal);
+      (store.accountApi as FakeAccountApi).logoutHandler = () async {
+        throw const CommunityException('network');
+      };
+      store.accountProfile = const AccountProfile(
+        id: 'fixture-user',
+        displayName: '測試暱稱',
+      );
+      await tester.tap(find.byType(AccountAvatar).hitTestable());
+      await frames(tester);
+      expect(find.text(store.t('connectAccount')), findsNothing);
+      await tester.tap(find.text(store.t('logout')));
+      await frames(tester);
+      expect(find.text(store.t('logoutFailed')), findsOneWidget);
+      expect(store.accountProfile, isNull);
+      expect(store.hasAccount, isFalse);
+      await tester.tap(
+        find.widgetWithText(CupertinoDialogAction, store.t('close')),
+      );
+      await frames(tester);
+      expect(find.text(store.t('connectAccount')), findsOneWidget);
+      expect(find.text(store.t('logout')), findsNothing);
+      expect(store.hasAccount, isFalse);
+      expect(portal.visited, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'the entire playback page is native and controls follow the current official episode',

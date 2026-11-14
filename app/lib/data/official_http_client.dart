@@ -16,20 +16,24 @@ class OfficialHttpClient {
   OfficialHttpClient({
     http.Client? client,
     Future<NativeHttpCookieJar> Function()? cookieLoader,
+    Future<void> Function()? cookieClearer,
     this.timeout = const Duration(seconds: 12),
   }) : _client = client ?? http.Client(),
-       _cookieLoader = cookieLoader ?? loadCookies;
+       _cookieLoader = cookieLoader ?? loadCookies,
+       _cookieClearer = cookieClearer ?? clearDeviceCookies;
 
   static const hosts = {
     'ani.gamer.com.tw',
     'api.gamer.com.tw',
     'wall.gamer.com.tw',
+    'user.gamer.com.tw',
   };
   static final _cookieURLs = [
     Uri.https('ani.gamer.com.tw', '/mygather.php'),
     Uri.https('ani.gamer.com.tw', '/ajax/getCSRFToken.php'),
     Uri.https('api.gamer.com.tw', '/anime/v3/history.php'),
     Uri.https('wall.gamer.com.tw', '/app/v1/comment_new.php'),
+    OfficialSite.logout,
   ];
   static const _getPaths = {
     'ani.gamer.com.tw': {
@@ -45,9 +49,11 @@ class OfficialHttpClient {
       '/app/v2/comment_detail.php',
       '/app/v1/reply_detail.php',
     },
+    'user.gamer.com.tw': {'/logout.php'},
   };
   static const _postPaths = {
     'ani.gamer.com.tw': {'/ajax/want2play.php', '/ajax/delgather.php'},
+    'user.gamer.com.tw': {'/logout.php'},
     'wall.gamer.com.tw': {
       '/app/v1/comment_new.php',
       '/app/v1/comment_like.php',
@@ -56,6 +62,7 @@ class OfficialHttpClient {
   };
   final http.Client _client;
   final Future<NativeHttpCookieJar> Function() _cookieLoader;
+  final Future<void> Function() _cookieClearer;
   final Duration timeout;
   final _requests = <Completer<void>>{};
   int _generation = 0;
@@ -63,6 +70,24 @@ class OfficialHttpClient {
 
   static Future<NativeHttpCookieJar> loadPlaybackCookies() =>
       loadCookies(urls: NativeHttpApi.cookieURLs);
+
+  static Future<void> clearDeviceCookies() async {
+    // Android also returns false when the store already contains no cookies.
+    await CookieManager.instance().deleteAllCookies();
+    final remaining = await loadCookies();
+    try {
+      if (_cookieURLs.any((uri) => remaining.header(uri).isNotEmpty)) {
+        throw const CommunityException('unavailable');
+      }
+    } finally {
+      remaining.clear();
+    }
+  }
+
+  Future<void> clearCookies() async {
+    invalidate();
+    await _cookieClearer().timeout(timeout);
+  }
 
   static Future<NativeHttpCookieJar> loadCookies({List<Uri>? urls}) async {
     final jar = NativeHttpCookieJar(allowedHosts: hosts);
@@ -164,8 +189,12 @@ class OfficialHttpClient {
         )..followRedirects = false;
         request.headers.addAll({
           'User-Agent': NativeHttpApi.userAgent,
-          'Origin': 'https://ani.gamer.com.tw',
-          'Referer': 'https://ani.gamer.com.tw/',
+          'Origin': uri == OfficialSite.logout
+              ? OfficialSite.logout.origin
+              : 'https://ani.gamer.com.tw',
+          'Referer': uri == OfficialSite.logout
+              ? OfficialSite.logout.toString()
+              : 'https://ani.gamer.com.tw/',
           if (session.cookies.header(uri).isNotEmpty)
             'Cookie': session.cookies.header(uri),
           ...headers,
@@ -183,13 +212,25 @@ class OfficialHttpClient {
           final target = location == null
               ? null
               : uri.resolveUri(Uri.parse(location));
-          if (target != null &&
+          final logout = uri == OfficialSite.logout;
+          if (!logout &&
+              target != null &&
               target.scheme == 'https' &&
               target.host == 'user.gamer.com.tw' &&
               target.port == 443 &&
               target.userInfo.isEmpty &&
               target.path == '/login.php') {
             throw const CommunityException('login');
+          }
+          // Logout normally redirects to a public Bahamut page. Acknowledge
+          // that response without forwarding credentials or loading a page.
+          if (logout &&
+              const [301, 302, 303, 307, 308].contains(response.statusCode) &&
+              target != null &&
+              OfficialSite.allowedNavigation(target) &&
+              target.port == 443 &&
+              target.userInfo.isEmpty) {
+            return '';
           }
           throw const CommunityException('unavailable');
         }

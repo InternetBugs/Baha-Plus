@@ -120,7 +120,7 @@
   "status": "資料狀態",
   "connectAccount": "連結巴哈姆特帳號",
   "logout": "登出",
-  "logoutFailed": "暫時無法登出，請重試。",
+  "logoutFailed": "登出未完整完成，請檢查網路後重新登入並重試。",
   "syncAccount": "同步帳號資料",
   "accountConnected": "帳號資料已同步",
   "accountHint": "在官方頁面登入後，追番和觀看紀錄會自動更新。",

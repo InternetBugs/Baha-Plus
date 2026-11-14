@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'models.dart';
 
-enum BrowserIntent { idle, detail, account, logout, play, browse }
+enum BrowserIntent { idle, detail, account, play, browse }
 
 class BrowserRequest {
   BrowserRequest({required this.intent, this.animeId, this.videoId, String? id})
@@ -38,7 +38,6 @@ class BrowserRequest {
         return const [
               BrowserIntent.detail,
               BrowserIntent.account,
-              BrowserIntent.logout,
             ].contains(intent)
             ? body
             : null;
@@ -56,11 +55,6 @@ class BrowserRequest {
             return null;
           }
         case BrowserIntent.account:
-        case BrowserIntent.logout:
-          if (intent == BrowserIntent.logout &&
-              source.path != '/mygather.php') {
-            return null;
-          }
           if (type == 'account-authenticated') {
             AccountProfile.fromJson(body['profile'] as Json);
           } else if (type != 'account-guest' && type != 'account-error') {

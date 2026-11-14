@@ -120,7 +120,7 @@
   "status": "数据状态",
   "connectAccount": "连接巴哈姆特账号",
   "logout": "退出登录",
-  "logoutFailed": "暂时无法退出登录，请重试。",
+  "logoutFailed": "退出登录未完整完成，请检查网络后重新登录并重试。",
   "syncAccount": "同步账号数据",
   "accountConnected": "账号数据已同步",
   "accountHint": "在官方页面登录后，追番和观看记录会自动更新。",
