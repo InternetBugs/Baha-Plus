@@ -10,9 +10,21 @@ class FakeAccountApi extends NativeAccountApi {
   Completer<Json>? communityPending;
   Future<Json> Function(String, Json)? communityHandler;
   Future<Json?> Function()? accountLoader;
+  Future<Json?> Function()? profileLoader;
   Future<void> Function(Anime, bool)? favoriteHandler;
   int accountReads = 0;
+  int profileReads = 0;
   final favoriteRequests = <(String, bool)>[];
+
+  @override
+  Future<Json?> fetchProfile({void Function()? checkCurrent}) async {
+    profileReads++;
+    checkCurrent?.call();
+    if (profileLoader == null) throw const CommunityException('unavailable');
+    final result = await profileLoader!();
+    checkCurrent?.call();
+    return result;
+  }
 
   @override
   Future<Json?> fetchAccount({

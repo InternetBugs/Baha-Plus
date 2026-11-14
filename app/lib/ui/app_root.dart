@@ -68,7 +68,13 @@ class _AppRootState extends State<AppRoot>
     }
     _scheduleUpdateCheck();
     _scheduleCatalogRefresh();
+    _scheduleProfileRefresh();
   }
+
+  void _scheduleProfileRefresh() =>
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(store.refreshAccountProfile());
+      });
 
   void _scheduleCatalogRefresh() =>
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -282,6 +288,7 @@ class _AppRootState extends State<AppRoot>
       _tabAnimation.value = 1;
       _scheduleUpdateCheck();
       _scheduleCatalogRefresh();
+      _scheduleProfileRefresh();
     }
     // The persistent entry belongs to the Navigator's overlay, which is
     // outside this subtree while a theme or language change rebuilds us.

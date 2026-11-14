@@ -77,7 +77,10 @@ class AccountPage extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    AccountPortrait(profile: store.accountProfile),
+                    AccountPortrait(
+                      profile: store.accountProfile,
+                      cacheVersion: store.accountPortraitVersion,
+                    ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(

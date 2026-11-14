@@ -247,6 +247,8 @@ class AppStore extends ChangeNotifier {
   List<Anime> favorites = [], searchResults = [];
   List<WatchEntry> history = [];
   AccountProfile? accountProfile;
+  int? accountPortraitVersion;
+  bool _profileRefreshing = false;
   bool accountSynced = false, accountNeedsRefresh = false;
   bool get loggingOut => _logoutResult != null;
   bool get hasAccount => accountProfile != null || accountSynced;
@@ -604,9 +606,11 @@ class AppStore extends ChangeNotifier {
     if (_applicationActive == active) return;
     _applicationActive = active;
     await nativeHttpPlayback?.setApplicationActive(active);
+    final profileRefresh = active ? refreshAccountProfile() : null;
     if (active && !browserVisible && !busy && _portal != null) {
       await syncAccount();
     }
+    await profileRefresh;
     _emit();
   }
 
@@ -1247,6 +1251,54 @@ class AppStore extends ChangeNotifier {
 
   Future<void> goBack() async => _portal?.goBack();
 
+  Future<void> refreshAccountProfile() async {
+    if (_disposed ||
+        !_applicationActive ||
+        loggingOut ||
+        _profileRefreshing ||
+        operation.intent == BrowserIntent.account) {
+      return;
+    }
+    _profileRefreshing = true;
+    final generation = _accountGeneration;
+    try {
+      final raw = await accountApi.fetchProfile(
+        checkCurrent: () {
+          if (_disposed || loggingOut || generation != _accountGeneration) {
+            throw const CommunityException('stale');
+          }
+        },
+      );
+      if (_disposed || loggingOut || generation != _accountGeneration) return;
+      _applyAccountProfile(
+        raw == null ? null : AccountProfile.fromJson(raw),
+        fresh: true,
+      );
+      if (raw == null) {
+        favorites = [];
+        history = [];
+        accountSynced = false;
+        accountNeedsRefresh = false;
+      }
+      // Avatar URLs can stay the same after their image content changes.
+      accountPortraitVersion = DateTime.now().microsecondsSinceEpoch;
+      _emit();
+      await _saveAccountSnapshot(
+        accountProfile == null
+            ? null
+            : {
+                'profile': accountProfile!.toJson(),
+                'favorites': [for (final anime in favorites) anime.toJson()],
+                'history': [for (final entry in history) entry.toJson()],
+              },
+      );
+    } catch (_) {
+      // Automatic display-data refresh stays silent and retains offline data.
+    } finally {
+      _profileRefreshing = false;
+    }
+  }
+
   Future<void> syncAccount({String? expectedOwner}) async {
     if (_disposed || loggingOut || accountLoading) return;
     final generation = _accountGeneration;
@@ -1318,15 +1370,22 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  void _applyAccountProfile(AccountProfile? profile) {
+  void _applyAccountProfile(AccountProfile? profile, {bool fresh = false}) {
     final previous = accountProfile;
     if (previous?.id.toLowerCase() != profile?.id.toLowerCase()) {
+      accountPortraitVersion = null;
       _resetNotifications();
       favorites = [];
       history = [];
       accountSynced = false;
       unawaited(_saveAccountSnapshot(null));
-    } else if (previous != null && profile != null) {
+    } else if (!fresh &&
+        accountPortraitVersion != null &&
+        previous != null &&
+        profile != null) {
+      // The Anime menu can still contain stale login-cookie display data.
+      profile = previous;
+    } else if (!fresh && previous != null && profile != null) {
       profile = AccountProfile(
         id: profile.id,
         displayName: profile.displayName == profile.id

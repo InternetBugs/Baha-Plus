@@ -68,7 +68,11 @@ class AccountAvatar extends StatelessWidget {
           semanticLabel: store.t('me'),
           onPressed: onTap,
           size: 44,
-          icon: AccountPortrait(profile: store.accountProfile, size: 32),
+          icon: AccountPortrait(
+            profile: store.accountProfile,
+            cacheVersion: store.accountPortraitVersion,
+            size: 32,
+          ),
         ),
         if (store.verificationRequired)
           const Positioned(
@@ -88,8 +92,14 @@ class AccountAvatar extends StatelessWidget {
 }
 
 class AccountPortrait extends StatelessWidget {
-  const AccountPortrait({required this.profile, this.size = 52, super.key});
+  const AccountPortrait({
+    required this.profile,
+    this.cacheVersion,
+    this.size = 52,
+    super.key,
+  });
   final AccountProfile? profile;
+  final int? cacheVersion;
   final double size;
 
   @override
@@ -101,9 +111,20 @@ class AccountPortrait extends StatelessWidget {
     );
     final avatar = profile?.avatar;
     if (avatar == null) return fallback;
+    final uri = Uri.parse(avatar);
+    final url = cacheVersion == null
+        ? avatar
+        : uri
+              .replace(
+                queryParameters: {
+                  ...uri.queryParameters,
+                  '_baha_refresh': '$cacheVersion',
+                },
+              )
+              .toString();
     return ClipOval(
       child: Image.network(
-        avatar,
+        url,
         key: ValueKey('account-portrait-${profile!.id}'),
         width: size,
         height: size,

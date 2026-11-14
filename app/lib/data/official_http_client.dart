@@ -39,6 +39,8 @@ class OfficialHttpClient {
       '/ajax/getCSRFToken.php',
     },
     'api.gamer.com.tw': {'/anime/v3/history.php', '/ajax/common/topBar.php'},
+    // Public profile reads carry no cookies: this host is excluded from hosts.
+    'home.gamer.com.tw': {'/profile/index.php'},
     'wall.gamer.com.tw': {
       '/app/v2/comment_detail.php',
       '/app/v1/reply_detail.php',

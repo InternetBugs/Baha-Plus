@@ -166,6 +166,75 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
+    'profile refresh reads current public data without sending cookies',
+    () async {
+      final fixture = AccountFixture()..scriptedMenu = false;
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        if (request.url.host != 'home.gamer.com.tw') {
+          return fixture.response(request);
+        }
+        return http.Response(
+          '''
+<img id="avatar_img" src="https://avatar2.bahamut.com.tw/reader.png">
+<div class="main-container_header_info"><h1>新暱稱</h1>
+<div class="header_info-small"><small>ID：reader</small></div></div>
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      };
+      expect(await fixture.api.fetchProfile(), {
+        'id': 'reader',
+        'displayName': '新暱稱',
+        'avatar': 'https://avatar2.bahamut.com.tw/reader.png',
+      });
+      expect(fixture.requests.map((r) => r.url.path), [
+        '/mygather.php',
+        '/profile/index.php',
+      ]);
+      final publicRequest = fixture.requests.last;
+      expect(publicRequest.url.queryParameters, {'owner': 'reader'});
+      expect(publicRequest.headers.containsKey('cookie'), isFalse);
+      expect(fixture.posts, isEmpty);
+    },
+  );
+
+  test('guest profile refresh makes no HTTP requests', () async {
+    final fixture = AccountFixture()..cookie = '';
+    addTearDown(fixture.api.dispose);
+    expect(await fixture.api.fetchProfile(), isNull);
+    expect(fixture.requests, isEmpty);
+  });
+
+  test(
+    'profile refresh revalidates the login after reading public data',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        if (request.url.host != 'home.gamer.com.tw') {
+          return fixture.response(request);
+        }
+        fixture.cookie = 'switched-account';
+        return http.Response(
+          '''
+<img id="avatar_img" src="https://avatar2.bahamut.com.tw/reader.png">
+<div class="main-container_header_info"><h1>新暱稱</h1>
+<div class="header_info-small"><small>ID：reader</small></div></div>
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      };
+      await expectLater(
+        fixture.api.fetchProfile(),
+        throwsA(nativeError('stale')),
+      );
+    },
+  );
+
+  test(
     'native account reads paginate, deduplicate and preserve cloud progress',
     () async {
       final fixture = AccountFixture()

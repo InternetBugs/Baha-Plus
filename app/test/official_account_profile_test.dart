@@ -30,6 +30,48 @@ void main() {
     );
   });
 
+  const publicProfile = '''
+<div class="main-container_header_guildimg">
+  <img id="avatar_img" src="https://avatar2.bahamut.com.tw/reader.png?v=3">
+</div>
+<div class="main-container_header_info">
+  <div><h1>新的 &amp; 暱稱</h1></div>
+  <div class="header_info-small"><small>ID：reader</small></div>
+</div>
+''';
+
+  test('public profile reads the current nickname and avatar', () {
+    expect(
+      officialPublicAccountProfile(parse(publicProfile), owner: 'Reader'),
+      {
+        'id': 'Reader',
+        'displayName': '新的 & 暱稱',
+        'avatar': 'https://avatar2.bahamut.com.tw/reader.png?v=3',
+      },
+    );
+  });
+
+  test('public profile rejects a different owner or incomplete data', () {
+    expect(
+      () => officialPublicAccountProfile(parse(publicProfile), owner: 'other'),
+      throwsA(isA<CommunityException>().having((e) => e.code, 'code', 'stale')),
+    );
+    for (final html in [
+      '<html>loading</html>',
+      publicProfile.replaceFirst('<h1>新的 &amp; 暱稱</h1>', ''),
+      publicProfile.replaceFirst('id="avatar_img"', ''),
+      publicProfile.replaceFirst(
+        'https://avatar2.bahamut.com.tw/reader.png?v=3',
+        'https://attacker.test/reader.png',
+      ),
+    ]) {
+      expect(
+        () => officialPublicAccountProfile(parse(html), owner: 'reader'),
+        throwsException,
+      );
+    }
+  });
+
   for (final html in [
     '$heading<a href="https://attacker.test/viewList.php?u=reader">x</a>',
     '$heading<a href="https://ani.gamer.com.tw:444/viewList.php?u=reader">x</a>',

@@ -50,6 +50,35 @@ class NativeAccountApi {
     return profile;
   }
 
+  /// Refreshes display data without fetching collections or watch history.
+  Future<Json?> fetchProfile({void Function()? checkCurrent}) =>
+      transport.session((session) async {
+        if (session.cookies.header(_web('/mygather.php')).isEmpty) return null;
+        Json? identity;
+        try {
+          identity = _profile(parse(await session.get(_web('/mygather.php'))));
+        } on CommunityException catch (error) {
+          if (error.code != 'login') rethrow;
+          await session.revalidate();
+          return null;
+        }
+        if (identity == null) {
+          await session.revalidate();
+          return null;
+        }
+        final owner = identity['id'] as String;
+        final page = parse(
+          await session.get(
+            Uri.https('home.gamer.com.tw', '/profile/index.php', {
+              'owner': owner,
+            }),
+          ),
+        );
+        final profile = officialPublicAccountProfile(page, owner: owner);
+        await session.revalidate();
+        return profile;
+      }, checkCurrent: checkCurrent);
+
   Future<Json?> fetchAccount({
     void Function()? checkCurrent,
     String? expectedOwner,
