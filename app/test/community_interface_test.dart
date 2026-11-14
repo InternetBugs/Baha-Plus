@@ -15,8 +15,10 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/comments_page.dart';
 import 'package:baha_plus/ui/comments_preview.dart';
 import 'package:baha_plus/ui/community_images.dart';
+import 'package:baha_plus/ui/community_widgets.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/notifications_page.dart';
+import 'package:baha_plus/ui/player_page.dart';
 import 'package:baha_plus/ui/synopsis_section.dart';
 import 'package:baha_plus/ui/detail_page.dart';
 import 'core_test.dart' show FakePortal, FakeSearch, MemoryStorage;
@@ -81,8 +83,16 @@ void main() {
             child: CupertinoTheme(
               data: CupertinoThemeData(
                 brightness: brightness,
-                textTheme: const CupertinoTextThemeData(
-                  textStyle: TextStyle(fontFamily: 'BahaSans'),
+                textTheme: CupertinoTextThemeData(
+                  textStyle: const TextStyle(fontFamily: 'BahaSans'),
+                  actionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
+                  navActionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
+                  navTitleTextStyle: TextStyle(
+                    fontFamily: 'BahaSans',
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
                 ),
               ),
               child: MediaQuery(
@@ -163,7 +173,7 @@ void main() {
   );
 
   testWidgets(
-    'detail shows the series rating without loading an episode board',
+    'detail shows the series rating below metadata without loading an episode board',
     (tester) async {
       final (store, portal) = await setup(tester);
       portal.communityResponse = commentPageJson();
@@ -173,7 +183,9 @@ void main() {
         'episodes': [
           {'id': '20', 'label': '1'},
         ],
-        'metadata': [],
+        'metadata': [
+          {'label': '製作廠商', 'value': '測試製作'},
+        ],
         'rating': {
           'value': 4.7,
           'count': 10,
@@ -198,6 +210,10 @@ void main() {
         lessThan(tester.getTopLeft(find.text(store.t('ratingTitle'))).dy),
       );
       expect(find.text('4.7'), findsOneWidget);
+      expect(
+        tester.getBottomLeft(find.text('測試製作')).dy,
+        lessThan(tester.getTopLeft(find.byType(RatingSummaryCard)).dy),
+      );
       expect(
         find.byKey(const ValueKey('compact-comments-preview')),
         findsNothing,
@@ -278,7 +294,7 @@ void main() {
   );
 
   testWidgets(
-    'player preview shows official rating and a comment before expanding',
+    'player preview shows the official rating above the message board',
     (tester) async {
       final (store, portal) = await setup(tester);
       portal.communityResponse = commentPageJson();
@@ -300,6 +316,17 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('4.7'), findsOneWidget);
+      expect(find.textContaining('894'), findsOneWidget);
+      expect(
+        tester.getBottomLeft(find.byType(RatingSummaryCard)).dy,
+        lessThan(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey('comments-preview-heading')),
+              )
+              .dy,
+        ),
+      );
       expect(find.text(store.t('viewAllRatings')), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('comments-preview-heading')));
       await frames(tester);
@@ -601,6 +628,14 @@ void main() {
     };
     final output = Directory('../artifacts/community-previews')
       ..createSync(recursive: true);
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      pathProvider,
+      (_) async => output.absolute.path,
+    );
+    addTearDown(() => messenger.setMockMethodCallHandler(pathProvider, null));
     Future<void> capture(String name) async {
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(const ValueKey('community-preview')),
@@ -627,6 +662,29 @@ void main() {
         },
       ],
     };
+    const ratingAnime = Anime(
+      id: '10',
+      title: '星光下的旅程',
+      cover: 'https://p2.bahamut.com.tw/10.jpg',
+      latestVideoId: '25',
+    );
+    final ratingDetail = AnimeDetail.fromJson({
+      'title': ratingAnime.title,
+      'description': '在星光照耀的海邊小鎮，少年與夥伴們踏上一段尋找記憶的旅程。',
+      'episodes': [
+        for (var index = 1; index <= 12; index++)
+          {'id': '${19 + index}', 'label': '$index'},
+      ],
+      'metadata': [
+        {'label': '作品類型', 'value': '奇幻、冒險'},
+        {'label': '製作廠商', 'value': '星光動畫工作室'},
+      ],
+      'rating': {
+        'value': 4.7,
+        'count': 894,
+        'distribution': [23, 15, 42, 81, 733],
+      },
+    });
     for (final brightness in Brightness.values) {
       portal.communityResponse = previewComments;
       await mount(
@@ -659,6 +717,43 @@ void main() {
       expect(openAll.hitTestable(), findsOneWidget);
       await capture('comment-preview-end-${brightness.name}');
       await tester.pumpWidget(const SizedBox());
+      store
+        ..playingAnime = ratingAnime
+        ..playingVideoId = '25'
+        ..playerDetail = ratingDetail;
+      await mount(
+        tester,
+        PlayerPage(
+          store: store,
+          video: const ColoredBox(color: CupertinoColors.black),
+        ),
+        brightness: brightness,
+      );
+      await Scrollable.ensureVisible(
+        tester.element(find.byType(RatingSummaryCard)),
+        alignment: .22,
+      );
+      await frames(tester);
+      await capture('player-rating-${brightness.name}');
+      await tester.pumpWidget(const SizedBox());
+      store.detail = ratingDetail;
+      await mount(
+        tester,
+        DetailPage(store: store, anime: ratingAnime),
+        brightness: brightness,
+      );
+      final detailScroll = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byType(DetailPage),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      detailScroll.position.jumpTo(detailScroll.position.maxScrollExtent);
+      await frames(tester);
+      await capture('episodes-rating-${brightness.name}');
+      await tester.pumpWidget(const SizedBox());
       portal.communityResponse = comments;
       await mount(
         tester,
@@ -679,6 +774,8 @@ void main() {
       await capture('danmaku-${brightness.name}');
       await tester.pumpWidget(const SizedBox());
     }
+    // Let the artwork cache finish its deferred cleanup after unmounting.
+    await tester.pump(const Duration(seconds: 11));
     expect(tester.takeException(), isNull);
   });
 }

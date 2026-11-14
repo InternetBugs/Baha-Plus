@@ -79,8 +79,12 @@ void main() {
       await waitFor(() => !store.detailLoading);
       expect(store.detailFailed, isFalse);
       final detail = store.detail!;
-      expect(detail.metadata.any((field) => field.label == '評分'), isTrue);
-      expect(detail.rating, isNull);
+      expect(detail.rating, isNotNull);
+      expect(detail.rating!.count, greaterThan(0));
+      expect(
+        detail.rating!.distribution.fold<int>(0, (sum, count) => sum + count),
+        detail.rating!.count,
+      );
       final page = await store.loadComments('45916');
       expect(page.comments, isNotEmpty);
       final illustrated = page.comments

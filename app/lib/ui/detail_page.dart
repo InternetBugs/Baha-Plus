@@ -207,12 +207,6 @@ class DetailPage extends StatelessWidget {
                   description: detail.description,
                 ),
               ],
-              if (detail.rating != null) ...[
-                const SizedBox(height: 28),
-                SectionHeading(store.t('ratingTitle')),
-                const SizedBox(height: 10),
-                RatingSummaryCard(rating: detail.rating!),
-              ],
               if (detail.metadata.isNotEmpty) ...[
                 const SizedBox(height: 28),
                 SectionHeading(store.t('metadata')),
@@ -242,6 +236,12 @@ class DetailPage extends StatelessWidget {
                       ],
                     ),
                   ),
+              ],
+              if (detail.rating != null) ...[
+                const SizedBox(height: 28),
+                SectionHeading(store.t('ratingTitle')),
+                const SizedBox(height: 10),
+                RatingSummaryCard(rating: detail.rating!),
               ],
             ],
           ],

@@ -63,16 +63,66 @@ class OfficialAppApi {
     _validateVideoId(animeId);
     _validateVideoId(videoId);
     final data = await _get('video.php', {'sn': videoId});
+    late final OfficialAppVideo video;
+    late final Json anime;
+    late final AnimeDetail detail;
     try {
-      final video = OfficialAppVideo.fromJson(data['video'] as Json);
+      video = OfficialAppVideo.fromJson(data['video'] as Json);
       if (video.videoId != videoId || video.animeId != animeId) {
         throw const FormatException('Episode or series mismatch');
       }
-      return OfficialAppMetadata.detail(data['anime'] as Json, video);
+      anime = data['anime'] as Json;
+      detail = OfficialAppMetadata.detail(anime, video);
     } on FormatException {
       throw const OfficialAppApiException('invalid-detail');
     } on TypeError {
       throw const OfficialAppApiException('invalid-detail');
+    }
+
+    // Reviews use the verified detail's fanId, not its animeSn or acgSn.
+    final fanId = anime['fanId']?.toString();
+    if (fanId == null || !_videoId.hasMatch(fanId)) return detail;
+    try {
+      final rating = await fetchRating(fanId);
+      return OfficialAppMetadata.detail(anime, video, rating: rating);
+    } on OfficialAppApiException {
+      if (_disposed) rethrow;
+      // An unavailable review service must leave the episodes usable.
+      return detail;
+    }
+  }
+
+  Future<RatingSummary> fetchRating(String fanId) async {
+    _validateVideoId(fanId);
+    final data = await _getData(
+      Uri.https('api.gamer.com.tw', '/acg/v1/reviews_list.php', {
+        'sn': fanId,
+        't': '4',
+      }),
+    );
+    try {
+      final rating = data['rating'] as Json;
+      final chart = rating['star_chart'] as Json;
+      if (chart.length != 5 ||
+          ![1, 2, 3, 4, 5].every((star) => chart.containsKey('$star'))) {
+        throw const FormatException('Invalid star chart');
+      }
+      final summary = RatingSummary.fromJson({
+        'value': rating['count'] == 0 && rating['avg'] == null
+            ? 0
+            : rating['avg'],
+        'count': rating['count'],
+        'distribution': [for (var star = 1; star <= 5; star++) chart['$star']],
+      });
+      if (summary.distribution.fold<int>(0, (sum, count) => sum + count) !=
+          summary.count) {
+        throw const FormatException('Inconsistent rating count');
+      }
+      return summary;
+    } on FormatException {
+      throw const OfficialAppApiException('invalid-rating');
+    } on TypeError {
+      throw const OfficialAppApiException('invalid-rating');
     }
   }
 
@@ -98,10 +148,12 @@ class OfficialAppApi {
     }
   }
 
-  Future<Json> _get(String endpoint, [Map<String, String>? query]) async {
-    final body = await _request(
-      Uri.https('api.gamer.com.tw', '/mobile_app/anime/v4/$endpoint', query),
-    );
+  Future<Json> _get(String endpoint, [Map<String, String>? query]) => _getData(
+    Uri.https('api.gamer.com.tw', '/mobile_app/anime/v4/$endpoint', query),
+  );
+
+  Future<Json> _getData(Uri uri) async {
+    final body = await _request(uri);
     if (body['error'] != null) {
       throw OfficialAppApiException(
         'official-rejected',
@@ -257,7 +309,11 @@ class OfficialAppMetadata {
     return result;
   }
 
-  static AnimeDetail detail(Json anime, OfficialAppVideo video) {
+  static AnimeDetail detail(
+    Json anime,
+    OfficialAppVideo video, {
+    RatingSummary? rating,
+  }) {
     if (OfficialAppVideo._id(anime['animeSn']) != video.animeId) {
       throw const FormatException('Unexpected series');
     }
@@ -311,9 +367,8 @@ class OfficialAppMetadata {
       if (score is! num || !score.isFinite || score < 0 || score > 5) {
         throw const FormatException('Invalid score');
       }
-      // The anonymous App response supplies no review count or distribution.
-      // Display its score without inventing the missing rating statistics.
-      add('評分', '$score / 5');
+      // Keep the available score when full review statistics are unavailable.
+      if (rating == null) add('評分', '$score / 5');
     }
     final content = OfficialAppVideo._text(anime['content'], 200000);
     return AnimeDetail.fromJson({
@@ -331,6 +386,7 @@ class OfficialAppMetadata {
       'poster': _image(anime['cover']),
       'episodes': episodes.values.toList(growable: false),
       'metadata': metadata,
+      if (rating != null) 'rating': rating.toJson(),
     });
   }
 

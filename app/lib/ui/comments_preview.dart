@@ -71,6 +71,12 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (widget.rating != null) ...[
+            SectionHeading(widget.store.t('ratingTitle')),
+            const SizedBox(height: 10),
+            RatingSummaryCard(rating: widget.rating!),
+            const SizedBox(height: 28),
+          ],
           Semantics(
             button: true,
             child: GestureDetector(
@@ -100,10 +106,6 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
               ),
             ),
           ),
-          if (widget.rating != null) ...[
-            const SizedBox(height: 10),
-            RatingSummaryCard(rating: widget.rating!),
-          ],
           const SizedBox(height: 16),
           if (snapshot.connectionState == ConnectionState.waiting)
             const Padding(
