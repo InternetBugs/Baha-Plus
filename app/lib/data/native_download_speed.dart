@@ -10,12 +10,15 @@ class NativeDownloadSpeed {
       'app.bahaplus.mobile/playback_download',
     ),
     int Function()? elapsedMicroseconds,
+    Map<String, int> Function()? counters,
   }) : _channel = channel,
-       _elapsedMicroseconds = elapsedMicroseconds;
+       _elapsedMicroseconds = elapsedMicroseconds,
+       _counters = counters;
 
   final void Function(double) onSpeed;
   final MethodChannel _channel;
   final int Function()? _elapsedMicroseconds;
+  final Map<String, int> Function()? _counters;
   final _clock = Stopwatch()..start();
   String? _document;
   Timer? _timer;
@@ -27,6 +30,11 @@ class NativeDownloadSpeed {
     _document = document;
     final session = ++_session;
     _revision++;
+    if (_counters != null) {
+      _supported = true;
+      _sync();
+      return;
+    }
     try {
       final supported = await _channel.invokeMethod<bool>('start', {
         'document': document,
@@ -70,9 +78,11 @@ class NativeDownloadSpeed {
     final revision = _revision;
     _reading = true;
     try {
-      final result = await _channel.invokeMapMethod<String, dynamic>('sample', {
-        'document': _document,
-      });
+      final result =
+          _counters?.call() ??
+          await _channel.invokeMapMethod<String, dynamic>('sample', {
+            'document': _document,
+          });
       if (revision != _revision) return;
       final bytes = result?['bytes'];
       final source = result?['source'];
@@ -110,7 +120,7 @@ class NativeDownloadSpeed {
     _timer?.cancel();
     final document = _document;
     _document = null;
-    if (document != null) unawaited(_stop(document));
+    if (document != null && _counters == null) unawaited(_stop(document));
   }
 
   Future<void> _stop(String document) async {

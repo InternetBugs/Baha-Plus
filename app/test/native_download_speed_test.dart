@@ -137,6 +137,31 @@ void main() {
     expect(speeds, isEmpty);
   });
 
+  test(
+    'cache counters measure upstream bytes without the native channel',
+    () async {
+      monitor.dispose();
+      monitor = NativeDownloadSpeed(
+        onSpeed: speeds.add,
+        elapsedMicroseconds: () => time,
+        counters: () => {'bytes': bytes, 'source': 0},
+      );
+      await start();
+      expect(calls, isEmpty);
+      bytes = 4096;
+      time = 1000000;
+      await monitor.sample();
+      expect(speeds.last, 4096);
+      // Reading cached bytes makes no upstream transfer.
+      time = 2000000;
+      await monitor.sample();
+      expect(speeds.last, 0);
+      monitor.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, isEmpty);
+    },
+  );
+
   testWidgets(
     'native loading publishes speed before handoff and stops when ready',
     (tester) async {

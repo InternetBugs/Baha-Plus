@@ -6,6 +6,7 @@ import '../core/models.dart';
 import '../core/playback_state.dart';
 import 'app_diagnostics.dart';
 import 'native_download_speed.dart';
+import 'native_hls_cache.dart';
 
 class NativePlaybackSource {
   NativePlaybackSource.fromJson(Json json)
@@ -109,13 +110,22 @@ class NativePlayback extends ChangeNotifier {
     required this.userAgent,
     required this.onState,
     AppDiagnostics? diagnostics,
-  }) : diagnostics = diagnostics ?? AppDiagnostics.instance;
+    NativeHlsCache Function()? cacheFactory,
+  }) : diagnostics = diagnostics ?? AppDiagnostics.instance,
+       _cacheFactory = cacheFactory;
 
   final AppDiagnostics diagnostics;
   final String document, userAgent;
   final NativePlaybackSource source;
   final void Function(PlaybackState) onState;
-  late final _downloadSpeed = NativeDownloadSpeed(onSpeed: _downloadChanged);
+  final NativeHlsCache Function()? _cacheFactory;
+  NativeHlsCache? _cache;
+  late final _downloadSpeed = NativeDownloadSpeed(
+    onSpeed: _downloadChanged,
+    counters: _cache == null
+        ? null
+        : () => {'bytes': _cache!.downloadedBytes, 'source': 0},
+  );
   double _downloadBytesPerSecond = 0;
   VideoPlayerController? video;
   bool _disposed = false, _active = false, _polling = false, _blocked = false;
@@ -138,14 +148,32 @@ class NativePlayback extends ChangeNotifier {
     final duration = value?.isInitialized == true
         ? value!.duration.inMilliseconds / 1000
         : source.duration;
-    var buffered = 0.0;
     final bufferedRanges = <PlaybackBufferRange>[];
     for (final range in value?.buffered ?? const <DurationRange>[]) {
       final start = (range.start.inMilliseconds / 1000).clamp(0.0, duration);
       final end = range.end.inMilliseconds / 1000;
-      if (end > buffered) buffered = end;
       if (end > start) {
         bufferedRanges.add((start: start, end: end.clamp(0.0, duration)));
+      }
+    }
+    final media = _quality == 0 ? source.master : source.variants[_quality]!;
+    for (final range
+        in _cache?.bufferedRanges(media) ?? const <PlaybackBufferRange>[]) {
+      final start = range.start.clamp(0.0, duration);
+      final end = range.end.clamp(0.0, duration);
+      if (end > start) bufferedRanges.add((start: start, end: end));
+    }
+    bufferedRanges.sort((a, b) => a.start.compareTo(b.start));
+    final merged = <PlaybackBufferRange>[];
+    for (final range in bufferedRanges) {
+      if (merged.isNotEmpty && range.start <= merged.last.end) {
+        final last = merged.removeLast();
+        merged.add((
+          start: last.start,
+          end: range.end > last.end ? range.end : last.end,
+        ));
+      } else {
+        merged.add(range);
       }
     }
     return PlaybackState(
@@ -161,8 +189,8 @@ class NativePlayback extends ChangeNotifier {
       muted: value?.volume == 0,
       position: _position.clamp(0, duration),
       duration: duration,
-      buffered: buffered.clamp(0, duration),
-      bufferedRanges: List.unmodifiable(bufferedRanges),
+      buffered: merged.isEmpty ? 0 : merged.last.end,
+      bufferedRanges: List.unmodifiable(merged),
       downloadBytesPerSecond: _downloadBytesPerSecond,
       rate: value?.playbackSpeed ?? source.rate,
       qualities: source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
@@ -173,6 +201,26 @@ class NativePlayback extends ChangeNotifier {
   }
 
   Future<void> initialize(int preferredQuality) async {
+    if (_cacheFactory != null ||
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)) {
+      final cache = _cache =
+          _cacheFactory?.call() ??
+          NativeHlsCache(headers: _mediaHeaders, onChanged: _publish);
+      try {
+        await cache.start();
+      } catch (error) {
+        await cache.close();
+        if (_disposed) return;
+        _cache = null;
+        diagnostics.record('player.native-cache-unavailable', {
+          'code': error.runtimeType.toString(),
+        });
+      }
+      if (_disposed) {
+        await cache.close();
+        return;
+      }
+    }
     _downloadSpeed.setEnabled(_foreground);
     unawaited(
       _downloadSpeed.start(document, [
@@ -190,6 +238,12 @@ class NativePlayback extends ChangeNotifier {
     _syncDownloadSampling();
   }
 
+  Map<String, String> get _mediaHeaders => {
+    'Origin': 'https://ani.gamer.com.tw',
+    'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
+    if (userAgent.isNotEmpty) 'User-Agent': userAgent,
+  };
+
   Future<bool> _load(int quality, {bool initial = false}) async {
     final generation = ++_generation;
     final pauseVersion = _pauseVersion;
@@ -201,13 +255,10 @@ class NativePlayback extends ChangeNotifier {
     try {
       await previous?.pause();
       stage = 'create';
+      final media = quality == 0 ? source.master : source.variants[quality]!;
       next = _SeekAwareVideoPlayerController(
-        quality == 0 ? source.master : source.variants[quality]!,
-        httpHeaders: {
-          'Origin': 'https://ani.gamer.com.tw',
-          'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
-          if (userAgent.isNotEmpty) 'User-Agent': userAgent,
-        },
+        _cache?.playlist(media) ?? media,
+        httpHeaders: _cache == null ? _mediaHeaders : const {},
         videoPlayerOptions: VideoPlayerOptions(
           mixWithOthers: false,
           // Our lifecycle guard owns pause intent, including source changes.
@@ -479,10 +530,14 @@ class NativePlayback extends ChangeNotifier {
     final current = video;
     current?.removeListener(_changed);
     video = null;
-    if (current != null) {
-      _released = current.dispose();
-      unawaited(_released);
-    }
+    _released = () async {
+      try {
+        await current?.dispose();
+      } finally {
+        await _cache?.close();
+      }
+    }();
+    unawaited(_released);
     super.dispose();
   }
 }
