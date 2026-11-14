@@ -3,11 +3,13 @@ import 'fake_metadata.dart';
 import 'native_danmaku_sender_test.dart' show DanmakuSendFixture;
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:baha_plus/core/community.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
+import 'package:baha_plus/data/app_diagnostics.dart';
 import 'core_test.dart' show FakePortal, FakeSearch, MemoryStorage;
 
 Json commentJson(String id) => {
@@ -38,7 +40,9 @@ Json notificationJson(String id) => {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  Future<(AppStore, FakePortal, MemoryStorage)> setup() async {
+  Future<(AppStore, FakePortal, MemoryStorage)> setup({
+    AppDiagnostics? diagnostics,
+  }) async {
     final disk = MemoryStorage();
     final portal = FakePortal();
     final store = await AppStore.create(
@@ -48,6 +52,7 @@ void main() {
       danmakuSender: DanmakuSendFixture().sender,
       storage: disk,
       animeSearch: FakeSearch(),
+      diagnostics: diagnostics,
     );
     addTearDown(store.dispose);
     await store.attach(portal);
@@ -327,6 +332,45 @@ void main() {
       expect(store.notifications, isEmpty);
       expect(store.unreadNotifications, 0);
       expect(disk.values.containsKey('baha.notifications.read.other'), isFalse);
+    },
+  );
+
+  test(
+    'notification diagnostics record outcomes without account or item content',
+    () async {
+      final root = await Directory.systemTemp.createTemp('baha-notifications-');
+      final diagnostics = AppDiagnostics(
+        directoryLoader: () async => root,
+        metadataLoader: () async => {},
+      );
+      addTearDown(() async {
+        await diagnostics.flush();
+        diagnostics.dispose();
+        await root.delete(recursive: true);
+      });
+      final (store, portal, _) = await setup(diagnostics: diagnostics);
+      await diagnostics.start();
+      portal.communityResponse = {
+        'ok': true,
+        'owner': 'reader',
+        'items': [notificationJson('20')],
+      };
+      await store.refreshNotifications();
+      portal.communityResponse = {'ok': false, 'code': 'network'};
+      await store.refreshNotifications();
+      expect(store.notificationsError, 'network');
+      expect(store.notifications, hasLength(1));
+      expect(store.notificationsLoading, isFalse);
+      await diagnostics.stop();
+      final report = await (await diagnostics.export()).readAsString();
+      expect(report, contains('"event":"notifications.started"'));
+      expect(report, contains('"event":"notifications.completed"'));
+      expect(report, contains('"count":1'));
+      expect(report, contains('"event":"notifications.failed"'));
+      expect(report, contains('"code":"network"'));
+      expect(report, isNot(contains('reader')));
+      expect(report, isNot(contains('episode:20')));
+      expect(report, isNot(contains('測試動畫')));
     },
   );
 

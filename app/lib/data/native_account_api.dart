@@ -353,13 +353,24 @@ class NativeAccountApi {
             ),
           );
           for (final anchor in document.querySelectorAll('a[href]')) {
-            final uri = _web('/').resolve(anchor.attributes['href']!);
-            final videoId = uri.queryParameters['sn'];
-            if (uri.origin != _web('/').origin ||
-                uri.path != '/animeVideo.php' ||
-                !_videoId.hasMatch(videoId ?? '')) {
+            final href = Uri.tryParse(anchor.attributes['href']!);
+            if (href == null) continue;
+            final uri = _web('/').resolveUri(href);
+            // Official rows also contain javascript:NOTIFY_follow actions.
+            // Uri.origin throws for those schemes, failing the entire feed.
+            if (uri.scheme != 'https' ||
+                uri.origin != _web('/').origin ||
+                uri.userInfo.isNotEmpty ||
+                uri.path != '/animeVideo.php') {
               continue;
             }
+            final videoIds = uri.queryParametersAll['sn'];
+            if (videoIds == null ||
+                videoIds.length != 1 ||
+                !_videoId.hasMatch(videoIds.single)) {
+              continue;
+            }
+            final videoId = videoIds.single;
             Element? row = anchor.parent;
             while (row != null && row.localName != 'li') {
               row = row.parent;
@@ -371,7 +382,12 @@ class NativeAccountApi {
             )) {
               node.remove();
             }
-            final title = titleNode.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+            var title = titleNode.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+            if (title.isEmpty) {
+              title = (anchor.attributes['title'] ?? '')
+                  .replaceAll(RegExp(r'\s+'), ' ')
+                  .trim();
+            }
             if (title.isEmpty || title.length > 500) continue;
             final image = row?.querySelector('img');
             final item = <String, dynamic>{

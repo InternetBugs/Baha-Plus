@@ -577,6 +577,89 @@ void main() {
     },
   );
 
+  test('notifications ignore official top-bar JavaScript actions', () async {
+    final fixture = AccountFixture();
+    addTearDown(fixture.api.dispose);
+    fixture.handler = (request) async {
+      if (request.url.path != '/ajax/common/topBar.php') {
+        return fixture.response(request);
+      }
+      // Structure verified against the signed-in official top bar:
+      // episode links share a div with a javascript: notification action.
+      return http.Response(
+        request.url.queryParameters['type'] == 'light_0'
+            ? '''
+<div>
+<a href="https://ani.gamer.com.tw/animeVideo.php?sn=20" target="_blank">
+<span class="TOP-msgpic"><img src="${accountAnime.cover}"></span>
+<p class="title"><span class="link">測試動畫 [1] 更新囉！</span></p>
+<div><span class="time">1天前</span></div>
+</a>
+<a class="msg-ellipsis" href="javascript:NOTIFY_follow('4', '123', 0)"></a>
+</div>
+<a href="https://home.gamer.com.tw/login_bad_log.php">帳號通知</a>
+'''
+            : '''
+<div><a href="https://gnn.gamer.com.tw/detail.php?sn=123">新聞</a>
+<a class="msg-ellipsis" href="javascript:NOTIFY_follow('4', '456', 0)"></a>
+</div>
+''',
+        200,
+        headers: {'content-type': 'text/html; charset=utf-8'},
+      );
+    };
+    final result = await fixture.community('notifications', {
+      'owner': 'reader',
+    });
+    final notification = AnimeNotification.fromJson(
+      (result['items'] as List).single as Json,
+    );
+    expect(notification.videoId, '20');
+    expect(notification.title, '測試動畫 [1] 更新囉！');
+    expect(notification.time, '1天前');
+    expect(notification.cover, accountAnime.cover);
+    expect(fixture.posts, isEmpty);
+  });
+
+  test(
+    'notifications keep image-link titles and ignore invalid episode targets',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      fixture.handler = (request) async {
+        if (request.url.path != '/ajax/common/topBar.php') {
+          return fixture.response(request);
+        }
+        return http.Response(
+          '''
+<li><a href="/animeVideo.php?sn=21" title=" 測試動畫 [2] 更新囉！ ">
+<img src="${accountAnime.cover}"></a><small>今天</small></li>
+<a href="javascript:void(0)">操作</a>
+<a href="mailto:notice@example.test">信箱</a>
+<a href="https://[">無效網址</a>
+<a href="https://ani.gamer.com.tw.attacker.test/animeVideo.php?sn=99">外站</a>
+<a href="https://attacker@ani.gamer.com.tw/animeVideo.php?sn=99">偽造</a>
+<a href="https://ani.gamer.com.tw:444/animeVideo.php?sn=99">錯誤連接埠</a>
+<a href="/animeVideo.php?sn=20&amp;sn=99">不明集數</a>
+<a href="/animeVideo.php?sn=0">無效集數</a>
+''',
+          200,
+          headers: {'content-type': 'text/html; charset=utf-8'},
+        );
+      };
+      final result = await fixture.community('notifications', {
+        'owner': 'reader',
+      });
+      final notification = AnimeNotification.fromJson(
+        (result['items'] as List).single as Json,
+      );
+      expect(notification.videoId, '21');
+      expect(notification.title, '測試動畫 [2] 更新囉！');
+      expect(notification.time, '今天');
+      expect(notification.cover, accountAnime.cover);
+    },
+  );
+
   test(
     'official challenges, redirects and oversized responses do not become account data',
     () async {

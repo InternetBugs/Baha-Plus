@@ -468,6 +468,7 @@ class AppStore extends ChangeNotifier {
     final owner = accountProfile?.id.toLowerCase();
     notificationsLoading = true;
     notificationsError = null;
+    diagnostics.record('notifications.started');
     _emit();
     try {
       final result = await community('notifications', {});
@@ -502,9 +503,15 @@ class AppStore extends ChangeNotifier {
       _readNotifications.addAll(currentRead);
       notifications = items;
       _notificationOwner = actualOwner;
-    } catch (error) {
+      diagnostics.record('notifications.completed', {'count': items.length});
+    } catch (error, stack) {
       if (_disposed || generation != _notificationGeneration) return;
       notificationsError = error is CommunityException ? error.code : 'network';
+      diagnostics.record('notifications.failed', {
+        'code': notificationsError,
+        'type': error.runtimeType.toString(),
+        'stack': stack.toString().split('\n').take(12).toList(),
+      });
       if (notificationsError == 'login') {
         notifications = [];
         _readNotifications.clear();
