@@ -62,6 +62,13 @@ iOS 和 Android 使用现有 AVPlayer／ExoPlayer。Windows 派生调试工程�
 关闭、透明度、字号和显示类型直接作用于原生画布并保存到本机，不发送网页配置命令。
 广告期间不读取或显示正片弹幕；切集和退出会清空数据并忽略旧请求的迟到响应。
 
+官方站点的 User-Agent 只有一处定义：`OfficialUserAgent`。启动时读取当前 WebView 的
+默认标识；Android 播放页、原生授权／进度／弹幕／账号请求和原生媒体请求统一使用它的
+桌面呈现（保留真实引擎版本），iOS 使用 WebView 自身的 Safari 标识。登录等普通浏览页
+仍用 WebView 默认标识，只有官方播放页切换到与原生请求相同的桌面呈现。读取失败
+（例如 Windows 调试宿主没有该 WebView 接口）时整进程退回固定桌面 Chromium 标识，
+不按请求拼接不同 UA；播放会话在创建时快照一次，标识不会中途混入同一会话。
+
 弹幕发送保留画面内的纸飞机入口，支持正文、颜色、位置和字号。未登录时提示先在账号
 页面登录；`NativeDanmakuSender` 仅在用户提交时，通过平台原生 CookieManager 读取应用内
 已有登录 Cookie，独立调用账号页确认身份、获取 CSRF，再原生 POST `/ajax/danmuSet.php`。

@@ -247,7 +247,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     final next = NativePlayback(
       document: document,
       source: source,
-      userAgent: NativeHttpApi.userAgent,
+      userAgent: api.userAgent,
       diagnostics: diagnostics,
       onState: _mediaChanged,
     );

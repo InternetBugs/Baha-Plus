@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../core/community.dart';
 import '../core/models.dart';
 import 'native_http_api.dart';
+import 'official_user_agent.dart';
 
 /// Account HTTP operations import the device's official cookies into memory.
 /// Neither a browser document nor JavaScript is needed. Playback imports a
@@ -188,7 +189,7 @@ class OfficialHttpClient {
           abortTrigger: abort.future,
         )..followRedirects = false;
         request.headers.addAll({
-          'User-Agent': NativeHttpApi.userAgent,
+          'User-Agent': OfficialUserAgent.value,
           'Origin': uri == OfficialSite.logout
               ? OfficialSite.logout.origin
               : 'https://ani.gamer.com.tw',

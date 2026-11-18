@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:baha_plus/data/native_http_api.dart';
+import 'package:baha_plus/data/official_user_agent.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -569,6 +570,20 @@ void main() {
     await api.source();
     expect(fixture.count('animeVideo.js'), 0);
     expect(fixture.count('videoCastcishu.php'), 0);
+  });
+
+  test('official requests keep one WebView-derived agent', () async {
+    final fixture = HttpFixture(ads: false);
+    final api = fixture.api();
+    addTearDown(api.dispose);
+    await api.prepare('40190');
+    expect(api.userAgent, OfficialUserAgent.value);
+    expect(api.userAgent, startsWith('Mozilla/5.0 '));
+    expect(fixture.requests, isNotEmpty);
+    expect(
+      {for (final request in fixture.requests) request.headers['user-agent']},
+      {api.userAgent},
+    );
   });
 
   test(

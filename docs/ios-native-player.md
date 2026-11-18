@@ -12,7 +12,7 @@
 
 iOS 默认启用原生正片播放。官方 WKWebView 先完成年龄确认、广告、账号、会员、地区和设备校验；当前剧集进入正片并具有有效时间线后，才准备 Flutter 官方 `video_player` 的 AVFoundation 后端，由 AVPlayer 解码并将视频纹理交给 Flutter。广告和官方确认界面仍显示在原 WebView。
 
-Android 和 iOS 共用 `native-playback.js`、`NativePlayback` 和 `NativeVideoSurface`。宿主明确注入 `android-exoplayer` 或 `ios-avplayer`；不支持的平台不启用接管。媒体源只接受本次官方会话提供的 `bahamut.akamaized.net` HTTPS HLS，原生请求携带官方来源、引用页和设备 WebView 的 User-Agent，不导出 Cookie、CSRF 或账号令牌。
+Android 和 iOS 共用 `native-playback.js`、`NativePlayback` 和 `NativeVideoSurface`。宿主明确注入 `android-exoplayer` 或 `ios-avplayer`；不支持的平台不启用接管。媒体源只接受本次官方会话提供的 `bahamut.akamaized.net` HTTPS HLS，原生请求携带官方来源、引用页和与播放页 WebView 一致的 User-Agent（iOS 为设备 WebView 标识，Android 为它的桌面呈现），不导出 Cookie、CSRF 或账号令牌。
 
 保存的画质用于第一个原生媒体源。手动切换只使用当前清单实际提供且无需独立外置音轨的档位；自动模式继续使用原主清单。切换保留进度、倍速、静音和暂停意图。网页画质切换尚未完成时延后原生接管，避免继承中间状态。
 

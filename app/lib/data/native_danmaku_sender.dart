@@ -10,6 +10,7 @@ import '../core/models.dart';
 import '../core/native_danmaku.dart';
 import 'native_http_api.dart';
 import 'official_account_profile.dart';
+import 'official_user_agent.dart';
 
 /// An explicit account write with its own short-lived account HTTP client.
 /// Cookies are read through the native plugin, without mounting a WebView.
@@ -207,7 +208,7 @@ class NativeDanmakuSender {
           abortTrigger: abort.future,
         )..followRedirects = false;
         request.headers.addAll({
-          'User-Agent': NativeHttpApi.userAgent,
+          'User-Agent': OfficialUserAgent.value,
           'Origin': 'https://ani.gamer.com.tw',
           'Referer': Uri.https('ani.gamer.com.tw', '/animeVideo.php', {
             'sn': videoId,

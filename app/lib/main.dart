@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'data/app_store.dart';
 import 'data/app_diagnostics.dart';
+import 'data/official_user_agent.dart';
 import 'data/system_http.dart';
 import 'ui/app_root.dart';
 import 'ui/chrome.dart';
@@ -20,6 +21,7 @@ Future<void> main() async {
     // A full or unavailable diagnostics directory must not prevent startup.
   }
   HttpOverrides.global = SystemHttpOverrides();
+  await OfficialUserAgent.resolve();
   await LiquidGlassWidgets.initialize(enablePerformanceMonitor: false);
   final store = await AppStore.create();
   runApp(

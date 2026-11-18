@@ -5,9 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import '../core/browser_presentation.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
+import '../data/official_user_agent.dart';
 import '../data/windows_official_bridge.dart';
 
 /// Hosts official login, browsing and details without a video ID.
@@ -30,7 +30,6 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   bool _webViewNeedsRecreation = false;
   Completer<void>? _recreatedWebViewReady;
   bool _desktop = false;
-  String? _nativeAgent;
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   AppStore get store => widget.store;
   bool _isCurrentController(InAppWebViewController controller) =>
@@ -45,10 +44,12 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     allowsInlineMediaPlayback: true,
     allowsPictureInPictureMediaPlayback: false,
     allowBackgroundAudioPlaying: false,
-    userAgent: Platform.isAndroid && _nativeAgent != null
+    // The player pages and every native request share [value]; the rest of
+    // the site keeps the real engine agent just as the login flow created it.
+    userAgent: Platform.isAndroid
         ? desktop
-              ? desktopChromiumUserAgent(_nativeAgent!)
-              : _nativeAgent
+              ? OfficialUserAgent.value
+              : OfficialUserAgent.device
         : null,
     preferredContentMode: desktop
         ? UserPreferredContentMode.DESKTOP
@@ -135,7 +136,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
   Future<void> _created(InAppWebViewController controller) async {
     _controller = controller;
     if (Platform.isAndroid) {
-      _nativeAgent = await InAppWebViewController.getDefaultUserAgent();
+      await OfficialUserAgent.resolve();
       if (_diagnostics) {
         await InAppWebViewController.setWebContentsDebuggingEnabled(true);
       }

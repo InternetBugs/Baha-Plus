@@ -9,6 +9,7 @@ import 'package:html/parser.dart' show parseFragment;
 import '../core/models.dart';
 import '../core/native_danmaku.dart';
 import 'native_playback.dart';
+import 'official_user_agent.dart';
 
 class NativeHttpException implements Exception {
   const NativeHttpException(this.stage, [this.code]);
@@ -128,12 +129,13 @@ class NativeHttpApi {
     this.timeout = const Duration(seconds: 15),
     this.onEvent,
     Future<NativeHttpCookieJar> Function()? cookieLoader,
+    String? userAgent,
   }) : _client = client ?? http.Client(),
-       _cookieLoader = cookieLoader;
+       _cookieLoader = cookieLoader,
+       userAgent = userAgent ?? OfficialUserAgent.value;
 
-  static const userAgent =
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  /// Snapshotted so one session never mixes two agents.
+  final String userAgent;
   final http.Client _client;
   final Duration timeout;
   final void Function(String stage, int? code)? onEvent;
