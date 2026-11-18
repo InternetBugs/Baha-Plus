@@ -6,8 +6,10 @@ import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/device_storage.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/ui/chrome.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
@@ -26,8 +28,41 @@ const _newProfile = {
   'avatar': 'https://avatar2.bahamut.com.tw/reader.png?v=3',
 };
 
+class _FileInfo extends Fake implements FileInfo {}
+
+class _PortraitCache extends Fake implements BaseCacheManager {
+  final checks = <String>[];
+  bool offline = false;
+
+  @override
+  Future<FileInfo> downloadFile(
+    String url, {
+    String? key,
+    Map<String, String>? authHeaders,
+    bool force = false,
+  }) async {
+    checks.add(url);
+    expect(authHeaders, containsPair('Cache-Control', 'no-cache'));
+    if (offline) throw StateError('offline');
+    return _FileInfo();
+  }
+
+  @override
+  Stream<FileResponse> getFileStream(
+    String url, {
+    String? key,
+    Map<String, String>? headers,
+    bool withProgress = false,
+  }) => const Stream.empty();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late _PortraitCache portraits;
+  setUp(() {
+    portraits = _PortraitCache();
+    CachedNetworkImageProvider.defaultCacheManager = portraits;
+  });
 
   Future<(AppStore, FakeAccountApi, MemoryStorage)> setup() async {
     final storage = MemoryStorage();
@@ -67,7 +102,6 @@ void main() {
       pending.complete(_newProfile);
       await refreshing;
       expect(store.accountProfile?.displayName, '新暱稱');
-      expect(store.accountPortraitVersion, isNotNull);
       expect(store.favorites.single.id, '10');
       expect(store.operation.id, operation);
       expect(store.needsOfficialPortal, isFalse);
@@ -79,8 +113,9 @@ void main() {
         ..._newProfile,
         'displayName': 'reader',
       };
-      await store.refreshAccountProfile();
+      await store.refreshAccountProfile(force: true);
       expect(store.accountProfile?.displayName, 'reader');
+      expect(portraits.checks, [_newProfile['avatar']]);
     },
   );
 
@@ -93,13 +128,57 @@ void main() {
           throw const CommunityException('network');
       await store.refreshAccountProfile();
       expect(store.accountProfile?.toJson(), _oldProfile);
-      expect(store.accountPortraitVersion, isNull);
+      expect(store.accountPortraitVersion, 0);
       expect(storage.values[AccountCache.key], before);
       expect(store.notice, isNull);
       account.profileLoader = () async => _newProfile;
       await store.refreshAccountProfile();
       expect(store.accountProfile?.displayName, '新暱稱');
       expect(account.profileReads, 2);
+    },
+  );
+
+  test(
+    'a fresh profile survives restart; expired profiles are refreshed',
+    () async {
+      final (store, account, storage) = await setup();
+      account.profileLoader = () async => _newProfile;
+      await store.refreshAccountProfile();
+      final snapshot = (await AccountCache(storage).load())!;
+      for (final expired in [false, true]) {
+        if (expired) {
+          await AccountCache(storage).save({
+            ...snapshot,
+            'profileCheckedAt': DateTime.now()
+                .subtract(const Duration(days: 1))
+                .millisecondsSinceEpoch,
+          });
+        }
+        final restarted = await AppStore.create(
+          storage: storage,
+          accountApi: account,
+        );
+        addTearDown(restarted.dispose);
+        await restarted.refreshAccountProfile();
+        expect(account.profileReads, expired ? 2 : 1);
+        expect(restarted.accountProfile?.toJson(), _newProfile);
+      }
+    },
+  );
+
+  test(
+    'failed manual portrait validation preserves the snapshot and allows retry',
+    () async {
+      final (store, account, storage) = await setup();
+      account.profileLoader = () async => _newProfile;
+      final before = storage.values[AccountCache.key];
+      portraits.offline = true;
+      expect(await store.refreshAccountProfile(force: true), isFalse);
+      expect(store.accountProfile?.toJson(), _oldProfile);
+      expect(storage.values[AccountCache.key], before);
+      portraits.offline = false;
+      expect(await store.refreshAccountProfile(force: true), isTrue);
+      expect(store.accountProfile?.toJson(), _newProfile);
     },
   );
 
@@ -137,7 +216,7 @@ void main() {
       pending.complete(_newProfile);
       await reading;
       expect(store.accountProfile, isNull);
-      expect(store.accountPortraitVersion, isNull);
+      expect(store.accountPortraitVersion, 0);
     },
   );
 
@@ -165,7 +244,7 @@ void main() {
   );
 
   testWidgets(
-    'startup and background return refresh without an official portal',
+    'background return reuses fresh data; the account refresh button bypasses it',
     (tester) async {
       final (store, account, _) = (await tester.runAsync(setup))!;
       account.profileLoader = () async => _newProfile;
@@ -192,8 +271,15 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump(const Duration(milliseconds: 100));
+      expect(account.profileReads, 1);
+      expect(store.accountPortraitVersion, firstVersion);
+      await tester.tap(find.byType(AccountAvatar).hitTestable());
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.text(store.t('refreshProfile')));
+      await tester.pump();
       expect(account.profileReads, 2);
-      expect(store.accountPortraitVersion, isNot(firstVersion));
+      expect(portraits.checks, [_newProfile['avatar']]);
       expect(store.needsOfficialPortal, isFalse);
       expect(store.notice, isNull);
       expect(tester.takeException(), isNull);
@@ -201,7 +287,7 @@ void main() {
   );
 
   testWidgets(
-    'portrait cache version changes the request even for the same avatar URL',
+    'rebuilding a refreshed portrait reuses the exact official disk cache key',
     (tester) async {
       Future<String> portraitUrl(int version) async {
         await tester.pumpWidget(
@@ -213,16 +299,13 @@ void main() {
           ),
         );
         final image = tester.widget<Image>(find.byType(Image));
-        return (image.image as NetworkImage).url;
+        return (image.image as CachedNetworkImageProvider).url;
       }
 
       final first = await portraitUrl(1);
       final second = await portraitUrl(2);
-      expect(first, isNot(second));
-      expect(Uri.parse(second).queryParameters, {
-        'v': '3',
-        '_baha_refresh': '2',
-      });
+      expect(first, _oldProfile['avatar']);
+      expect(second, first);
       expect(tester.takeException(), isNull);
     },
   );

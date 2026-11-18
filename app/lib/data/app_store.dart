@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../core/browser_request.dart';
@@ -161,6 +162,9 @@ class AppStore extends ChangeNotifier {
       store.accountProfile = account['profile'] == null
           ? null
           : AccountProfile.fromJson(account['profile'] as Json);
+      if (store.accountProfile != null && account['profileCheckedAt'] is int) {
+        store._profileCheckedAt = account['profileCheckedAt'] as int;
+      }
       store.favorites = (account['favorites'] as List)
           .map((item) => Anime.fromJson(item as Json))
           .toList();
@@ -247,8 +251,10 @@ class AppStore extends ChangeNotifier {
   List<Anime> favorites = [], searchResults = [];
   List<WatchEntry> history = [];
   AccountProfile? accountProfile;
-  int? accountPortraitVersion;
+  int accountPortraitVersion = 0;
+  int? _profileCheckedAt;
   bool _profileRefreshing = false;
+  bool get profileRefreshing => _profileRefreshing;
   bool accountSynced = false, accountNeedsRefresh = false;
   bool get loggingOut => _loggingOut;
   bool get hasAccount => accountProfile != null || accountSynced;
@@ -992,7 +998,6 @@ class AppStore extends ChangeNotifier {
     _invalidateAccountRequests();
     _resetNotifications();
     accountProfile = null;
-    accountPortraitVersion = null;
     favorites = [];
     history = [];
     accountSynced = false;
@@ -1246,16 +1251,22 @@ class AppStore extends ChangeNotifier {
 
   Future<void> goBack() async => _portal?.goBack();
 
-  Future<void> refreshAccountProfile() async {
+  Future<bool> refreshAccountProfile({bool force = false}) async {
     if (_disposed ||
         !_applicationActive ||
         loggingOut ||
         _profileRefreshing ||
         operation.intent == BrowserIntent.account) {
-      return;
+      return false;
+    }
+    final checkedAt = _profileCheckedAt;
+    if (!force && accountProfile != null && checkedAt != null) {
+      final age = DateTime.now().millisecondsSinceEpoch - checkedAt;
+      if (age >= 0 && age < const Duration(days: 1).inMilliseconds) return true;
     }
     _profileRefreshing = true;
     final generation = _accountGeneration;
+    _emit();
     try {
       final raw = await accountApi.fetchProfile(
         checkCurrent: () {
@@ -1264,20 +1275,45 @@ class AppStore extends ChangeNotifier {
           }
         },
       );
-      if (_disposed || loggingOut || generation != _accountGeneration) return;
-      _applyAccountProfile(
-        raw == null ? null : AccountProfile.fromJson(raw),
-        fresh: true,
-      );
-      if (raw == null) {
+      if (_disposed || generation != _accountGeneration) return false;
+      final profile = raw == null ? null : AccountProfile.fromJson(raw);
+      final avatar = profile?.avatar;
+      final sameOwner =
+          profile != null &&
+          profile.id.toLowerCase() == accountProfile?.id.toLowerCase();
+      if (avatar != null) {
+        if (force ||
+            (sameOwner &&
+                accountProfile?.avatar != null &&
+                accountProfile!.avatar != avatar)) {
+          try {
+            final manager = CachedNetworkImageProvider.defaultCacheManager;
+            if (force) {
+              await manager.downloadFile(
+                avatar,
+                authHeaders: const {'Cache-Control': 'no-cache'},
+              );
+            } else {
+              await manager.getSingleFile(avatar);
+            }
+          } catch (_) {
+            if (sameOwner) rethrow;
+          }
+        }
+        await CachedNetworkImageProvider(avatar).evict();
+      }
+      if (_disposed || generation != _accountGeneration) return false;
+      _applyAccountProfile(profile, fresh: true);
+      if (profile == null) {
         favorites = [];
         history = [];
         accountSynced = false;
         accountNeedsRefresh = false;
       }
-      // Avatar URLs can stay the same after their image content changes.
-      accountPortraitVersion = DateTime.now().microsecondsSinceEpoch;
-      _emit();
+      _profileCheckedAt = profile == null
+          ? null
+          : DateTime.now().millisecondsSinceEpoch;
+      accountPortraitVersion++;
       await _saveAccountSnapshot(
         accountProfile == null
             ? null
@@ -1287,10 +1323,14 @@ class AppStore extends ChangeNotifier {
                 'history': [for (final entry in history) entry.toJson()],
               },
       );
+      return true;
     } catch (_) {
-      // Automatic display-data refresh stays silent and retains offline data.
+      return false;
     } finally {
-      _profileRefreshing = false;
+      if (!_disposed && generation == _accountGeneration) {
+        _profileRefreshing = false;
+        _emit();
+      }
     }
   }
 
@@ -1368,14 +1408,14 @@ class AppStore extends ChangeNotifier {
   void _applyAccountProfile(AccountProfile? profile, {bool fresh = false}) {
     final previous = accountProfile;
     if (previous?.id.toLowerCase() != profile?.id.toLowerCase()) {
-      accountPortraitVersion = null;
+      _profileCheckedAt = null;
       _resetNotifications();
       favorites = [];
       history = [];
       accountSynced = false;
       unawaited(_saveAccountSnapshot(null));
     } else if (!fresh &&
-        accountPortraitVersion != null &&
+        _profileCheckedAt != null &&
         previous != null &&
         profile != null) {
       // The Anime menu can still contain stale login-cookie display data.
@@ -1394,6 +1434,8 @@ class AppStore extends ChangeNotifier {
 
   void _invalidateAccountRequests() {
     _accountGeneration++;
+    _profileRefreshing = false;
+    _profileCheckedAt = null;
     accountLoading = false;
     accountApi.invalidate();
   }
@@ -1487,6 +1529,7 @@ class AppStore extends ChangeNotifier {
       _begin(BrowserIntent.idle);
       _emit();
       await syncAccount(expectedOwner: profile.id);
+      if (accountProfile?.id == profile.id) unawaited(refreshAccountProfile());
       final favorite = _favoriteAfterLogin;
       _favoriteAfterLogin = null;
       if (favorite != null && accountProfile != null) {
@@ -1507,6 +1550,7 @@ class AppStore extends ChangeNotifier {
         _begin(BrowserIntent.idle);
       case 'account-guest':
         _resetNotifications();
+        _profileCheckedAt = null;
         accountProfile = null;
         favorites = [];
         history = [];
@@ -1527,8 +1571,16 @@ class AppStore extends ChangeNotifier {
     _emit();
   }
 
-  Future<void> _saveAccountSnapshot(Json? snapshot) =>
-      _writeAccountData(() => AccountCache(storage).save(snapshot));
+  Future<void> _saveAccountSnapshot(Json? snapshot) {
+    final data = snapshot == null
+        ? null
+        : {
+            ...snapshot,
+            if (_profileCheckedAt != null)
+              'profileCheckedAt': _profileCheckedAt,
+          };
+    return _writeAccountData(() => AccountCache(storage).save(data));
+  }
 
   Future<void> _writeAccountData(
     Future<void> Function() action, {

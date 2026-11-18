@@ -21,6 +21,24 @@ class AccountPage extends StatelessWidget {
     store.connectAccount();
   }
 
+  Future<void> _refreshProfile(BuildContext context) async {
+    final success = await store.refreshAccountProfile(force: true);
+    if (success || !context.mounted || !store.hasAccount) return;
+    await showCupertinoDialog<void>(
+      context: context,
+      builder: (dialog) => CupertinoAlertDialog(
+        title: Text(store.t('refreshProfile')),
+        content: Text(store.t('accountSyncError')),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(dialog),
+            child: Text(store.t('close')),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _logout(BuildContext context) async {
     final success = await store.logoutAccount();
     if (success || !context.mounted) return;
@@ -123,7 +141,16 @@ class AccountPage extends StatelessWidget {
                 ),
               ),
             ),
-            if (store.hasAccount)
+            if (store.hasAccount) ...[
+              _row(
+                context,
+                store.t('refreshProfile'),
+                CupertinoIcons.arrow_clockwise,
+                store.profileRefreshing || store.loggingOut
+                    ? null
+                    : () => _refreshProfile(context),
+                busy: store.profileRefreshing,
+              ),
               _row(
                 context,
                 store.t('logout'),
@@ -131,6 +158,7 @@ class AccountPage extends StatelessWidget {
                 store.loggingOut ? null : () => _logout(context),
                 busy: store.loggingOut,
               ),
+            ],
           ]),
           const SizedBox(height: 22),
           _group(context, [

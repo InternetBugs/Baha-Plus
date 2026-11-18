@@ -120,6 +120,7 @@
   "status": "資料狀態",
   "connectAccount": "連結巴哈姆特帳號",
   "logout": "登出",
+  "refreshProfile": "重新整理帳號資料",
   "logoutFailed": "登出未完整完成，請檢查網路後重新登入並重試。",
   "syncAccount": "同步帳號資料",
   "accountConnected": "帳號資料已同步",

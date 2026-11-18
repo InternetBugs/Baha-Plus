@@ -111,21 +111,10 @@ class AccountPortrait extends StatelessWidget {
     );
     final avatar = profile?.avatar;
     if (avatar == null) return fallback;
-    final uri = Uri.parse(avatar);
-    final url = cacheVersion == null
-        ? avatar
-        : uri
-              .replace(
-                queryParameters: {
-                  ...uri.queryParameters,
-                  '_baha_refresh': '$cacheVersion',
-                },
-              )
-              .toString();
     return ClipOval(
-      child: Image.network(
-        url,
-        key: ValueKey('account-portrait-${profile!.id}'),
+      child: Image(
+        image: CachedNetworkImageProvider(avatar),
+        key: ValueKey((profile!.id, cacheVersion)),
         width: size,
         height: size,
         fit: BoxFit.cover,

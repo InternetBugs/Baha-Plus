@@ -120,6 +120,7 @@
   "status": "数据状态",
   "connectAccount": "连接巴哈姆特账号",
   "logout": "退出登录",
+  "refreshProfile": "刷新账号资料",
   "logoutFailed": "退出登录未完整完成，请检查网络后重新登录并重试。",
   "syncAccount": "同步账号数据",
   "accountConnected": "账号数据已同步",
