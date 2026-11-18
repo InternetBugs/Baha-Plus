@@ -473,11 +473,7 @@ class _CommentsPageState extends State<CommentsPage> {
                     ),
                   )
                 else ...[
-                  if (comment.text.isNotEmpty)
-                    SelectableText(
-                      comment.text,
-                      style: const TextStyle(fontSize: 14, height: 1.65),
-                    ),
+                  if (comment.text.isNotEmpty) _commentText(comment),
                   if (comment.image != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
@@ -547,6 +543,57 @@ class _CommentsPageState extends State<CommentsPage> {
       ),
     );
   }
+
+  Widget _commentText(OfficialComment comment) => LayoutBuilder(
+    builder: (context, constraints) {
+      final style = DefaultTextStyle.of(context).style.copyWith(
+        fontSize: 14,
+        height: 1.65,
+        fontWeight: MediaQuery.boldTextOf(context) ? FontWeight.bold : null,
+      );
+      final painter = TextPainter(
+        text: TextSpan(text: comment.text, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        locale: Localizations.maybeLocaleOf(context),
+        maxLines: collapsedCommentLines,
+        ellipsis: '…',
+      )..layout(maxWidth: constraints.maxWidth);
+      final overLimit = painter.didExceedMaxLines;
+      painter.dispose();
+      if (!overLimit) return SelectableText(comment.text, style: style);
+      final expanded = _expanded.contains(comment.id);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (expanded)
+            SelectableText(comment.text, style: style)
+          else
+            Text(
+              comment.text,
+              maxLines: collapsedCommentLines,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
+          CupertinoButton(
+            padding: EdgeInsets.zero,
+            minimumSize: const Size(44, 36),
+            onPressed: () => setState(() {
+              if (expanded) {
+                _expanded.remove(comment.id);
+              } else {
+                _expanded.add(comment.id);
+              }
+            }),
+            child: Text(
+              store.t(expanded ? 'showLess' : 'showMore'),
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
+      );
+    },
+  );
 
   Widget _commentAction(
     IconData icon,

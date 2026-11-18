@@ -64,10 +64,12 @@ class CommentAttachment extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: compact ? 140 : 260),
+          constraints: compact
+              ? const BoxConstraints.tightFor(width: 56, height: 56)
+              : const BoxConstraints(maxHeight: 260),
           child: Image.network(
             url,
-            fit: BoxFit.contain,
+            fit: compact ? BoxFit.cover : BoxFit.contain,
             alignment: Alignment.centerLeft,
             loadingBuilder: (_, child, progress) => progress == null
                 ? child
@@ -75,7 +77,12 @@ class CommentAttachment extends StatelessWidget {
                     height: compact ? 100 : 160,
                     child: const Center(child: CupertinoActivityIndicator()),
                   ),
-            errorBuilder: (_, error, stack) => _ImageUnavailable(store: store),
+            errorBuilder: (_, error, stack) => compact
+                ? Icon(
+                    CupertinoIcons.photo,
+                    semanticLabel: store.t('imageUnavailable'),
+                  )
+                : _ImageUnavailable(store: store),
           ),
         ),
       ),

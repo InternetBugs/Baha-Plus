@@ -6,6 +6,8 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 
+const collapsedCommentLines = 3;
+
 BoxDecoration communityCardDecoration(
   BuildContext context, {
   double borderRadius = 22,

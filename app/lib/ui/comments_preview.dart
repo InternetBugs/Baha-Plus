@@ -29,6 +29,8 @@ class CompactCommentsPreview extends StatefulWidget {
 }
 
 class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
+  static const _textSize = 13.0;
+  static const _lineHeight = 1.55;
   late Future<CommentPage> _comments;
   late String _videoId;
   final _scroll = ScrollController(keepScrollOffset: false);
@@ -199,72 +201,84 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
       key: ValueKey('preview-comment-${comment.id}'),
       behavior: HitTestBehavior.opaque,
       onTap: _open,
-      child: DecoratedBox(
+      child: Container(
+        height:
+            40 +
+            (MediaQuery.textScalerOf(context).scale(_textSize) * _lineHeight)
+                    .ceilToDouble() *
+                (1 + collapsedCommentLines),
         decoration: communityCardDecoration(context),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CommentAvatar(url: comment.avatar),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CommentAvatar(url: comment.avatar),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          comment.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          comment.time,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: secondary(context),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           child: Text(
-                            comment.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            comment.time,
-                            maxLines: 1,
+                            comment.folded
+                                ? widget.store.t('foldedComment')
+                                : comment.text,
+                            maxLines: collapsedCommentLines,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: secondary(context),
-                              fontSize: 11,
+                              height: _lineHeight,
+                              fontSize: _textSize,
                             ),
                           ),
                         ),
+                        if (!comment.folded && comment.image != null) ...[
+                          const SizedBox(width: 8),
+                          CommentAttachment(
+                            store: widget.store,
+                            url: comment.image!,
+                            compact: true,
+                          ),
+                        ],
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    if (comment.folded || comment.text.isNotEmpty)
-                      Text(
-                        comment.folded
-                            ? widget.store.t('foldedComment')
-                            : comment.text,
-                        style: TextStyle(
-                          color: secondary(context),
-                          height: 1.55,
-                          fontSize: 13,
-                        ),
-                      ),
-                    if (!comment.folded && comment.image != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: CommentAttachment(
-                          store: widget.store,
-                          url: comment.image!,
-                          compact: true,
-                        ),
-                      ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     ),

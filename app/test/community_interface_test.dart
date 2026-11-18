@@ -499,7 +499,9 @@ void main() {
     },
   );
 
-  testWidgets('preview cards fit short and long comments', (tester) async {
+  testWidgets('preview cards stay equally tall and truncate long text', (
+    tester,
+  ) async {
     final (store, portal) = await setup(tester);
     final longText = List.filled(12, '這是一段比較長的留言內容。').join();
     portal.communityResponse = {
@@ -521,8 +523,51 @@ void main() {
     );
     final short = find.byKey(const ValueKey('preview-comment-1'));
     final long = find.byKey(const ValueKey('preview-comment-2'));
-    expect(tester.getSize(short).height, lessThan(tester.getSize(long).height));
-    expect(tester.widget<Text>(find.text(longText)).maxLines, isNull);
+    expect(tester.getSize(short).height, tester.getSize(long).height);
+    final body = tester.renderObject<RenderParagraph>(find.text(longText));
+    expect(body.maxLines, 3);
+    expect(body.didExceedMaxLines, isTrue);
+    expect(body.overflow, TextOverflow.ellipsis);
+    expect(find.text(store.t('showMore')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('board expands only the selected overflowing comment', (
+    tester,
+  ) async {
+    final (store, portal) = await setup(tester);
+    const exactLimit = '一\n二\n三';
+    const longText = '$exactLimit\n四';
+    final wrapped = '換行的長留言' * 25;
+    portal.communityResponse = {
+      ...commentPageJson(),
+      'comments': [
+        {...commentJson('1'), 'text': longText},
+        {...commentJson('2'), 'text': wrapped},
+        {...commentJson('3'), 'text': exactLimit},
+      ],
+    };
+    await mount(
+      tester,
+      CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+    );
+    Finder toggle(String id, String label) => find.descendant(
+      of: find.byKey(ValueKey('comment-$id')),
+      matching: find.text(store.t(label)),
+    );
+    final expand = toggle('1', 'showMore');
+    expect(expand, findsOneWidget);
+    expect(toggle('2', 'showMore'), findsOneWidget);
+    expect(toggle('3', 'showMore'), findsNothing);
+    expect(tester.widget<Text>(find.text(longText)).maxLines, 3);
+    await tester.tap(expand);
+    await frames(tester);
+    expect(find.widgetWithText(SelectableText, longText), findsOneWidget);
+    expect(toggle('2', 'showMore'), findsOneWidget);
+    await tester.tap(toggle('1', 'showLess'));
+    await frames(tester);
+    expect(tester.widget<Text>(find.text(longText)).maxLines, 3);
+    expect(expand, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
