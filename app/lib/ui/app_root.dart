@@ -69,12 +69,35 @@ class _AppRootState extends State<AppRoot>
     _scheduleUpdateCheck();
     _scheduleCatalogRefresh();
     _scheduleProfileRefresh();
+    _scheduleNotificationsRefresh();
   }
+
+  Future<void>? _profileRefresh;
 
   void _scheduleProfileRefresh() =>
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(store.refreshAccountProfile());
+        if (!mounted) return;
+        final refresh = store.refreshAccountProfile();
+        _profileRefresh = refresh;
+        unawaited(refresh);
       });
+
+  void _scheduleNotificationsRefresh() =>
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_refreshNotificationsAtStartup());
+      });
+
+  Future<void> _refreshNotificationsAtStartup() async {
+    // The profile refresh discovers the signed-in account on a cold start, so
+    // wait for it before deciding whether the bell can be populated.
+    final profileRefresh = _profileRefresh;
+    if (profileRefresh != null) await profileRefresh;
+    // An inactive app would make community() throw 'unavailable', which would
+    // leave a visible error state on a start that never showed the main screen.
+    if (!mounted || !store.hasAccount || !store.applicationActive) return;
+    if (store.notificationsLoading) return;
+    await store.refreshNotifications();
+  }
 
   void _scheduleCatalogRefresh() =>
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -289,6 +312,7 @@ class _AppRootState extends State<AppRoot>
       _scheduleUpdateCheck();
       _scheduleCatalogRefresh();
       _scheduleProfileRefresh();
+      _scheduleNotificationsRefresh();
     }
     // The persistent entry belongs to the Navigator's overlay, which is
     // outside this subtree while a theme or language change rebuilds us.
