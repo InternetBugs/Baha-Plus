@@ -43,6 +43,7 @@ class NativeHlsCache {
   NativeHlsCache({
     required Map<String, String> headers,
     this.onChanged,
+    this.onDiagnostic,
     this.maxBytes = 256 * 1024 * 1024,
     http.Client? client,
     Future<Directory> Function()? createDirectory,
@@ -54,6 +55,10 @@ class NativeHlsCache {
   final http.Client _client;
   final Future<Directory> Function() _createDirectory;
   final void Function()? onChanged;
+
+  /// Explains a refused resource to the diagnostic log. Only constant texts
+  /// and playlist tags are reported: signed URLs, headers and keys never are.
+  final void Function(String event, Map<String, Object?> data)? onDiagnostic;
   final int maxBytes;
   final _resources = <String, _Resource>{};
   final _byId = <int, _Resource>{};
@@ -259,9 +264,14 @@ class NativeHlsCache {
       if (request.method == 'GET' && data.isNotEmpty) {
         response.add(Uint8List.sublistView(data, start, end + 1));
       }
-    } catch (_) {
+    } catch (error) {
       // Neither CDN URLs nor response bodies belong in server errors or logs.
       response.statusCode = HttpStatus.badGateway;
+      onDiagnostic?.call('player.cache-reject', {
+        'reason': error is FormatException
+            ? '${error.message}'
+            : error.runtimeType.toString(),
+      });
     } finally {
       try {
         await response.close();
@@ -350,8 +360,9 @@ class NativeHlsCache {
       throw const FormatException('Incomplete media response');
     }
     if (resource.kind == _Kind.playlist) {
+      final body = utf8.decode(data, allowMalformed: true);
       data = Uint8List.fromList(
-        utf8.encode(_rewrite(resource, utf8.decode(data))),
+        utf8.encode(_rewriteOrDescribe(resource, body)),
       );
       resource.memory = data;
     } else if (resource.kind == _Kind.key) {
@@ -397,6 +408,44 @@ class NativeHlsCache {
       ..size = 0;
     _lru.remove(resource);
     onChanged?.call();
+  }
+
+  String _rewriteOrDescribe(_Resource playlist, String body) {
+    try {
+      return _rewrite(playlist, body);
+    } on FormatException {
+      onDiagnostic?.call('player.cache-playlist', _shape(body));
+      rethrow;
+    }
+  }
+
+  /// Describes a refused playlist by its tags alone, which is what tells the
+  /// encryption or playlist form a device was served apart.
+  static Map<String, Object?> _shape(String body) {
+    final methods = <String>{};
+    final formats = <String>{};
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('#EXT-X-KEY:') &&
+          !line.startsWith('#EXT-X-SESSION-KEY:')) {
+        continue;
+      }
+      final method = RegExp(r'METHOD=([A-Za-z0-9-]+)').firstMatch(line);
+      final format = RegExp(r'KEYFORMAT="([^"]{1,48})"').firstMatch(line);
+      if (method != null) methods.add(method[1]!);
+      if (format != null) formats.add(format[1]!);
+    }
+    return {
+      'version': RegExp(r'#EXT-X-VERSION:(\d+)').firstMatch(body)?[1] ?? '',
+      'segments': RegExp(
+        r'^#EXTINF:',
+        multiLine: true,
+      ).allMatches(body).length,
+      'methods': methods.toList(),
+      'keyFormats': formats.toList(),
+      'map': body.contains('#EXT-X-MAP:'),
+      'byterange': body.contains('#EXT-X-BYTERANGE:'),
+      'endlist': body.contains('#EXT-X-ENDLIST'),
+    };
   }
 
   String _rewrite(_Resource playlist, String body) {

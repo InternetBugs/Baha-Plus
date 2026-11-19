@@ -98,6 +98,14 @@ iOS 和 Android 使用现有 AVPlayer／ExoPlayer。Windows 派生调试工程�
 AVPlayer 拒绝本机清单时同样退回原生直连：`initialize` 阶段解码器加载失败会关闭本次
 会话缓存，并以官方 CDN 地址重新加载一次，记录 `player.native-cache-bypass`、
 首次失败阶段与平台错误文本（诊断上传前会移除其中的地址）。
+缓存拒绝某个资源时额外记录 `player.cache-reject`（只含固定原因文本）；被拒清单另记
+`player.cache-playlist`，只含版本、分片数、加密方式与 `KEYFORMAT`、是否有初始化片段
+或字节范围，不含任何 URI，便于区分设备拿到的是普通 AES-128 还是 FairPlay 清单。
+
+官方页面与媒体 CDN 使用不同身份：`OfficialUserAgent` 供官方接口和 WebView 共用，
+以维持 Cloudflare 放行；媒体请求在 iOS 固定使用桌面 Chromium 身份
+（`OfficialUserAgent.fallback`），因为 0.5.5 用该身份在 iPhone 正常播放，而 0.5.6 把
+Safari 身份带进 CDN 后解码器在初始化阶段失败。Android 本来就呈现桌面身份，不受影响。
 
 缓存服务只监听 `127.0.0.1` 的随机端口，以随机会话路径和预先登记的资源编号寻址。
 仅允许官方媒体 CDN 的 HTTPS 源，不跟随重定向，不把账号 Cookie 发送给 CDN。

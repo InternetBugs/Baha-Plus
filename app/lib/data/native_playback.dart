@@ -7,6 +7,7 @@ import '../core/playback_state.dart';
 import 'app_diagnostics.dart';
 import 'native_download_speed.dart';
 import 'native_hls_cache.dart';
+import 'official_user_agent.dart';
 
 class NativePlaybackSource {
   NativePlaybackSource.fromJson(Json json)
@@ -210,7 +211,11 @@ class NativePlayback extends ChangeNotifier {
         (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)) {
       final cache = _cache =
           _cacheFactory?.call() ??
-          NativeHlsCache(headers: _mediaHeaders, onChanged: _publish);
+          NativeHlsCache(
+            headers: _mediaHeaders,
+            onChanged: _publish,
+            onDiagnostic: diagnostics.record,
+          );
       try {
         await cache.start();
       } catch (error) {
@@ -262,8 +267,18 @@ class NativePlayback extends ChangeNotifier {
   Map<String, String> get _mediaHeaders => {
     'Origin': 'https://ani.gamer.com.tw',
     'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
-    if (userAgent.isNotEmpty) 'User-Agent': userAgent,
+    'User-Agent': _mediaUserAgent,
   };
+
+  /// Official pages need the WebView's own agent for its Cloudflare clearance,
+  /// but the media CDN has always been addressed with the desktop Chromium
+  /// identity: 0.5.5 played on iPhone with it, and the AVPlayer session in
+  /// 0.5.6 failed once the Safari agent reached the CDN. Android already uses
+  /// a desktop presentation, so only iOS needs the override.
+  String get _mediaUserAgent =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+      ? OfficialUserAgent.fallback
+      : userAgent;
 
   /// AVPlayer/ExoPlayer report only the platform error text, which names the
   /// failing layer. Keep a bounded printable copy; diagnostics also strips any
