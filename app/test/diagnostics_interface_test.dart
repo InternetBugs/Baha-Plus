@@ -24,6 +24,18 @@ void main() {
     }
   }
 
+  /// Exporting a report writes a real file before the share callback runs, so
+  /// a fixed frame budget races a loaded CI runner. Wait for the effect
+  /// itself, with a deadline so a share that never happens still fails.
+  Future<void> drainUntil(WidgetTester tester, bool Function() done) async {
+    for (var frame = 0; frame < 200 && !done(); frame++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
   Future<(AppStore, List<(String, Rect)>)> launch(
     WidgetTester tester, {
     String language = 'zh-Hans',
@@ -166,6 +178,7 @@ void main() {
       await tap(tester, store, 'diagnosticsStop');
       expect(store.diagnostics.enabled, isFalse);
       await tap(tester, store, 'diagnosticsShare');
+      await drainUntil(tester, () => shared.isNotEmpty);
       expect(shared, hasLength(1));
       expect(shared.single.$1, contains('capture.started'));
       expect(shared.single.$1, contains('capture.stopped'));

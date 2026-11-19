@@ -17,6 +17,16 @@
   记录 `player.native-cache-bypass`；`player.native-load-failed` 增加经清洗的
   `detail`（仅可打印 ASCII，诊断层再移除地址）；`Info.plist` 增加
   `NSAllowsArbitraryLoadsForMedia`；下载速率计数器在缓存被关闭后返回空读数。
+  版本对照进一步缩小范围：`b7f403d`（回环缓存）已包含在 `v0.5.5` 内且酥鱼确认
+  `0.5.5` 在 iPhone 正常播放，`4a3a3d3`（统一 User-Agent）只进入 `0.5.6`，
+  因此回环服务本身可用，`0.5.5`→`0.5.6` 唯一与播放相关的差异是媒体请求身份。
+  据此再改为：iOS 媒体请求固定使用桌面 Chromium 身份（`OfficialUserAgent.fallback`，
+  与 `0.5.5` 的常量逐字节相同），官方接口与 WebView 继续使用 `OfficialUserAgent`
+  以维持 Cloudflare 放行；缓存新增 `player.cache-reject`（固定原因文本）与
+  `player.cache-playlist`（版本、分片数、`METHOD`／`KEYFORMAT`、初始化片段、字节范围，
+  不含 URI）两个诊断事件，用于区分普通 AES-128 与 FairPlay 清单。
+  同一轮 CI 中 `diagnostics_interface_test` 的 zh-Hant 分享用例因固定帧预算与实际文件
+  写入竞速失败，改为等待分享回执（上限 2 秒）后再断言，避免 CI 负载造成假失败。
   本机没有 Flutter SDK，本轮只做了源码核对，未运行 `flutter analyze`／`flutter test`，
   也未构建 IPA 或进行 iPhone 验收；需重新触发 Manual test build 后按
   [原生 HTTP 播放](native-http-playback.md#ios-会话分片缓存)复测并回传诊断。
