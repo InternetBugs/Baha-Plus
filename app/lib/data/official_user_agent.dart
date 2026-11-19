@@ -8,7 +8,7 @@ import '../core/browser_presentation.dart';
 /// comment, danmaku and playback HTTP all present [value], derived from the
 /// installed WebView, so cookies, device checks and Cloudflare clearance are
 /// never created under one agent and replayed under another. Ordinary login
-/// browsing keeps the WebView's own agent.
+/// browsing keeps the WebView's own agent. Media CDN traffic keeps [media].
 abstract final class OfficialUserAgent {
   /// Used before resolution finishes and on hosts without a WebView agent
   /// (the Windows debug build). It must stay a desktop Chromium string: the
@@ -29,6 +29,12 @@ abstract final class OfficialUserAgent {
   /// Every official HTTP request and the native media backend send this.
   static String get value => _value ??=
       Platform.isAndroid ? desktopChromiumUserAgent(device) : device;
+
+  /// The identity media CDN requests use. On iOS it stays the desktop Chromium
+  /// presentation: 0.5.5 played there with it, and 0.5.6 failed at decoder
+  /// initialization once the Safari agent reached the CDN. The official pages
+  /// keep [value] because their Cloudflare clearance belongs to the WebView.
+  static String get media => Platform.isIOS ? fallback : value;
 
   /// Reads the installed engine once. Failure keeps [fallback] rather than
   /// letting a partial agent split the identity across requests. Hosts with

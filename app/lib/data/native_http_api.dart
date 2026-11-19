@@ -130,12 +130,19 @@ class NativeHttpApi {
     this.onEvent,
     Future<NativeHttpCookieJar> Function()? cookieLoader,
     String? userAgent,
+    String? mediaUserAgent,
   }) : _client = client ?? http.Client(),
        _cookieLoader = cookieLoader,
-       userAgent = userAgent ?? OfficialUserAgent.value;
+       userAgent = userAgent ?? OfficialUserAgent.value,
+       mediaUserAgent = mediaUserAgent ?? OfficialUserAgent.media;
 
   /// Snapshotted so one session never mixes two agents.
   final String userAgent;
+
+  /// Media CDN identity. Official pages and APIs keep [userAgent] because
+  /// their Cloudflare clearance belongs to that agent; the CDN has always been
+  /// addressed with the desktop presentation.
+  final String mediaUserAgent;
   final http.Client _client;
   final Duration timeout;
   final void Function(String stage, int? code)? onEvent;
@@ -603,7 +610,9 @@ class NativeHttpApi {
           abortTrigger: abort.future,
         )..followRedirects = false;
         request.headers.addAll({
-          'User-Agent': userAgent,
+          'User-Agent': uri.host == 'bahamut.akamaized.net'
+              ? mediaUserAgent
+              : userAgent,
           'Origin': 'https://ani.gamer.com.tw',
           'Referer': _web('/animeVideo.php', {'sn': _video}).toString(),
           'Accept': '*/*',

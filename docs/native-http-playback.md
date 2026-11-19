@@ -102,9 +102,10 @@ AVPlayer 拒绝本机清单时同样退回原生直连：`initialize` 阶段解�
 `player.cache-playlist`，只含版本、分片数、加密方式与 `KEYFORMAT`、是否有初始化片段
 或字节范围，不含任何 URI，便于区分设备拿到的是普通 AES-128 还是 FairPlay 清单。
 
-官方页面与媒体 CDN 使用不同身份：`OfficialUserAgent` 供官方接口和 WebView 共用，
-以维持 Cloudflare 放行；媒体请求在 iOS 固定使用桌面 Chromium 身份
-（`OfficialUserAgent.fallback`），因为 0.5.5 用该身份在 iPhone 正常播放，而 0.5.6 把
+官方页面与媒体 CDN 使用不同身份：`OfficialUserAgent.value` 供官方接口和 WebView 共用，
+以维持 Cloudflare 放行；`OfficialUserAgent.media` 只在 iOS 换成桌面 Chromium 身份
+（`OfficialUserAgent.fallback`，与 `0.5.5` 的常量逐字节相同），`NativeHttpApi` 取清单和
+`NativePlayback` 取分片都用它，因为 0.5.5 用该身份在 iPhone 正常播放，而 0.5.6 把
 Safari 身份带进 CDN 后解码器在初始化阶段失败。Android 本来就呈现桌面身份，不受影响。
 
 缓存服务只监听 `127.0.0.1` 的随机端口，以随机会话路径和预先登记的资源编号寻址。
