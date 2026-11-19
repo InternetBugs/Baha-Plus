@@ -200,6 +200,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          BUILD_NUMBER: ${{ needs.validate.outputs.build_number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -216,7 +218,14 @@ jobs:
             BahaPlus-iOS-unsigned.ipa
           )
           sha256sum "${packages[@]}" > SHA256SUMS.txt
+          python3 ../tools/altsource.py \
+            --version "$RELEASE_VERSION" \
+            --build-number "$BUILD_NUMBER" \
+            --ipa BahaPlus-iOS-unsigned.ipa \
+            --date "$(date -u +%F)" \
+            --repository "$GH_REPO" \
+            --output AltSource.json
           args=(--verify-tag --draft --title "$RELEASE_TAG" --notes-file release-notes.md)
           gh release create "$RELEASE_TAG" "${args[@]}" \
-            "${packages[@]}" SHA256SUMS.txt
+            "${packages[@]}" SHA256SUMS.txt AltSource.json
           gh release edit "$RELEASE_TAG" --draft=false

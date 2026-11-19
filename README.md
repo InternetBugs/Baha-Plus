@@ -77,11 +77,17 @@
 
 ## 下载安装
 
-请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本。
+<div align="center">
+  <a href="https://intradeus.github.io/http-protocol-redirector?r=altstore://source?url=https://github.com/InternetBugs/Baha-Plus/releases/latest/download/AltSource.json"><img src="assets/badges/add_to_altstore.png" height="60" alt="Add to AltStore"></a>
+  <a href="https://intradeus.github.io/http-protocol-redirector?r=sidestore://source?url=https://github.com/InternetBugs/Baha-Plus/releases/latest/download/AltSource.json"><img src="assets/badges/add_to_sidestore.png" height="60" alt="Add to SideStore"></a>
+  <a href="https://intradeus.github.io/http-protocol-redirector?r=feather://source/https://github.com/InternetBugs/Baha-Plus/releases/latest/download/AltSource.json"><img src="assets/badges/add_to_feather.png" height="60" alt="Add to Feather"></a>
+</div>
+
+三个按钮用于在 iOS 的签名工具中添加 Baha Plus 应用源，安装与后续更新都在 AltStore、SideStore 或 Feather 内完成，签名仍使用你自己的 Apple 证书。也可以前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 手动下载。
 
 - Android 需要 Android 7.0（API 24）或更高版本。
 - Android APK 按架构分别提供：多数手机选择 `arm64-v8a`，32 位 ARM 设备选择 `armeabi-v7a`，64 位 Intel／AMD 设备或模拟器选择 `x86_64`。
-- iOS 版本需要自行解决证书签名问题。
+- iOS 安装包为未签名 IPA，需要自行解决证书签名问题；使用上面的应用源可由签名工具完成。
 
 想自行构建的用户可以参考 [开发与构建](docs/development.md)。
 
@@ -110,7 +116,7 @@ Baha Plus 通过 HTTP 请求官方播放授权，并实际播放官方广告。�
 
 **iPhone 如何安装？**
 
-请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本，并自行解决证书签名问题。
+请前往 [GitHub Releases](https://github.com/InternetBugs/Baha-Plus/releases) 下载最新版本，并自行解决证书签名问题。也可以使用「下载安装」一节的 “Add to AltStore／SideStore／Feather” 按钮添加应用源，由这些工具用自己的证书签名安装与更新。
 
 **遇到问题怎么办？**
 
