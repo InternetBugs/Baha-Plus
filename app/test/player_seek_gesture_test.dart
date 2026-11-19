@@ -557,6 +557,41 @@ void main() {
   });
 
   testSeekWidgets(
+    'a pull starting in the top exempt strip never seeks',
+    (tester) async {
+      final portal = await launch(tester);
+      final rect = tester.getRect(surface);
+      expect(rect.top, 0);
+      // System pull-down territory: straight down, slightly slanted and
+      // clearly diagonal pulls must all stay out of the seek gesture.
+      for (final movement in [
+        const Offset(0, 120),
+        const Offset(20, 120),
+        const Offset(120, 160),
+        const Offset(-120, 160),
+      ]) {
+        final gesture = await tester.startGesture(rect.topCenter);
+        await gesture.moveBy(movement);
+        await tester.pump();
+        expect(preview, findsNothing, reason: 'Movement: $movement');
+        await gesture.up();
+        await tester.pump();
+        expect(preview, findsNothing, reason: 'Movement: $movement');
+        expect(portal.commands, isEmpty, reason: 'Movement: $movement');
+        expect(position(tester), 600, reason: 'Movement: $movement');
+      }
+      // The strip is only the top edge; a drag below it still seeks.
+      await tester.dragFrom(
+        rect.topCenter + const Offset(0, 60),
+        const Offset(85, 0),
+      );
+      await tester.pump();
+      expect(portal.commands, [('seek', 612.0)]);
+      expect(position(tester), 612);
+    },
+  );
+
+  testSeekWidgets(
     'locked, advertising and unavailable playback cannot swipe seek',
     (tester) async {
       final portal = await launch(tester);

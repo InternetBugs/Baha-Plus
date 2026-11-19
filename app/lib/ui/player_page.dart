@@ -43,6 +43,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   String _controlState = '';
   Timer? _hideTimer;
   final _videoSurfaceKey = GlobalKey(debugLabel: 'player-video-surface');
+  // The top strip of the landscape surface never starts a seek. Pulling down
+  // from the screen edge belongs to the system panel (status bar, notification
+  // shade, Control Center), so a slightly slanted pull must not fast-forward.
+  static const double _topSeekExemptHeight = 56;
 
   @override
   void initState() {
@@ -265,6 +269,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (!_canSwipeSeek || _scrub != null) return;
     final surface = _videoSurfaceKey.currentContext?.findRenderObject();
     if (surface is! RenderBox || !surface.hasSize || surface.size.width <= 0) {
+      return;
+    }
+    // DragStartBehavior.down reports where the finger landed. Ignore the top
+    // strip so a pull-down for the system panel is never read as a seek.
+    if (surface.globalToLocal(details.globalPosition).dy <
+        MediaQuery.paddingOf(context).top + _topSeekExemptHeight) {
       return;
     }
     final state = store.playback.value;
