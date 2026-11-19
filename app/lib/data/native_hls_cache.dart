@@ -269,7 +269,7 @@ class NativeHlsCache {
       response.statusCode = HttpStatus.badGateway;
       onDiagnostic?.call('player.cache-reject', {
         'reason': error is FormatException
-            ? '${error.message}'
+            ? error.message
             : error.runtimeType.toString(),
       });
     } finally {
