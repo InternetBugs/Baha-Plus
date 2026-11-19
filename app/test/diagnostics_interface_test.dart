@@ -102,7 +102,10 @@ void main() {
     );
     await drain(tester);
     await tester.tap(find.text(store.t('diagnosticsTitle')));
-    await drain(tester);
+    await drainUntil(
+      tester,
+      () => find.byType(DiagnosticsPage).evaluate().isNotEmpty,
+    );
     return (store, shared);
   }
 
@@ -151,12 +154,13 @@ void main() {
         expect(button.bottom, lessThan(size.height - 24));
         expect(button.width, greaterThan(size.width * .6));
         await tester.tap(start);
-        await drain(tester);
+        await drainUntil(tester, () => store.diagnostics.enabled);
         expect(store.diagnostics.enabled, isTrue);
         final stop = find.text(store.t('diagnosticsStop'));
+        await drainUntil(tester, () => stop.hitTestable().evaluate().isNotEmpty);
         expect(stop.hitTestable(), findsOneWidget);
         await tester.tap(stop);
-        await drain(tester);
+        await drainUntil(tester, () => !store.diagnostics.enabled);
         expect(store.diagnostics.enabled, isFalse);
         expect(tester.takeException(), isNull);
       });
@@ -172,10 +176,12 @@ void main() {
       expect(find.byType(DiagnosticsPage), findsOneWidget);
       expect(find.text(store.t('diagnosticsStopped')), findsOneWidget);
       await tap(tester, store, 'diagnosticsStart');
+      await drainUntil(tester, () => store.diagnostics.enabled);
       expect(store.diagnostics.enabled, isTrue);
       expect(find.text(store.t('diagnosticsRecording')), findsOneWidget);
       store.selectTab(2);
       await tap(tester, store, 'diagnosticsStop');
+      await drainUntil(tester, () => !store.diagnostics.enabled);
       expect(store.diagnostics.enabled, isFalse);
       await tap(tester, store, 'diagnosticsShare');
       await drainUntil(tester, () => shared.isNotEmpty);
@@ -188,6 +194,7 @@ void main() {
       expect(shared.single.$2.height, greaterThan(0));
       await tap(tester, store, 'diagnosticsPreview');
       final reportHeading = find.text('Baha Plus diagnostic report (v1)');
+      await drainUntil(tester, () => reportHeading.evaluate().isNotEmpty);
       expect(reportHeading, findsOneWidget);
       final previewAppBar = find.descendant(
         of: find.ancestor(
@@ -211,9 +218,13 @@ void main() {
     (tester) async {
       final (store, shared) = await launch(tester, shareFails: true);
       await tap(tester, store, 'diagnosticsStart');
+      await drainUntil(tester, () => store.diagnostics.enabled);
       await tap(tester, store, 'diagnosticsStop');
+      await drainUntil(tester, () => !store.diagnostics.enabled);
       await tap(tester, store, 'diagnosticsShare');
-      expect(find.text(store.t('diagnosticsShareFailed')), findsOneWidget);
+      final failureNote = find.text(store.t('diagnosticsShareFailed'));
+      await drainUntil(tester, () => failureNote.evaluate().isNotEmpty);
+      expect(failureNote, findsOneWidget);
       expect(shared, isEmpty);
       await tester.tap(find.text(store.t('close')).last);
       await drain(tester);
@@ -235,6 +246,7 @@ void main() {
         ),
       );
       await tap(tester, store, 'diagnosticsCopy');
+      await drainUntil(tester, () => clipboard != null);
       expect(clipboard, contains('capture.started'));
       expect(find.text(store.t('diagnosticsCopied')), findsOneWidget);
       await tester.tap(find.text(store.t('close')).last);
