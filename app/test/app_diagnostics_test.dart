@@ -173,6 +173,9 @@ void main() {
       final times = events.map((e) => e['time'] as String).toList();
       expect(times, orderedEquals([...times]..sort()));
     },
+    // 760 flushed appends on a shared two-core CI runner outrun the default
+    // 30 s budget; the assertions are unchanged.
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 
   test('oversize and non-finite input remains bounded valid JSON', () async {

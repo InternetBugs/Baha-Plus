@@ -31,6 +31,7 @@ class AppDiagnostics extends ChangeNotifier {
   Future<void>? _initializing;
   Future<void> _pending = Future.value();
   bool _enabled = false, _writeFailed = false, _hooksInstalled = false;
+  bool _disposed = false;
   bool _hasLogs = false;
   int _queuedEntries = 0, _droppedEntries = 0, _exportSequence = 0;
   int _currentBytes = 0;
@@ -40,6 +41,14 @@ class AppDiagnostics extends ChangeNotifier {
   File get _current => File('${_directory!.path}/current.jsonl');
   File get _previous => File('${_directory!.path}/previous.jsonl');
   File get _flag => File('${_directory!.path}/enabled');
+
+  @override
+  void dispose() {
+    // Queued writes outlive their producer; they must not notify a disposed
+    // notifier when a session ends mid-write.
+    _disposed = true;
+    super.dispose();
+  }
 
   Future<void> initialize() async {
     if (_directory != null) return;
@@ -139,7 +148,7 @@ class AppDiagnostics extends ChangeNotifier {
     _queuedEntries++;
     if (!_hasLogs) {
       _hasLogs = true;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
     _pending = _pending
         .then((_) async {
@@ -160,7 +169,7 @@ class AppDiagnostics extends ChangeNotifier {
         })
         .catchError((Object _) {
           _writeFailed = true;
-          notifyListeners();
+          if (!_disposed) notifyListeners();
         })
         .whenComplete(() => _queuedEntries--);
   }
