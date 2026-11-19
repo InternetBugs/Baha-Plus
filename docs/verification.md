@@ -4,6 +4,22 @@
 
 ## 已验证
 
+- 2026-11-20 iOS 播放失败（`0.5.6`，酥鱼）定位到 AVPlayer 阶段：诊断日志显示
+  `page`／`device`／`metadata`／`policy`／`source`／`playlist`／`media-playlist`
+  全部 200，清单时长 1425.0074 秒、选中 1080p，随后
+  `player.native-load-failed {stage:"initialize", elapsedMs:541, code:"VideoError"}`，
+  `player.http-failed {stage:"protocol-format"}` 只是非 HTTP 异常的回退标签。
+  `VideoError` 来自 `video_player_avfoundation` 的 `sendFailedToLoadVideoEvent`，
+  即 `AVPlayerItem.status == .failed`，平台只给出这个固定 code，真实 NSError 文本
+  此前被丢弃。回环排查依据：ATS 只作用于 URL Loading System 的公开域名，
+  IP 与本机名不受限制，`Info.plist` 的 `127.0.0.1` 例外不是失败原因。
+  改为：`initialize` 阶段本机清单失败时关闭会话缓存、改用官方 CDN 地址重载一次并
+  记录 `player.native-cache-bypass`；`player.native-load-failed` 增加经清洗的
+  `detail`（仅可打印 ASCII，诊断层再移除地址）；`Info.plist` 增加
+  `NSAllowsArbitraryLoadsForMedia`；下载速率计数器在缓存被关闭后返回空读数。
+  本机没有 Flutter SDK，本轮只做了源码核对，未运行 `flutter analyze`／`flutter test`，
+  也未构建 IPA 或进行 iPhone 验收；需重新触发 Manual test build 后按
+  [原生 HTTP 播放](native-http-playback.md#ios-会话分片缓存)复测并回传诊断。
 - 2026-11-14 经酥鱼授权，使用本机 Edge 已登录的巴哈姆特会话验证退出接口。
   GET `user.gamer.com.tw/logout.php` 只返回“确定登出”的确认页，不会结束会话；
   在浏览器内读取当次确认令牌并 POST 同一地址后，重新打开“我的动画”跳转至官方登录页。

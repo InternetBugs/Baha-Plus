@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<key>NSAllowsArbitraryLoadsForMedia</key>
+		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>127.0.0.1</key>

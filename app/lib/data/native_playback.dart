@@ -124,7 +124,12 @@ class NativePlayback extends ChangeNotifier {
     onSpeed: _downloadChanged,
     counters: _cache == null
         ? null
-        : () => {'bytes': _cache!.downloadedBytes, 'source': 0},
+        : () {
+            final cache = _cache;
+            return cache == null
+                ? const <String, int>{}
+                : {'bytes': cache.downloadedBytes, 'source': 0};
+          },
   );
   double _downloadBytesPerSecond = 0;
   VideoPlayerController? video;
@@ -232,9 +237,25 @@ class NativePlayback extends ChangeNotifier {
         ? preferredQuality
         : 0;
     _position = source.position;
-    if (!await _load(_quality, initial: true)) {
-      throw StateError('Native media initialization failed');
+    var loaded = await _load(_quality, initial: true);
+    if (!loaded && _cache != null) {
+      // Some iOS releases refuse the loopback playlist before decoding
+      // anything. Playback must survive that: drop the session cache and load
+      // the signed CDN playlist directly.
+      final cache = _cache;
+      final code = failureCode;
+      _cache = null;
+      await cache
+          ?.close()
+          .timeout(const Duration(seconds: 2), onTimeout: () {});
+      if (_disposed) return;
+      loaded = await _load(_quality, initial: true);
+      diagnostics.record('player.native-cache-bypass', {
+        'code': code,
+        'fallback': loaded,
+      });
     }
+    if (!loaded) throw StateError('Native media initialization failed');
     _syncDownloadSampling();
   }
 
@@ -243,6 +264,18 @@ class NativePlayback extends ChangeNotifier {
     'Referer': 'https://ani.gamer.com.tw/animeVideo.php',
     if (userAgent.isNotEmpty) 'User-Agent': userAgent,
   };
+
+  /// AVPlayer/ExoPlayer report only the platform error text, which names the
+  /// failing layer. Keep a bounded printable copy; diagnostics also strips any
+  /// URL or path it may embed.
+  static String _describeFailure(Object error) {
+    if (error is! PlatformException) return '';
+    final text = error.message
+        ?.replaceAll(RegExp(r'[^\x20-\x7E]+'), ' ')
+        .trim();
+    if (text == null || text.isEmpty) return '';
+    return text.length > 320 ? text.substring(0, 320) : text;
+  }
 
   Future<bool> _load(int quality, {bool initial = false}) async {
     final generation = ++_generation;
@@ -316,10 +349,12 @@ class NativePlayback extends ChangeNotifier {
       failureCode = code != null && RegExp(r'^[\w.-]{1,64}$').hasMatch(code)
           ? code
           : error.runtimeType.toString();
+      final detail = _describeFailure(error);
       diagnostics.record('player.native-load-failed', {
         'stage': stage,
         'elapsedMs': elapsed.elapsedMilliseconds,
         'code': failureCode,
+        if (detail.isNotEmpty) 'detail': detail,
       });
       if (const bool.fromEnvironment('BAHA_DIAGNOSTICS')) {
         debugPrint(
