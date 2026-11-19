@@ -25,9 +25,11 @@ void main() {
   }
 
   /// Exporting a report writes a real file before the share callback runs, so
-  /// a fixed frame budget races a loaded CI runner. Wait for the effect
-  /// itself, with a deadline so a share that never happens still fails.
+  /// a fixed frame budget races a loaded CI runner. Settle the standard budget
+  /// first, then wait for the effect itself, with a deadline so a share that
+  /// never happens still fails.
   Future<void> drainUntil(WidgetTester tester, bool Function() done) async {
+    await drain(tester);
     for (var frame = 0; frame < 200 && !done(); frame++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 10)),
