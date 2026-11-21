@@ -161,25 +161,34 @@ void main() {
     );
 
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final proxy = _DeviceProxy(
+    final brokenEntriesProxy = _DeviceProxy(
+      null,
+      entries: [Proxy.fromJson({'host': '', 'port': '', 'type': 'https'})],
+    );
+    final brokenEntriesClient = SystemHttpOverrides(
+      platformProxy: brokenEntriesProxy,
+    ).createHttpClient(null);
+    final throwingProxy = _DeviceProxy(
       null,
       error: const FormatException('Malformed plugin JSON'),
     );
-    final client = SystemHttpOverrides(
-      platformProxy: proxy,
+    final throwingClient = SystemHttpOverrides(
+      platformProxy: throwingProxy,
     ).createHttpClient(null);
     addTearDown(() async {
-      client.close(force: true);
+      brokenEntriesClient.close(force: true);
+      throwingClient.close(force: true);
       await server.close(force: true);
     });
-    final handled = server.first.then((request) async {
+    final handled = server.take(2).forEach((request) async {
       request.response.write('direct-fallback');
       await request.response.close();
     });
-    final response = await (await client.getUrl(
-      Uri.parse('http://127.0.0.1:${server.port}/direct'),
-    )).close();
-    expect(await utf8.decodeStream(response), 'direct-fallback');
+    final uri = Uri.parse('http://127.0.0.1:${server.port}/direct');
+    final firstResponse = await (await brokenEntriesClient.getUrl(uri)).close();
+    expect(await utf8.decodeStream(firstResponse), 'direct-fallback');
+    final secondResponse = await (await throwingClient.getUrl(uri)).close();
+    expect(await utf8.decodeStream(secondResponse), 'direct-fallback');
     await handled;
   });
 }
