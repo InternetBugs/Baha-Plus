@@ -6,6 +6,22 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../core/models.dart';
+import 'official_user_agent.dart';
+
+class _PooledClient {
+  _PooledClient(this.client);
+  final http.Client client;
+  int inFlight = 0;
+  bool retired = false;
+  bool closed = false;
+
+  void closeIfUnused() {
+    if (!closed && retired && inFlight == 0) {
+      closed = true;
+      client.close();
+    }
+  }
+}
 
 /// Anonymous, read-only App catalog and video metadata.
 ///
@@ -14,23 +30,44 @@ import '../core/models.dart';
 class OfficialAppApi {
   OfficialAppApi({
     http.Client? client,
+    http.Client Function()? clientFactory,
+    String? userAgent,
     this.timeout = const Duration(seconds: 12),
-  }) : _client = client ?? http.Client() {
+    this.retryDelay = const Duration(milliseconds: 250),
+  }) : _ownsClient = client == null,
+       _clientFactory = clientFactory ?? http.Client.new,
+       _pool = _PooledClient(
+         client ?? (clientFactory?.call() ?? http.Client()),
+       ),
+       _userAgent = userAgent {
     if (timeout <= Duration.zero) {
       throw ArgumentError.value(timeout, 'timeout');
     }
+    if (retryDelay < Duration.zero) {
+      throw ArgumentError.value(retryDelay, 'retryDelay');
+    }
+    _pools.add(_pool);
   }
 
   static const maxResponseBytes = 2000000;
   static final _videoId = RegExp(r'^[1-9][0-9]{0,9}$');
 
-  final http.Client _client;
+  final bool _ownsClient;
+  final http.Client Function() _clientFactory;
+  final String? _userAgent;
   final Duration timeout;
+  final Duration retryDelay;
+  _PooledClient _pool;
+  final _pools = <_PooledClient>{};
   final _requests = <Completer<void>>{};
   bool _disposed = false;
 
   Future<Catalog> fetchCatalog() async {
-    final data = await _get('index.php');
+    final data = await _get(
+      'index.php',
+      maxRetries: 2,
+      retryTimeout: true,
+    );
     try {
       return OfficialAppMetadata.catalog(data);
     } on FormatException {
@@ -42,7 +79,12 @@ class OfficialAppApi {
 
   Future<OfficialAppVideo> fetchVideo(String videoId) async {
     _validateVideoId(videoId);
-    final data = await _get('video.php', {'sn': videoId});
+    final data = await _get(
+      'video.php',
+      query: {'sn': videoId},
+      maxRetries: 1,
+      retryTimeout: false,
+    );
     try {
       final video = OfficialAppVideo.fromJson(data['video'] as Json);
       if (video.videoId != videoId) {
@@ -62,7 +104,12 @@ class OfficialAppApi {
   }) async {
     _validateVideoId(animeId);
     _validateVideoId(videoId);
-    final data = await _get('video.php', {'sn': videoId});
+    final data = await _get(
+      'video.php',
+      query: {'sn': videoId},
+      maxRetries: 1,
+      retryTimeout: true,
+    );
     late final OfficialAppVideo video;
     late final Json anime;
     late final AnimeDetail detail;
@@ -99,6 +146,8 @@ class OfficialAppApi {
         'sn': fanId,
         't': '4',
       }),
+      maxRetries: 0,
+      retryTimeout: false,
     );
     try {
       final rating = data['rating'] as Json;
@@ -139,7 +188,7 @@ class OfficialAppApi {
         ].contains(uri.path)) {
       throw const OfficialAppApiException('invalid-catalog-endpoint');
     }
-    return _request(uri);
+    return _request(uri, maxRetries: 1, retryTimeout: false);
   }
 
   static void _validateVideoId(String videoId) {
@@ -148,12 +197,27 @@ class OfficialAppApi {
     }
   }
 
-  Future<Json> _get(String endpoint, [Map<String, String>? query]) => _getData(
+  Future<Json> _get(
+    String endpoint, {
+    Map<String, String>? query,
+    int maxRetries = 1,
+    bool retryTimeout = false,
+  }) => _getData(
     Uri.https('api.gamer.com.tw', '/mobile_app/anime/v4/$endpoint', query),
+    maxRetries: maxRetries,
+    retryTimeout: retryTimeout,
   );
 
-  Future<Json> _getData(Uri uri) async {
-    final body = await _request(uri);
+  Future<Json> _getData(
+    Uri uri, {
+    int maxRetries = 1,
+    bool retryTimeout = false,
+  }) async {
+    final body = await _request(
+      uri,
+      maxRetries: maxRetries,
+      retryTimeout: retryTimeout,
+    );
     if (body['error'] != null) {
       throw OfficialAppApiException(
         'official-rejected',
@@ -176,16 +240,85 @@ class OfficialAppApi {
     return code is int ? code : null;
   }
 
-  Future<Json> _request(Uri uri) async {
+  static bool _isRetryable(
+    OfficialAppApiException error, {
+    required bool retryTimeout,
+  }) {
+    if (error.code == 'network' || error.code == 'tls') return true;
+    if (error.code == 'timeout') return retryTimeout;
+    if (error.code == 'http-429') return true;
+    if (error.code.startsWith('http-')) {
+      final status = int.tryParse(error.code.substring(5));
+      if (status != null && status >= 500 && status <= 599) return true;
+    }
+    return false;
+  }
+
+  void _rotateClient() {
+    if (!_ownsClient || _disposed) return;
+    final previous = _pool;
+    previous.retired = true;
+    previous.closeIfUnused();
+    if (previous.closed) _pools.remove(previous);
+    _pool = _PooledClient(_clientFactory());
+    _pools.add(_pool);
+  }
+
+  Future<void> _waitRetry(Duration delay) async {
+    final wake = Completer<void>();
+    _requests.add(wake);
+    final timer = Timer(delay, () {
+      if (!wake.isCompleted) wake.complete();
+    });
+    try {
+      await wake.future;
+    } finally {
+      timer.cancel();
+      _requests.remove(wake);
+    }
+  }
+
+  Future<Json> _request(
+    Uri uri, {
+    int maxRetries = 1,
+    bool retryTimeout = false,
+  }) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _requestOnce(uri, persistentConnection: attempt == 0);
+      } on OfficialAppApiException catch (error) {
+        if (_disposed ||
+            attempt >= maxRetries ||
+            !_isRetryable(error, retryTimeout: retryTimeout)) {
+          rethrow;
+        }
+        _rotateClient();
+        final delay = retryDelay * (attempt == 0 ? 1 : 3);
+        if (delay > Duration.zero) {
+          await _waitRetry(delay);
+          if (_disposed) throw const OfficialAppApiException('disposed');
+        }
+      }
+    }
+  }
+
+  Future<Json> _requestOnce(
+    Uri uri, {
+    required bool persistentConnection,
+  }) async {
     if (_disposed) throw const OfficialAppApiException('disposed');
     final abort = Completer<void>();
     _requests.add(abort);
+    final pool = _pool;
+    pool.inFlight++;
     final request =
         http.AbortableRequest('GET', uri, abortTrigger: abort.future)
           ..followRedirects = false
-          ..headers['Accept'] = 'application/json';
+          ..persistentConnection = persistentConnection
+          ..headers['Accept'] = 'application/json'
+          ..headers['User-Agent'] = _userAgent ?? OfficialUserAgent.value;
     try {
-      return await _read(request).timeout(timeout);
+      return await _read(pool, request).timeout(timeout);
     } on OfficialAppApiException {
       rethrow;
     } on TimeoutException {
@@ -208,12 +341,22 @@ class OfficialAppApi {
     } finally {
       if (!abort.isCompleted) abort.complete();
       _requests.remove(abort);
+      pool.inFlight--;
+      if (_ownsClient) {
+        pool.closeIfUnused();
+        if (pool.closed) _pools.remove(pool);
+      }
     }
   }
 
-  Future<Json> _read(http.BaseRequest request) async {
-    final response = await _client.send(request);
+  Future<Json> _read(_PooledClient pool, http.BaseRequest request) async {
+    final response = await pool.client.send(request);
+    void discard() {
+      unawaited(response.stream.listen((_) {}, onError: (Object _) {}).cancel());
+    }
+
     if (response.statusCode != 200) {
+      discard();
       throw OfficialAppApiException('http-${response.statusCode}');
     }
     final contentType = response.headers['content-type']
@@ -222,9 +365,11 @@ class OfficialAppApi {
         .trim()
         .toLowerCase();
     if (contentType != 'application/json') {
+      discard();
       throw const OfficialAppApiException('not-json');
     }
     if ((response.contentLength ?? 0) > maxResponseBytes) {
+      discard();
       throw const OfficialAppApiException('response-too-large');
     }
     final bytes = BytesBuilder(copy: false);
@@ -245,10 +390,16 @@ class OfficialAppApi {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    for (final request in _requests) {
+    for (final request in _requests.toList()) {
       if (!request.isCompleted) request.complete();
     }
-    _client.close();
+    for (final pool in _pools.toList()) {
+      if (!pool.closed) {
+        pool.closed = true;
+        pool.client.close();
+      }
+    }
+    _pools.clear();
   }
 }
 
@@ -259,10 +410,16 @@ class OfficialAppMetadata {
     final taipei = instant.add(const Duration(hours: 8));
     final items = <String, Anime>{};
     final seasonal = (data['newAnime'] as Json)['date'] as List;
+    final hot = data['hotAnime'] == null
+        ? const <dynamic>[]
+        : data['hotAnime'] as List;
+    final added = data['newAdded'] == null
+        ? const <dynamic>[]
+        : data['newAdded'] as List;
     for (final (section, records) in [
       ('season', seasonal),
-      ('hot', data['hotAnime'] as List),
-      ('new', data['newAdded'] as List),
+      ('hot', hot),
+      ('new', added),
     ]) {
       if (records.length > 5000) {
         throw const FormatException('Too many catalog entries');
@@ -284,7 +441,7 @@ class OfficialAppMetadata {
           if (videoId != null && OfficialAppApi._videoId.hasMatch(videoId))
             'latestVideoId': videoId,
           'episodeLabel': isSeason
-              ? OfficialAppVideo._text(record['volume'], 100)
+              ? _label(record['volume'], 100)
               : RegExp(r'共\s*(\d+)\s*集').firstMatch(info)?.group(0),
           if (isSeason && week != null && week >= 1 && week <= 7)
             'updateDay': week % 7,
@@ -402,9 +559,16 @@ class OfficialAppMetadata {
     return text;
   }
 
+  static String _label(dynamic value, int maximum) {
+    if (value == null) return '';
+    if (value is num) return OfficialAppVideo._text('$value', maximum);
+    return OfficialAppVideo._text(value, maximum);
+  }
+
   static String? _views(dynamic value) {
     if (value == null) return null;
-    final text = value.toString();
+    final text = value.toString().trim();
+    if (text.isEmpty) return null;
     if (!RegExp(r'^\d{1,15}$').hasMatch(text)) {
       throw const FormatException('Invalid view count');
     }
@@ -412,12 +576,17 @@ class OfficialAppMetadata {
   }
 
   static String? _time(dynamic value) {
-    final text = OfficialAppVideo._text(value, 5);
+    final text = OfficialAppVideo._text(value, 16);
     if (text.isEmpty) return null;
-    if (!RegExp(r'^(?:[01]\d|2[0-3]):[0-5]\d$').hasMatch(text)) {
+    final match = RegExp(r'^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$').firstMatch(text);
+    if (match == null) {
       throw const FormatException('Invalid update time');
     }
-    return text;
+    final hour = int.parse(match[1]!);
+    if (hour > 23) {
+      throw const FormatException('Invalid update time');
+    }
+    return '${hour.toString().padLeft(2, '0')}:${match[2]!}';
   }
 
   static String? _date(dynamic value, DateTime today) {

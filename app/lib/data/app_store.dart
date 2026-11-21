@@ -281,6 +281,7 @@ class AppStore extends ChangeNotifier {
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
   bool detailLoading = false, detailFailed = false;
   bool catalogLoading = false, catalogFailed = false;
+  bool _catalogNeedsRetryOnResume = false;
   int _catalogGeneration = 0, _detailGeneration = 0;
   bool browserVisible = false, browserError = false, busy = false;
   bool verificationRequired = false, browserCanGoBack = false;
@@ -308,6 +309,7 @@ class AppStore extends ChangeNotifier {
   int _searchGeneration = 0;
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
+  final _posterLookupsAttempted = <String>{};
   String? _accountSyncDocument;
   bool _loggingOut = false;
   Future<void>? _accountCacheWrite;
@@ -650,6 +652,13 @@ class AppStore extends ChangeNotifier {
     if (active && !browserVisible && !busy && _portal != null) {
       await syncAccount();
     }
+    if (active &&
+        (_catalogNeedsRetryOnResume || catalogFailed) &&
+        !browserVisible &&
+        !catalogLoading) {
+      _catalogNeedsRetryOnResume = false;
+      unawaited(refreshCatalog());
+    }
     await profileRefresh;
     _emit();
   }
@@ -907,6 +916,7 @@ class AppStore extends ChangeNotifier {
 
   Future<void> _refreshPosters() async {
     if (_disposed ||
+        !_applicationActive ||
         postersLoading ||
         catalog.items.every((e) => e.poster != null)) {
       return;
@@ -917,25 +927,39 @@ class AppStore extends ChangeNotifier {
       if (_disposed) return;
       _rememberPosters(recent);
       await cache.save(catalog);
-      final pending = catalog.items.where((e) => e.poster == null).toList();
+      final pending = catalog.items
+          .where(
+            (e) =>
+                e.poster == null && !_posterLookupsAttempted.contains(e.id),
+          )
+          .toList();
       var next = 0;
+      var rateLimited = false;
       final found = <Anime>[];
       Future<void> worker() async {
-        while (!_disposed && next < pending.length) {
+        while (!_disposed &&
+            _applicationActive &&
+            !rateLimited &&
+            next < pending.length) {
           final item = pending[next++];
           try {
             final matches = await searchService.search(
               item.title,
               useAccount: false,
             );
+            _posterLookupsAttempted.add(item.id);
             found.addAll(matches.where((match) => match.id == item.id));
+          } on OfficialAppApiException catch (error) {
+            if (error.code == 'http-429' || error.code == 'http-403') {
+              rateLimited = true;
+            }
           } catch (_) {
             // Keep existing public artwork on a temporary metadata failure.
           }
         }
       }
 
-      await Future.wait([for (var i = 0; i < 3; i++) worker()]);
+      await Future.wait([for (var i = 0; i < 2; i++) worker()]);
       if (_disposed) return;
       _rememberPosters(found);
       await cache.save(catalog);
@@ -953,8 +977,23 @@ class AppStore extends ChangeNotifier {
     _emit();
   }
 
+  Map<String, Object?> _metadataFailureData(Object error) =>
+      error is OfficialAppApiException
+      ? {
+          'code': error.code,
+          if (error.socketErrorCode != null)
+            'socketErrorCode': error.socketErrorCode,
+          if (error.officialCode != null) 'officialCode': error.officialCode,
+        }
+      : {'type': error.runtimeType.toString()};
+
   Future<void> refreshCatalog() async {
     if (_disposed || browserVisible) return;
+    if (!_applicationActive) {
+      _catalogNeedsRetryOnResume = true;
+      return;
+    }
+    _catalogNeedsRetryOnResume = false;
     final generation = ++_catalogGeneration;
     catalogLoading = true;
     catalogFailed = false;
@@ -978,10 +1017,15 @@ class AppStore extends ChangeNotifier {
       if (!_disposed && generation == _catalogGeneration) {
         unawaited(_refreshPosters());
       }
-    } catch (_) {
+    } catch (error) {
       if (_disposed || generation != _catalogGeneration) return;
+      if (!_applicationActive) {
+        _catalogNeedsRetryOnResume = true;
+        diagnostics.record('catalog.deferred', _metadataFailureData(error));
+        return;
+      }
       catalogFailed = true;
-      diagnostics.record('catalog.failed');
+      diagnostics.record('catalog.failed', _metadataFailureData(error));
     } finally {
       if (!_disposed && generation == _catalogGeneration) {
         catalogLoading = false;
@@ -1023,10 +1067,10 @@ class AppStore extends ChangeNotifier {
         if (_disposed || generation != _detailGeneration) return;
         detail = fetched;
         diagnostics.record('detail.completed');
-      } catch (_) {
+      } catch (error) {
         if (_disposed || generation != _detailGeneration) return;
         detailFailed = true;
-        diagnostics.record('detail.failed');
+        diagnostics.record('detail.failed', _metadataFailureData(error));
       } finally {
         if (!_disposed && generation == _detailGeneration) {
           detailLoading = false;
@@ -1061,13 +1105,13 @@ class AppStore extends ChangeNotifier {
       diagnostics.record('search.completed', {'count': items.length});
       searchedQuery = input;
       _rememberPosters(items);
-    } catch (_) {
+    } catch (error) {
       if (_disposed || generation != _searchGeneration || query != input) {
         return;
       }
       searchResults = [];
       searchFailed = true;
-      diagnostics.record('search.failed');
+      diagnostics.record('search.failed', _metadataFailureData(error));
     }
     if (generation == _searchGeneration) {
       searching = false;

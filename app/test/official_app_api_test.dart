@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:baha_plus/data/official_app_api.dart';
+import 'package:baha_plus/data/official_user_agent.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -253,6 +254,7 @@ void main() {
           expect(request.method, 'GET');
           expect(request.url.origin, 'https://api.gamer.com.tw');
           expect(request.headers['Accept'], 'application/json');
+          expect(request.headers['User-Agent'], OfficialUserAgent.value);
           expect(
             request.headers.keys.map((key) => key.toLowerCase()),
             allOf(isNot(contains('cookie')), isNot(contains('authorization'))),
@@ -543,4 +545,151 @@ void main() {
       );
     },
   );
+
+  test(
+    'catalog retries transient transport and 5xx errors with a fresh client',
+    () async {
+      var createdClients = 0;
+      var closedClients = 0;
+      final attempts = <({int client, bool persistent})>[];
+      final api = OfficialAppApi(
+        retryDelay: Duration.zero,
+        clientFactory: () {
+          final id = ++createdClients;
+          return _TrackingClient(
+            onClose: () => closedClients++,
+            respond: (request) async {
+              attempts.add((
+                client: id,
+                persistent: request.persistentConnection,
+              ));
+              if (attempts.length == 1) {
+                throw http.ClientException(
+                  'Connection closed before full header was received',
+                );
+              }
+              if (attempts.length == 2) {
+                return http.StreamedResponse(
+                  const Stream<List<int>>.empty(),
+                  522,
+                );
+              }
+              final body = utf8.encode(jsonEncode({'data': catalogJson()}));
+              return http.StreamedResponse(
+                Stream.value(body),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            },
+          );
+        },
+      );
+      addTearDown(api.dispose);
+
+      final catalog = await api.fetchCatalog();
+      expect(catalog.items.single.id, '10');
+      expect(createdClients, 3);
+      expect(closedClients, 2);
+      expect(attempts, [
+        (client: 1, persistent: true),
+        (client: 2, persistent: false),
+        (client: 3, persistent: false),
+      ]);
+    },
+  );
+
+  test('catalog retries timeout once and does not retry HTTP 403', () async {
+    var timeoutAttempts = 0;
+    final timeoutApi = OfficialAppApi(
+      timeout: const Duration(milliseconds: 20),
+      retryDelay: Duration.zero,
+      client: _StreamingClient((request) async {
+        timeoutAttempts++;
+        if (timeoutAttempts == 1) {
+          await (request as http.Abortable).abortTrigger!;
+          throw http.RequestAbortedException(request.url);
+        }
+        final body = utf8.encode(jsonEncode({'data': catalogJson()}));
+        return http.StreamedResponse(
+          Stream.value(body),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+    addTearDown(timeoutApi.dispose);
+    final recovered = await timeoutApi.fetchCatalog();
+    expect(recovered.items.single.id, '10');
+    expect(timeoutAttempts, 2);
+
+    var forbiddenAttempts = 0;
+    final forbiddenApi = OfficialAppApi(
+      retryDelay: Duration.zero,
+      client: MockClient((_) async {
+        forbiddenAttempts++;
+        return http.Response('blocked', 403);
+      }),
+    );
+    addTearDown(forbiddenApi.dispose);
+    await expectLater(
+      forbiddenApi.fetchCatalog(),
+      throwsA(apiError('http-403')),
+    );
+    expect(forbiddenAttempts, 1);
+  });
+
+  test('dispose cancels pending retry backoff immediately', () async {
+    var attempts = 0;
+    final firstFailed = Completer<void>();
+    final api = OfficialAppApi(
+      retryDelay: const Duration(seconds: 30),
+      client: MockClient((_) async {
+        attempts++;
+        if (!firstFailed.isCompleted) firstFailed.complete();
+        throw http.ClientException('reset');
+      }),
+    );
+    final pending = api.fetchCatalog();
+    await firstFailed.future;
+    await Future<void>.delayed(Duration.zero);
+    api.dispose();
+    await expectLater(pending, throwsA(apiError('disposed')));
+    expect(attempts, 1);
+  });
+
+  test(
+    'catalog accepts optional empty popular, numeric volume, normalized times and null sections',
+    () {
+      final data = catalogJson();
+      final seasonal =
+          ((data['newAnime'] as Json)['date'] as List).single as Json;
+      seasonal['popular'] = '';
+      seasonal['volume'] = 8;
+      seasonal['upTimeHours'] = '9:30:00';
+      data['newAdded'] = null;
+      final catalog = OfficialAppMetadata.catalog(
+        data,
+        now: DateTime.utc(2027, 1, 1),
+      );
+      final anime = catalog.items.single;
+      expect(anime.episodeLabel, '8');
+      expect(anime.updateTime, '09:30');
+    },
+  );
+}
+
+class _TrackingClient extends http.BaseClient {
+  _TrackingClient({required this.respond, required this.onClose});
+  final Future<http.StreamedResponse> Function(http.BaseRequest) respond;
+  final void Function() onClose;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      respond(request);
+
+  @override
+  void close() {
+    onClose();
+    super.close();
+  }
 }

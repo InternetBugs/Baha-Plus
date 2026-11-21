@@ -5,6 +5,7 @@ import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/app_updates.dart';
 import 'package:baha_plus/data/device_storage.dart';
+import 'package:baha_plus/data/official_app_api.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/detail_page.dart';
 import 'package:flutter/cupertino.dart';
@@ -281,6 +282,53 @@ void main() {
       expect(store.catalogFailed, isFalse);
       expect(api.catalogRequests, 2);
       expect(lifecycle.created, 0);
+    },
+  );
+
+  test(
+    'background-interrupted catalog refresh defers failure and recovers on resume',
+    () async {
+      final pending = Completer<Catalog>();
+      final api = FakeMetadata()..catalogLoader = () => pending.future;
+      final store = await create(api);
+
+      final inFlight = store.refreshCatalog();
+      await store.setApplicationActive(false);
+      pending.completeError(const OfficialAppApiException('network'));
+      await inFlight;
+
+      expect(store.catalogFailed, isFalse);
+      expect(store.catalogLoading, isFalse);
+
+      api.catalogLoader = () async => _catalog();
+      await store.setApplicationActive(true);
+      for (var i = 0; i < 20 && store.catalogLoading; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(store.catalogFailed, isFalse);
+      expect(store.catalog.items.single.id, '10');
+      expect(api.catalogRequests, 2);
+    },
+  );
+
+  test(
+    'failed foreground catalog automatically retries when returning to foreground',
+    () async {
+      final api = FakeMetadata();
+      final store = await create(api);
+
+      await store.refreshCatalog();
+      expect(store.catalogFailed, isTrue);
+
+      await store.setApplicationActive(false);
+      api.catalogLoader = () async => _catalog();
+      await store.setApplicationActive(true);
+      for (var i = 0; i < 20 && store.catalogLoading; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(store.catalogFailed, isFalse);
+      expect(store.catalog.items.single.id, '10');
+      expect(api.catalogRequests, 2);
     },
   );
 }
