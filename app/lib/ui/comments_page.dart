@@ -62,6 +62,7 @@ class _CommentsPageState extends State<CommentsPage> {
   final _replyErrors = <String, Object>{};
   final _loadingReplies = <String>{}, _expanded = <String>{};
   final _voting = <String>{};
+  final _overLimitCache = <(String, int, double, double, bool, Locale?), bool>{};
   CommentPage? _page;
   int _order = 1, _generation = 0, _nextPage = 0;
   bool _loading = true, _more = false, _sending = false;
@@ -100,6 +101,7 @@ class _CommentsPageState extends State<CommentsPage> {
       _loadingReplies.clear();
       _voting.clear();
       _expanded.clear();
+      _overLimitCache.clear();
       _nextPage = 0;
       _more = false;
       _sending = false;
@@ -136,6 +138,7 @@ class _CommentsPageState extends State<CommentsPage> {
           _comments.clear();
           _replies.clear();
           _replyErrors.clear();
+          _overLimitCache.clear();
           _page = page;
         }
         final seen = _comments.map((item) => item.id).toSet();
@@ -232,6 +235,7 @@ class _CommentsPageState extends State<CommentsPage> {
     builder: (context, _) => GlassScaffold(
       key: const ValueKey('comments-page'),
       extendBody: false,
+      enableBackgroundSampling: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: GlassAppBar(
         leading: GlassIconButton(
@@ -252,55 +256,89 @@ class _CommentsPageState extends State<CommentsPage> {
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => _load(),
-              child: ListView(
-                key: const ValueKey('comment-list'),
-                controller: _list,
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                children: [
-                  _header(),
-                  if (_loading)
-                    const Padding(
-                      padding: EdgeInsets.all(30),
-                      child: Center(child: CupertinoActivityIndicator()),
-                    ),
-                  if (_error != null)
-                    CommunityEmpty(
-                      icon: CupertinoIcons.wifi_exclamationmark,
-                      title: communityError(store, _error),
-                      action: CupertinoButton(
-                        onPressed: () => _load(more: _comments.isNotEmpty),
-                        child: Text(store.t('retry')),
-                      ),
-                    ),
-                  if (!_loading && _comments.isEmpty && _error == null)
-                    CommunityEmpty(
-                      icon: CupertinoIcons.chat_bubble_2,
-                      title: store.t('noComments'),
-                      message: store.t('commentHint'),
-                    ),
-                  if (!_loading)
-                    for (final comment in _comments) _thread(comment),
-                  if (!_loading && _nextPage != 0)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Center(
-                        child: _more
-                            ? const CupertinoActivityIndicator()
-                            : GlassButton.custom(
-                                key: const ValueKey('comments-more'),
-                                shape: const LiquidRoundedRectangle(
-                                  borderRadius: 22,
-                                ),
-                                width: 160,
-                                height: 44,
-                                onTap: () => _load(more: true),
-                                child: Text(store.t('loadMore')),
-                              ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                ],
+              child: Builder(
+                builder: (context) {
+                  final showError = _error != null;
+                  final showEmpty =
+                      !_loading && _comments.isEmpty && _error == null;
+                  final commentCount = _loading ? 0 : _comments.length;
+                  final showMore = !_loading && _nextPage != 0;
+                  final prefixCount =
+                      1 +
+                      (_loading ? 1 : 0) +
+                      (showError ? 1 : 0) +
+                      (showEmpty ? 1 : 0);
+                  final totalCount = prefixCount + commentCount + (showMore ? 1 : 0) + 1;
+                  return ListView.builder(
+                    key: const ValueKey('comment-list'),
+                    controller: _list,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: totalCount,
+                    itemBuilder: (context, index) {
+                      var cursor = index;
+                      if (cursor == 0) return _header();
+                      cursor--;
+                      if (_loading) {
+                        if (cursor == 0) {
+                          return const Padding(
+                            padding: EdgeInsets.all(30),
+                            child: Center(child: CupertinoActivityIndicator()),
+                          );
+                        }
+                        cursor--;
+                      }
+                      if (showError) {
+                        if (cursor == 0) {
+                          return CommunityEmpty(
+                            icon: CupertinoIcons.wifi_exclamationmark,
+                            title: communityError(store, _error),
+                            action: CupertinoButton(
+                              onPressed: () =>
+                                  _load(more: _comments.isNotEmpty),
+                              child: Text(store.t('retry')),
+                            ),
+                          );
+                        }
+                        cursor--;
+                      }
+                      if (showEmpty) {
+                        if (cursor == 0) {
+                          return CommunityEmpty(
+                            icon: CupertinoIcons.chat_bubble_2,
+                            title: store.t('noComments'),
+                            message: store.t('commentHint'),
+                          );
+                        }
+                        cursor--;
+                      }
+                      if (cursor < commentCount) {
+                        return _thread(_comments[cursor]);
+                      }
+                      cursor -= commentCount;
+                      if (showMore && cursor == 0) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: _more
+                                ? const CupertinoActivityIndicator()
+                                : GlassButton.custom(
+                                    key: const ValueKey('comments-more'),
+                                    shape: const LiquidRoundedRectangle(
+                                      borderRadius: 22,
+                                    ),
+                                    width: 160,
+                                    height: 44,
+                                    onTap: () => _load(more: true),
+                                    child: Text(store.t('loadMore')),
+                                  ),
+                          ),
+                        );
+                      }
+                      return const SizedBox(height: 12);
+                    },
+                  );
+                },
               ),
             ),
           ),
@@ -546,21 +584,35 @@ class _CommentsPageState extends State<CommentsPage> {
 
   Widget _commentText(OfficialComment comment) => LayoutBuilder(
     builder: (context, constraints) {
+      final boldText = MediaQuery.boldTextOf(context);
+      final textScaler = MediaQuery.textScalerOf(context);
+      final locale = Localizations.maybeLocaleOf(context);
       final style = DefaultTextStyle.of(context).style.copyWith(
         fontSize: 14,
         height: 1.65,
-        fontWeight: MediaQuery.boldTextOf(context) ? FontWeight.bold : null,
+        fontWeight: boldText ? FontWeight.bold : null,
       );
-      final painter = TextPainter(
-        text: TextSpan(text: comment.text, style: style),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
-        locale: Localizations.maybeLocaleOf(context),
-        maxLines: collapsedCommentLines,
-        ellipsis: '…',
-      )..layout(maxWidth: constraints.maxWidth);
-      final overLimit = painter.didExceedMaxLines;
-      painter.dispose();
+      final cacheKey = (
+        comment.id,
+        comment.text.length,
+        constraints.maxWidth,
+        textScaler.scale(14),
+        boldText,
+        locale,
+      );
+      final overLimit = _overLimitCache.putIfAbsent(cacheKey, () {
+        final painter = TextPainter(
+          text: TextSpan(text: comment.text, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: textScaler,
+          locale: locale,
+          maxLines: collapsedCommentLines,
+          ellipsis: '…',
+        )..layout(maxWidth: constraints.maxWidth);
+        final exceeded = painter.didExceedMaxLines;
+        painter.dispose();
+        return exceeded;
+      });
       if (!overLimit) return SelectableText(comment.text, style: style);
       final expanded = _expanded.contains(comment.id);
       return Column(

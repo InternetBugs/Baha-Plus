@@ -18,6 +18,7 @@ class MainActivity : FlutterActivity() {
     private var nativeMediaSession: MediaSession? = null
     private var playbackChannel: MethodChannel? = null
     private var playbackDocument: String? = null
+    private var keepScreenOn = false
     private var metadataKey = ""
     private var downloadChannel: MethodChannel? = null
     private var downloadDocument: String? = null
@@ -66,10 +67,14 @@ class MainActivity : FlutterActivity() {
             "app.bahaplus.mobile/playback_environment")
         playbackChannel!!.setMethodCallHandler { call, result ->
             if (call.method == "update") {
-                if (call.argument<Boolean>("keepAwake") == true) {
-                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                } else {
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                val desiredKeepAwake = call.argument<Boolean>("keepAwake") == true
+                if (desiredKeepAwake != keepScreenOn) {
+                    keepScreenOn = desiredKeepAwake
+                    if (desiredKeepAwake) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
                 }
                 if (call.argument<Boolean>("active") == true &&
                     call.argument<Boolean>("native") == true) {
@@ -140,6 +145,7 @@ class MainActivity : FlutterActivity() {
         downloadChannel = null
         downloadDocument = null
         releaseNativeSession()
+        keepScreenOn = false
         playbackChannel?.setMethodCallHandler(null)
         playbackChannel = null
         super.cleanUpFlutterEngine(flutterEngine)

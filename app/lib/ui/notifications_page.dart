@@ -94,6 +94,7 @@ class _NotificationsPageState extends State<NotificationsPage>
       return GlassScaffold(
         key: const ValueKey('notifications-page'),
         extendBody: false,
+        enableBackgroundSampling: false,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: GlassAppBar(
           leading: GlassIconButton(
@@ -166,126 +167,145 @@ class _NotificationsPageState extends State<NotificationsPage>
                   ? const Center(child: CupertinoActivityIndicator())
                   : RefreshIndicator(
                       onRefresh: store.refreshNotifications,
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: EdgeInsets.fromLTRB(
-                          20,
-                          0,
-                          20,
-                          MediaQuery.paddingOf(context).bottom + 24,
-                        ),
-                        children: [
-                          if (store.notificationsError != null)
-                            CommunityEmpty(
-                              icon: store.notificationsError == 'login'
-                                  ? CupertinoIcons.person_crop_circle
-                                  : CupertinoIcons.wifi_exclamationmark,
-                              title: communityError(
-                                store,
-                                store.notificationsError,
-                              ),
-                              action: CupertinoButton(
-                                onPressed: store.notificationsError == 'login'
-                                    ? () {
-                                        Navigator.pop(context);
-                                        store.connectAccount();
-                                      }
-                                    : store.refreshNotifications,
-                                child: Text(
-                                  store.t(
-                                    store.notificationsError == 'login'
-                                        ? 'connectAccount'
-                                        : 'retry',
+                      child: Builder(
+                        builder: (context) {
+                          final hasError = store.notificationsError != null;
+                          final isEmpty =
+                              items.isEmpty && store.notificationsError == null;
+                          final prefix = (hasError ? 1 : 0) + (isEmpty ? 1 : 0);
+                          return ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.fromLTRB(
+                              20,
+                              0,
+                              20,
+                              MediaQuery.paddingOf(context).bottom + 24,
+                            ),
+                            itemCount: prefix + items.length,
+                            itemBuilder: (context, index) {
+                              var cursor = index;
+                              if (hasError) {
+                                if (cursor == 0) {
+                                  return CommunityEmpty(
+                                    icon: store.notificationsError == 'login'
+                                        ? CupertinoIcons.person_crop_circle
+                                        : CupertinoIcons.wifi_exclamationmark,
+                                    title: communityError(
+                                      store,
+                                      store.notificationsError,
+                                    ),
+                                    action: CupertinoButton(
+                                      onPressed:
+                                          store.notificationsError == 'login'
+                                          ? () {
+                                              Navigator.pop(context);
+                                              store.connectAccount();
+                                            }
+                                          : store.refreshNotifications,
+                                      child: Text(
+                                        store.t(
+                                          store.notificationsError == 'login'
+                                              ? 'connectAccount'
+                                              : 'retry',
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                cursor--;
+                              }
+                              if (isEmpty) {
+                                if (cursor == 0) {
+                                  return CommunityEmpty(
+                                    icon: CupertinoIcons.bell,
+                                    title: store.t(
+                                      _unreadOnly
+                                          ? 'noUnreadNotifications'
+                                          : 'noNotifications',
+                                    ),
+                                    message: store.t('noNotificationsHint'),
+                                  );
+                                }
+                                cursor--;
+                              }
+                              final item = items[cursor];
+                              final read = store.notificationRead(item);
+                              return Semantics(
+                                button: true,
+                                label: '${item.title}, ${item.time}',
+                                child: GestureDetector(
+                                  key: ValueKey('notification-${item.videoId}'),
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    unawaited(store.openNotification(item));
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            18,
+                                          ),
+                                          child: Artwork(
+                                            item.cover,
+                                            width: 60,
+                                            height: 60,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                item.title,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  height: 1.5,
+                                                  fontWeight: read
+                                                      ? FontWeight.w400
+                                                      : FontWeight.w600,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 7),
+                                              Text(
+                                                item.time,
+                                                style: TextStyle(
+                                                  color: secondary(context),
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 8),
+                                          child: Icon(
+                                            read
+                                                ? CupertinoIcons.chevron_right
+                                                : CupertinoIcons.circle_fill,
+                                            size: read ? 13 : 7,
+                                            color: read
+                                                ? secondary(context)
+                                                : brandBlue,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          if (items.isEmpty && store.notificationsError == null)
-                            CommunityEmpty(
-                              icon: CupertinoIcons.bell,
-                              title: store.t(
-                                _unreadOnly
-                                    ? 'noUnreadNotifications'
-                                    : 'noNotifications',
-                              ),
-                              message: store.t('noNotificationsHint'),
-                            ),
-                          for (final item in items)
-                            Semantics(
-                              button: true,
-                              label: '${item.title}, ${item.time}',
-                              child: GestureDetector(
-                                key: ValueKey('notification-${item.videoId}'),
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () {
-                                  Navigator.pop(context);
-                                  unawaited(store.openNotification(item));
-                                },
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(18),
-                                        child: SizedBox(
-                                          width: 60,
-                                          height: 60,
-                                          child: Artwork(item.cover),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 16),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              item.title,
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                height: 1.5,
-                                                fontWeight:
-                                                    store.notificationRead(item)
-                                                    ? FontWeight.w400
-                                                    : FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 7),
-                                            Text(
-                                              item.time,
-                                              style: TextStyle(
-                                                color: secondary(context),
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 8),
-                                        child: Icon(
-                                          store.notificationRead(item)
-                                              ? CupertinoIcons.chevron_right
-                                              : CupertinoIcons.circle_fill,
-                                          size: store.notificationRead(item)
-                                              ? 13
-                                              : 7,
-                                          color: store.notificationRead(item)
-                                              ? secondary(context)
-                                              : brandBlue,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
+                              );
+                            },
+                          );
+                        },
                       ),
                     ),
             ),

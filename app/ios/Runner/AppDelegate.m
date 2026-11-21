@@ -67,7 +67,10 @@
       owner.playbackDiagnosticsEnabled = [arguments[@"diagnostics"] boolValue];
     }
     BOOL active = [arguments[@"active"] boolValue];
-    UIApplication.sharedApplication.idleTimerDisabled = active && [arguments[@"keepAwake"] boolValue];
+    BOOL keepAwake = active && [arguments[@"keepAwake"] boolValue];
+    if (UIApplication.sharedApplication.idleTimerDisabled != keepAwake) {
+      UIApplication.sharedApplication.idleTimerDisabled = keepAwake;
+    }
     if (!active) {
       [owner clearPlaybackControls];
       result(nil);
@@ -78,8 +81,11 @@
     owner.playbackDocument = document;
     owner.nativePlayback = [arguments[@"native"] boolValue];
     [owner installPlaybackControls];
-    MPRemoteCommandCenter.sharedCommandCenter.changePlaybackPositionCommand.enabled =
-        owner.nativePlayback && [arguments[@"duration"] doubleValue] > 0;
+    MPRemoteCommandCenter *commands = MPRemoteCommandCenter.sharedCommandCenter;
+    BOOL seekEnabled = owner.nativePlayback && [arguments[@"duration"] doubleValue] > 0;
+    if (commands.changePlaybackPositionCommand.enabled != seekEnabled) {
+      commands.changePlaybackPositionCommand.enabled = seekEnabled;
+    }
     MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = @{
       MPMediaItemPropertyTitle: arguments[@"title"] ?: @"Baha Plus",
       MPMediaItemPropertyAlbumTitle: arguments[@"episode"] ?: @"",
@@ -183,9 +189,11 @@
   MPRemoteCommandCenter *commands = MPRemoteCommandCenter.sharedCommandCenter;
   // Reassert controls when taking ownership from the web Media Session, even
   // when native targets were installed before handoff. Do not duplicate them.
-  commands.playCommand.enabled = YES;
-  commands.pauseCommand.enabled = YES;
-  commands.togglePlayPauseCommand.enabled = YES;
+  if (!commands.playCommand.enabled) commands.playCommand.enabled = YES;
+  if (!commands.pauseCommand.enabled) commands.pauseCommand.enabled = YES;
+  if (!commands.togglePlayPauseCommand.enabled) {
+    commands.togglePlayPauseCommand.enabled = YES;
+  }
   if (self.remotePlayTarget) return;
   __weak AppDelegate *weakSelf = self;
   self.remotePlayTarget = [commands.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent *event) {

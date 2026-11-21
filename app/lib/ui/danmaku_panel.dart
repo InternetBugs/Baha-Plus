@@ -115,6 +115,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
           widget.composerOnly ? 'danmaku-composer' : 'danmaku-panel',
         ),
         extendBody: false,
+        enableBackgroundSampling: false,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: GlassAppBar(
           title: Text(

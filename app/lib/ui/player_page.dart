@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show ValueListenable, listEquals;
 import 'package:flutter/gestures.dart'
     show DragStartBehavior, HorizontalDragGestureRecognizer, kTouchSlop;
 import 'package:flutter/material.dart';
@@ -46,14 +47,71 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   Timer? _hideTimer;
   final _settingsMenuController = GlassSettingsMenuController();
   final _videoSurfaceKey = GlobalKey(debugLabel: 'player-video-surface');
+  late final ValueNotifier<_PlayerChromeState> _chromeState;
   // The top strip of the landscape surface never starts a seek. Pulling down
   // from the screen edge belongs to the system panel (status bar, notification
   // shade, Control Center), so a slightly slanted pull must not fast-forward.
   static const double _topSeekExemptHeight = 56;
+  static final _overlayActionGlass = mediaGlass.copyWith(
+    backerColor: const Color(0x66000000),
+    saturation: 1.0,
+  );
+  static final _fullscreenControlGlass = LiquidGlassSettings.ios27Dark.copyWith(
+    backerColor: const Color(0x88101014),
+    saturation: 1.0,
+  );
+  static final _portraitControlGlassDark = mediaGlass.copyWith(
+    glassColor: const Color(0x18ffffff),
+    backerColor: const Color(0x301c1c1e),
+    thickness: 16,
+    blur: 6,
+    lightIntensity: .35,
+    ambientStrength: .03,
+    chromaticAberration: .02,
+    shadow: const [
+      BoxShadow(
+        color: Color(0x14000000),
+        blurRadius: 18,
+        offset: Offset(0, 6),
+      ),
+      BoxShadow(
+        color: Color(0x06000000),
+        blurRadius: 3,
+        offset: Offset(0, 1),
+      ),
+    ],
+  );
+  static final _portraitControlGlassLight = mediaGlass.copyWith(
+    glassColor: const Color(0x168e8e93),
+    backerColor: Colors.transparent,
+    thickness: 16,
+    blur: 6,
+    lightIntensity: .25,
+    ambientStrength: .03,
+    chromaticAberration: .02,
+    shadow: const [
+      BoxShadow(
+        color: Color(0x14000000),
+        blurRadius: 18,
+        offset: Offset(0, 6),
+      ),
+      BoxShadow(
+        color: Color(0x06000000),
+        blurRadius: 3,
+        offset: Offset(0, 1),
+      ),
+    ],
+  );
 
   @override
   void initState() {
     super.initState();
+    _chromeState = ValueNotifier(
+      _PlayerChromeState.fromPlayback(
+        store.playback.value,
+        browserError: store.browserError,
+      ),
+    );
     WidgetsBinding.instance.addObserver(this);
     store.addListener(_syncFullscreen);
     store.playback.addListener(_playbackChanged);
@@ -63,6 +121,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
 
   void _playbackChanged() {
     final state = store.playback.value;
+    _chromeState.value = _PlayerChromeState.fromPlayback(
+      state,
+      browserError: store.browserError,
+    );
     if (_holdingSpeed && !_canHoldSpeed) _stopHoldSpeed();
     unawaited(_restoreHoldSpeed());
     if (_scrub != null &&
@@ -125,6 +187,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _syncFullscreen() {
+    _chromeState.value = _PlayerChromeState.fromPlayback(
+      store.playback.value,
+      browserError: store.browserError,
+    );
     if (_holdingSpeed &&
         (store.playerLocked ||
             _holdDocument != store.operation.id ||
@@ -356,6 +422,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_syncFullscreen);
     store.playback.removeListener(_playbackChanged);
+    _chromeState.dispose();
     _stopHoldSpeed(rebuild: false);
     _hideTimer?.cancel();
     if (_fullscreen) unawaited(_screenMode(false));
@@ -379,6 +446,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     return GlassScaffold(
       key: const ValueKey('native-player-page'),
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      enableBackgroundSampling: false,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         title: Text(
@@ -406,11 +474,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               child: AspectRatio(aspectRatio: 16 / 9, child: _surface()),
             ),
             ValueListenableBuilder(
-              valueListenable: store.playback,
-              builder: (context, state, child) => state.canOperate
+              valueListenable: _chromeState,
+              builder: (context, chrome, child) => chrome.canOperate
                   ? Padding(
                       padding: const EdgeInsets.only(top: 12),
-                      child: _controls(fullscreen: false),
+                      child: _controls(chrome: chrome, fullscreen: false),
                     )
                   : const SizedBox.shrink(),
             ),
@@ -632,16 +700,16 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     children: [
       widget.video,
       ValueListenableBuilder(
-        valueListenable: store.playback,
-        builder: (context, state, child) => Stack(
+        valueListenable: _chromeState,
+        builder: (context, chrome, child) => Stack(
           fit: StackFit.expand,
           children: [
-            if (!state.surfaceReady &&
+            if (!chrome.surfaceReady &&
                 !store.usesNativeHttpPlayback &&
-                state.phase != PlaybackPhase.error &&
+                chrome.phase != PlaybackPhase.error &&
                 !store.browserError)
               const ColoredBox(color: Colors.black),
-            if (state.canControl) _gestureSurface(),
+            if (chrome.canControl) _gestureSurface(),
             if (_holdingSpeed)
               Positioned(
                 top: MediaQuery.paddingOf(context).top + 20,
@@ -712,7 +780,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '${_time(_scrub!)} / ${_time(state.duration)}',
+                            '${_formatPlaybackTime(_scrub!)} / ${_formatPlaybackTime(chrome.duration)}',
                             key: const ValueKey('player-seek-target'),
                             style: const TextStyle(
                               color: Colors.white,
@@ -724,7 +792,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                           const SizedBox(height: 4),
                           Text(
                             '${_scrub! >= _swipeStartPosition! ? '+' : '−'}'
-                            '${_time((_scrub! - _swipeStartPosition!).abs())}',
+                            '${_formatPlaybackTime((_scrub! - _swipeStartPosition!).abs())}',
                             key: const ValueKey('player-seek-offset'),
                             style: const TextStyle(
                               color: Colors.white70,
@@ -739,8 +807,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 ),
               ),
             if (!store.browserError &&
-                (state.phase == PlaybackPhase.loading ||
-                    (state.phase == PlaybackPhase.content && state.buffering)))
+                (chrome.phase == PlaybackPhase.loading ||
+                    (chrome.phase == PlaybackPhase.content &&
+                        chrome.buffering)))
               Center(
                 child: IgnorePointer(
                   child: Semantics(
@@ -754,17 +823,20 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                           radius: 12,
                         ),
                         const SizedBox(height: 10),
-                        Text(
-                          _downloadSpeed(state.downloadBytesPerSecond),
-                          key: const ValueKey('player-loading-speed'),
-                          textDirection: TextDirection.ltr,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontFeatures: [FontFeature.tabularFigures()],
-                            shadows: [
-                              Shadow(color: Colors.black87, blurRadius: 4),
-                            ],
+                        ValueListenableBuilder(
+                          valueListenable: store.playback,
+                          builder: (context, state, _) => Text(
+                            _downloadSpeed(state.downloadBytesPerSecond),
+                            key: const ValueKey('player-loading-speed'),
+                            textDirection: TextDirection.ltr,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                              shadows: [
+                                Shadow(color: Colors.black87, blurRadius: 4),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -778,7 +850,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 right: 8,
                 child: Row(
                   children: [
-                    if (!state.canOperate)
+                    if (!chrome.canOperate)
                       _videoAction(
                         CupertinoIcons.arrow_up_left_arrow_down_right,
                         'fullScreen',
@@ -792,7 +864,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 ),
               ),
             if (store.playerFullscreen &&
-                state.canOperate &&
+                chrome.canOperate &&
                 !store.playerLocked)
               Positioned(
                 left: 48,
@@ -809,7 +881,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                         constraints: const BoxConstraints(maxWidth: 620),
                         child: Listener(
                           onPointerDown: (_) => _revealControls(),
-                          child: _controls(fullscreen: true),
+                          child: _controls(chrome: chrome, fullscreen: true),
                         ),
                       ),
                     ),
@@ -832,7 +904,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           iconSize: 19,
           useOwnLayer: true,
           platformViewBackdrop: true,
-          settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
+          settings: _overlayActionGlass,
           semanticLabel: store.t('sendDanmaku'),
           icon: const Icon(CupertinoIcons.paperplane, color: Colors.white),
           onPressed: () => showDanmakuComposer(context, store),
@@ -845,7 +917,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         iconSize: 19,
         useOwnLayer: true,
         platformViewBackdrop: true,
-        settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
+        settings: _overlayActionGlass,
         semanticLabel: store.t(enabled ? 'hideDanmaku' : 'showDanmaku'),
         icon: Icon(
           enabled
@@ -866,16 +938,16 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         iconSize: 18,
         useOwnLayer: true,
         platformViewBackdrop: true,
-        settings: mediaGlass.copyWith(backerColor: const Color(0x66000000)),
+        settings: _overlayActionGlass,
         semanticLabel: store.t(label),
         icon: Icon(icon, color: Colors.white),
         onPressed: action,
       );
 
   Widget _status() => ValueListenableBuilder(
-    valueListenable: store.playback,
-    builder: (context, state, child) {
-      final key = switch (state.phase) {
+    valueListenable: _chromeState,
+    builder: (context, chrome, child) {
+      final key = switch (chrome.phase) {
         PlaybackPhase.content => null,
         PlaybackPhase.age => 'playerAgeHint',
         PlaybackPhase.advertisement => null,
@@ -904,7 +976,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               onPressed: store.openOfficial,
               child: Text(store.t('officialVerification')),
             ),
-          if (state.phase == PlaybackPhase.error)
+          if (chrome.phase == PlaybackPhase.error)
             CupertinoButton(
               onPressed: store.retryPlayback,
               child: Text(store.t('retry')),
@@ -914,161 +986,129 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     },
   );
 
-  Widget _controls({required bool fullscreen}) => ValueListenableBuilder(
-    valueListenable: store.playback,
-    builder: (context, state, child) {
-      final seekable = state.canControl && _swipeStartPosition == null;
-      final duration = state.duration;
-      final position = (_scrub ?? state.position).clamp(0.0, duration);
-      final dark = Theme.of(context).brightness == Brightness.dark;
-      final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
-      final compact = !fullscreen && MediaQuery.sizeOf(context).width < 350;
-      final settings = fullscreen
-          ? LiquidGlassSettings.ios27Dark.copyWith(
-              backerColor: const Color(0x88101014),
-            )
-          : mediaGlass.copyWith(
-              glassColor: dark
-                  ? const Color(0x18ffffff)
-                  : const Color(0x168e8e93),
-              backerColor: dark ? const Color(0x301c1c1e) : Colors.transparent,
-              thickness: 16,
-              blur: 6,
-              lightIntensity: dark ? .35 : .25,
-              ambientStrength: .03,
-              chromaticAberration: .02,
-              shadow: const [
-                BoxShadow(
-                  color: Color(0x14000000),
-                  blurRadius: 18,
-                  offset: Offset(0, 6),
-                ),
-                BoxShadow(
-                  color: Color(0x06000000),
-                  blurRadius: 3,
-                  offset: Offset(0, 1),
-                ),
-              ],
-            );
-      return GlassContainer(
-        key: const ValueKey('video-glass-controls'),
-        useOwnLayer: true,
-        platformViewBackdrop: fullscreen,
-        quality: fullscreen ? null : GlassQuality.standard,
-        shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
-        settings: settings,
-        padding: EdgeInsets.symmetric(
-          horizontal: fullscreen ? 20 : 12,
-          vertical: fullscreen ? 14 : 12,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: fullscreen ? 32 : 30,
-              child: Semantics(
-                label: store.t('playbackProgress'),
-                child: Listener(
-                  onPointerCancel: (_) => _cancelScrub(),
-                  child: BufferedPlaybackTrack(
-                    key: const ValueKey('player-buffered-track'),
-                    state: state,
+  Widget _controls({
+    required _PlayerChromeState chrome,
+    required bool fullscreen,
+  }) {
+    final seekable = chrome.canControl && _swipeStartPosition == null;
+    final active = !fullscreen || _controlsVisible || _scrub != null;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
+    final compact = !fullscreen && MediaQuery.sizeOf(context).width < 350;
+    final settings = fullscreen
+        ? _fullscreenControlGlass
+        : dark
+        ? _portraitControlGlassDark
+        : _portraitControlGlassLight;
+    return GlassContainer(
+      key: const ValueKey('video-glass-controls'),
+      useOwnLayer: true,
+      platformViewBackdrop: fullscreen,
+      quality: fullscreen ? null : GlassQuality.standard,
+      shape: LiquidRoundedSuperellipse(borderRadius: fullscreen ? 28 : 22),
+      settings: settings,
+      padding: EdgeInsets.symmetric(
+        horizontal: fullscreen ? 20 : 12,
+        vertical: fullscreen ? 14 : 12,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _PlaybackProgressBar(
+            playback: store.playback,
+            active: active,
+            seekable: seekable,
+            fullscreen: fullscreen,
+            color: color,
+            label: store.t('playbackProgress'),
+            scrub: _scrub,
+            onBeginScrub: _beginScrub,
+            onUpdateScrub: _updateScrub,
+            onCommitScrub: () => unawaited(_commitScrub()),
+            onCancelScrub: _cancelScrub,
+          ),
+          Row(
+            children: [
+              _control(
+                chrome.paused
+                    ? CupertinoIcons.play_fill
+                    : CupertinoIcons.pause_fill,
+                chrome.paused ? 'resumePlayback' : 'pausePlayback',
+                () => store.controlPlayer(chrome.paused ? 'play' : 'pause'),
+                color,
+                size: fullscreen ? 30 : 26,
+                minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+              ),
+              _control(
+                CupertinoIcons.gobackward_10,
+                'rewindTen',
+                seekable
+                    ? () {
+                        final playback = store.playback.value;
+                        store.controlPlayer(
+                          'seek',
+                          (playback.position - 10).clamp(0, playback.duration),
+                        );
+                      }
+                    : null,
+                color,
+                size: fullscreen ? 27 : 24,
+                minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+              ),
+              _control(
+                CupertinoIcons.goforward_10,
+                'forwardTen',
+                seekable
+                    ? () {
+                        final playback = store.playback.value;
+                        store.controlPlayer(
+                          'seek',
+                          (playback.position + 10).clamp(0, playback.duration),
+                        );
+                      }
+                    : null,
+                color,
+                size: fullscreen ? 27 : 24,
+                minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+              ),
+              Expanded(
+                child: _PlaybackTimeText(
+                  playback: store.playback,
+                  active: active,
+                  scrub: _scrub,
+                  style: TextStyle(
                     color: color,
-                    child: GlassSlider(
-                      key: const ValueKey('player-progress-slider'),
-                      value: position,
-                      max: duration > 0 ? duration : 1,
-                      thumbRadius: fullscreen ? 8 : 7,
-                      trackHeight: 4,
-                      activeColor: color,
-                      inactiveColor: Colors.transparent,
-                      onChangeStart: seekable ? _beginScrub : null,
-                      onChanged: seekable ? _updateScrub : null,
-                      onChangeEnd: seekable
-                          ? (_) => unawaited(_commitScrub())
-                          : null,
-                    ),
+                    fontSize: fullscreen ? 13 : (compact ? 10 : 11),
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
               ),
-            ),
-            Row(
-              children: [
-                _control(
-                  state.paused
-                      ? CupertinoIcons.play_fill
-                      : CupertinoIcons.pause_fill,
-                  state.paused ? 'resumePlayback' : 'pausePlayback',
-                  () => store.controlPlayer(state.paused ? 'play' : 'pause'),
-                  color,
-                  size: fullscreen ? 30 : 26,
-                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
-                ),
-                _control(
-                  CupertinoIcons.gobackward_10,
-                  'rewindTen',
-                  seekable
-                      ? () => store.controlPlayer(
-                          'seek',
-                          (state.position - 10).clamp(0, duration),
-                        )
-                      : null,
-                  color,
-                  size: fullscreen ? 27 : 24,
-                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
-                ),
-                _control(
-                  CupertinoIcons.goforward_10,
-                  'forwardTen',
-                  seekable
-                      ? () => store.controlPlayer(
-                          'seek',
-                          (state.position + 10).clamp(0, duration),
-                        )
-                      : null,
-                  color,
-                  size: fullscreen ? 27 : 24,
-                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
-                ),
-                Expanded(
-                  child: Text(
-                    '${_time(position)} / ${_time(duration)}',
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: fullscreen ? 13 : (compact ? 10 : 11),
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ),
-                _control(
-                  state.muted
-                      ? CupertinoIcons.speaker_slash_fill
-                      : CupertinoIcons.speaker_2_fill,
-                  state.muted ? 'unmutePlayback' : 'mutePlayback',
-                  () => store.controlPlayer('mute'),
-                  color,
-                  size: fullscreen ? 26 : 23,
-                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
-                ),
-                _control(
-                  store.playerFullscreen
-                      ? CupertinoIcons.arrow_down_right_arrow_up_left
-                      : CupertinoIcons.arrow_up_left_arrow_down_right,
-                  store.playerFullscreen ? 'exitFullScreen' : 'fullScreen',
-                  () => store.setPlayerFullscreen(!store.playerFullscreen),
-                  color,
-                  size: fullscreen ? 25 : 22,
-                  minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    },
-  );
+              _control(
+                chrome.muted
+                    ? CupertinoIcons.speaker_slash_fill
+                    : CupertinoIcons.speaker_2_fill,
+                chrome.muted ? 'unmutePlayback' : 'mutePlayback',
+                () => store.controlPlayer('mute'),
+                color,
+                size: fullscreen ? 26 : 23,
+                minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+              ),
+              _control(
+                store.playerFullscreen
+                    ? CupertinoIcons.arrow_down_right_arrow_up_left
+                    : CupertinoIcons.arrow_up_left_arrow_down_right,
+                store.playerFullscreen ? 'exitFullScreen' : 'fullScreen',
+                () => store.setPlayerFullscreen(!store.playerFullscreen),
+                color,
+                size: fullscreen ? 25 : 22,
+                minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _control(
     IconData icon,
@@ -1098,37 +1138,37 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       height == 0 ? store.t('automaticQuality') : '${height}p';
 
   Widget _settingsButton({required bool fullscreen}) => ValueListenableBuilder(
-    valueListenable: store.playback,
-    builder: (context, state, child) {
+    valueListenable: _chromeState,
+    builder: (context, chrome, child) {
       final forceDark = fullscreen;
       final items = <Widget>[
-        if (state.canControl && state.qualities.isNotEmpty)
+        if (chrome.canControl && chrome.qualities.isNotEmpty)
           glassSettingsSubmenuItem(
             context,
             key: const ValueKey('player-menu-quality'),
             icon: CupertinoIcons.slider_horizontal_3,
             title: store.t('videoQuality'),
-            value: _qualityLabel(state.quality),
+            value: _qualityLabel(chrome.quality),
             forceDark: forceDark,
             submenu: [
-              for (final height in [0, ...state.qualities])
+              for (final height in [0, ...chrome.qualities])
                 glassSettingsOptionItem(
                   context,
                   key: ValueKey('player-quality-$height'),
                   title: _qualityLabel(height),
-                  selected: state.quality == height,
+                  selected: chrome.quality == height,
                   forceDark: forceDark,
                   onTap: () => store.controlPlayer('quality', height.toDouble()),
                 ),
             ],
           ),
-        if (state.canControl)
+        if (chrome.canControl)
           glassSettingsSubmenuItem(
             context,
             key: const ValueKey('player-menu-speed'),
             icon: CupertinoIcons.gauge,
             title: store.t('playbackSpeed'),
-            value: _rateLabel(state.rate),
+            value: _rateLabel(chrome.rate),
             forceDark: forceDark,
             submenu: [
               for (final rate in [.5, .75, 1.0, 1.25, 1.5, 1.75, 2.0])
@@ -1136,13 +1176,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                   context,
                   key: ValueKey('player-speed-$rate'),
                   title: _rateLabel(rate),
-                  selected: rate == state.rate,
+                  selected: rate == chrome.rate,
                   forceDark: forceDark,
                   onTap: () => store.controlPlayer('rate', rate),
                 ),
             ],
           ),
-        if (state.canControl && state.hasDanmaku)
+        if (chrome.canControl && chrome.hasDanmaku)
           glassSettingsActionItem(
             context,
             key: const ValueKey('player-menu-danmaku'),
@@ -1178,9 +1218,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ? GlassIconButton(
                 useOwnLayer: true,
                 platformViewBackdrop: true,
-                settings: mediaGlass.copyWith(
-                  backerColor: const Color(0x66000000),
-                ),
+                settings: _overlayActionGlass,
                 semanticLabel: store.t('playbackSettings'),
                 onPressed: toggleMenu,
                 icon: const Icon(CupertinoIcons.ellipsis, color: Colors.white),
@@ -1218,9 +1256,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                         key: const ValueKey('player-fullscreen-close'),
                         useOwnLayer: true,
                         platformViewBackdrop: true,
-                        settings: mediaGlass.copyWith(
-                          backerColor: const Color(0x66000000),
-                        ),
+                        settings: _overlayActionGlass,
                         semanticLabel: store.t('exitFullScreen'),
                         onPressed: () => store.setPlayerFullscreen(false),
                         icon: const Icon(
@@ -1266,9 +1302,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           bottom: 0,
           child: Center(
             child: ValueListenableBuilder(
-              valueListenable: store.playback,
-              builder: (context, state, child) {
-                if (!store.playerLocked && !state.canControl) {
+              valueListenable: _chromeState,
+              builder: (context, chrome, child) {
+                if (!store.playerLocked && !chrome.canControl) {
                   return const SizedBox.shrink();
                 }
                 return IgnorePointer(
@@ -1282,9 +1318,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                       ),
                       useOwnLayer: true,
                       platformViewBackdrop: true,
-                      settings: mediaGlass.copyWith(
-                        backerColor: const Color(0x66000000),
-                      ),
+                      settings: _overlayActionGlass,
                       semanticLabel: store.t(
                         store.playerLocked ? 'unlockPlayer' : 'lockPlayer',
                       ),
@@ -1316,10 +1350,289 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
     return '${bytesPerSecond.round()} B/s';
   }
+}
 
-  String _time(double seconds) {
-    final value = seconds.floor();
-    final minutes = value ~/ 60;
-    return '${minutes.toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
+String _formatPlaybackTime(double seconds) {
+  final value = seconds.floor();
+  final minutes = value ~/ 60;
+  return '${minutes.toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
+}
+
+@immutable
+class _PlayerChromeState {
+  const _PlayerChromeState({
+    required this.phase,
+    required this.surfaceReady,
+    required this.canOperate,
+    required this.canControl,
+    required this.paused,
+    required this.muted,
+    required this.buffering,
+    required this.ended,
+    required this.hasDanmaku,
+    required this.browserError,
+    required this.quality,
+    required this.qualities,
+    required this.duration,
+    required this.rate,
+  });
+
+  factory _PlayerChromeState.fromPlayback(
+    PlaybackState state, {
+    required bool browserError,
+  }) => _PlayerChromeState(
+    phase: state.phase,
+    surfaceReady: state.surfaceReady,
+    canOperate: state.canOperate,
+    canControl: state.canControl,
+    paused: state.paused,
+    muted: state.muted,
+    buffering: state.buffering,
+    ended: state.ended,
+    hasDanmaku: state.hasDanmaku,
+    browserError: browserError,
+    quality: state.quality,
+    qualities: state.qualities,
+    duration: state.duration,
+    rate: state.rate,
+  );
+
+  final PlaybackPhase phase;
+  final bool surfaceReady, canOperate, canControl, paused, muted, buffering;
+  final bool ended, hasDanmaku, browserError;
+  final int quality;
+  final List<int> qualities;
+  final double duration, rate;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _PlayerChromeState &&
+          phase == other.phase &&
+          surfaceReady == other.surfaceReady &&
+          canOperate == other.canOperate &&
+          canControl == other.canControl &&
+          paused == other.paused &&
+          muted == other.muted &&
+          buffering == other.buffering &&
+          ended == other.ended &&
+          hasDanmaku == other.hasDanmaku &&
+          browserError == other.browserError &&
+          quality == other.quality &&
+          listEquals(qualities, other.qualities) &&
+          duration == other.duration &&
+          rate == other.rate;
+
+  @override
+  int get hashCode => Object.hash(
+    phase,
+    surfaceReady,
+    canOperate,
+    canControl,
+    paused,
+    muted,
+    buffering,
+    ended,
+    hasDanmaku,
+    browserError,
+    quality,
+    Object.hashAll(qualities),
+    duration,
+    rate,
+  );
+}
+
+class _PlaybackProgressBar extends StatefulWidget {
+  const _PlaybackProgressBar({
+    required this.playback,
+    required this.active,
+    required this.seekable,
+    required this.fullscreen,
+    required this.color,
+    required this.label,
+    required this.scrub,
+    required this.onBeginScrub,
+    required this.onUpdateScrub,
+    required this.onCommitScrub,
+    required this.onCancelScrub,
+  });
+
+  final ValueListenable<PlaybackState> playback;
+  final bool active, seekable, fullscreen;
+  final Color color;
+  final String label;
+  final double? scrub;
+  final ValueChanged<double> onBeginScrub;
+  final ValueChanged<double> onUpdateScrub;
+  final VoidCallback onCommitScrub;
+  final VoidCallback onCancelScrub;
+
+  @override
+  State<_PlaybackProgressBar> createState() => _PlaybackProgressBarState();
+}
+
+class _PlaybackProgressBarState extends State<_PlaybackProgressBar> {
+  late PlaybackState _state;
+
+  @override
+  void initState() {
+    super.initState();
+    _state = widget.playback.value;
+    if (widget.active) widget.playback.addListener(_onPlayback);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlaybackProgressBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playback != widget.playback) {
+      if (oldWidget.active) oldWidget.playback.removeListener(_onPlayback);
+      _state = widget.playback.value;
+      if (widget.active) widget.playback.addListener(_onPlayback);
+    } else if (oldWidget.active != widget.active) {
+      if (widget.active) {
+        _state = widget.playback.value;
+        widget.playback.addListener(_onPlayback);
+      } else {
+        widget.playback.removeListener(_onPlayback);
+      }
+    }
+  }
+
+  void _onPlayback() {
+    if (!mounted || !widget.active) return;
+    setState(() => _state = widget.playback.value);
+  }
+
+  @override
+  void dispose() {
+    if (widget.active) widget.playback.removeListener(_onPlayback);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = _state.duration;
+    final position = (widget.scrub ?? _state.position).clamp(0.0, duration);
+    return SizedBox(
+      height: widget.fullscreen ? 32 : 30,
+      child: Semantics(
+        label: widget.label,
+        child: Listener(
+          onPointerCancel: (_) => widget.onCancelScrub(),
+          child: BufferedPlaybackTrack(
+            key: const ValueKey('player-buffered-track'),
+            state: _state,
+            color: widget.color,
+            child: GlassSlider(
+              key: const ValueKey('player-progress-slider'),
+              value: position,
+              max: duration > 0 ? duration : 1,
+              thumbRadius: widget.fullscreen ? 8 : 7,
+              trackHeight: 4,
+              activeColor: widget.color,
+              inactiveColor: Colors.transparent,
+              onChangeStart: widget.seekable ? widget.onBeginScrub : null,
+              onChanged: widget.seekable ? widget.onUpdateScrub : null,
+              onChangeEnd: widget.seekable
+                  ? (_) => widget.onCommitScrub()
+                  : null,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaybackTimeText extends StatefulWidget {
+  const _PlaybackTimeText({
+    required this.playback,
+    required this.active,
+    required this.scrub,
+    required this.style,
+  });
+
+  final ValueListenable<PlaybackState> playback;
+  final bool active;
+  final double? scrub;
+  final TextStyle style;
+
+  @override
+  State<_PlaybackTimeText> createState() => _PlaybackTimeTextState();
+}
+
+class _PlaybackTimeTextState extends State<_PlaybackTimeText> {
+  late int _positionSeconds;
+  late int _durationSeconds;
+
+  void _capture() {
+    final state = widget.playback.value;
+    final duration = state.duration;
+    final position = (widget.scrub ?? state.position).clamp(0.0, duration);
+    _positionSeconds = position.floor();
+    _durationSeconds = duration.floor();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _capture();
+    if (widget.active) widget.playback.addListener(_onPlayback);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlaybackTimeText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playback != widget.playback) {
+      if (oldWidget.active) oldWidget.playback.removeListener(_onPlayback);
+      _capture();
+      if (widget.active) widget.playback.addListener(_onPlayback);
+    } else {
+      if (oldWidget.active != widget.active) {
+        if (widget.active) {
+          _capture();
+          widget.playback.addListener(_onPlayback);
+        } else {
+          widget.playback.removeListener(_onPlayback);
+        }
+      } else if (oldWidget.scrub != widget.scrub) {
+        _capture();
+      }
+    }
+  }
+
+  void _onPlayback() {
+    if (!mounted || !widget.active) return;
+    final state = widget.playback.value;
+    final duration = state.duration;
+    final position = (widget.scrub ?? state.position).clamp(0.0, duration);
+    final posSec = position.floor();
+    final durSec = duration.floor();
+    if (posSec == _positionSeconds && durSec == _durationSeconds) return;
+    setState(() {
+      _positionSeconds = posSec;
+      _durationSeconds = durSec;
+    });
+  }
+
+  @override
+  void dispose() {
+    if (widget.active) widget.playback.removeListener(_onPlayback);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    String fmt(int value) {
+      final minutes = value ~/ 60;
+      return '${minutes.toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
+    }
+
+    return Text(
+      '${fmt(_positionSeconds)} / ${fmt(_durationSeconds)}',
+      textAlign: TextAlign.center,
+      maxLines: 1,
+      style: widget.style,
+    );
   }
 }

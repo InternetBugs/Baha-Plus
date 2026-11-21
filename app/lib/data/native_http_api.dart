@@ -356,6 +356,10 @@ class NativeHttpApi {
     );
   }
 
+  static final _danmakuIdPattern = RegExp(r'^\d{1,20}$');
+  static final _danmakuSpacePattern = RegExp(r'[\s\u00a0]+');
+  static final _danmakuColorPattern = RegExp(r'^#[0-9a-fA-F]{6}$');
+
   /// Normalize the units returned by the official API:
   /// time is in tenths of a second, size/position are enum values, text is HTML.
   static List<NativeDanmaku> parseDanmaku(Json response) {
@@ -371,8 +375,6 @@ class NativeHttpApi {
       final time = row['time'];
       final rawText = row['text'];
       if ((id is! int && id is! String) ||
-          !RegExp(r'^\d{1,20}$').hasMatch('$id') ||
-          items.containsKey('$id') ||
           time is! num ||
           !time.isFinite ||
           time < 0 ||
@@ -381,13 +383,21 @@ class NativeHttpApi {
           rawText.length > 10000) {
         continue;
       }
-      final text = (parseFragment(rawText).text ?? '')
-          .replaceAll(RegExp(r'[\s\u00a0]+'), ' ')
-          .trim();
+      final idText = '$id';
+      if (!_danmakuIdPattern.hasMatch(idText) || items.containsKey(idText)) {
+        continue;
+      }
+      final decoded =
+          (rawText.contains('<') ||
+              rawText.contains('&') ||
+              rawText.contains('\u0000'))
+          ? (parseFragment(rawText).text ?? '')
+          : rawText;
+      final text = decoded.replaceAll(_danmakuSpacePattern, ' ').trim();
       if (text.isEmpty || text.length > 500) continue;
       final color = row['color'];
-      items['$id'] = NativeDanmaku.fromJson({
-        'id': '$id',
+      items[idText] = NativeDanmaku.fromJson({
+        'id': idText,
         'time': time / 10,
         'text': text,
         'mode': switch (row['position']) {
@@ -400,7 +410,7 @@ class NativeHttpApi {
           2 => 28,
           _ => 24,
         },
-        'color': color is String && RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(color)
+        'color': color is String && _danmakuColorPattern.hasMatch(color)
             ? color
             : '#FFFFFF',
       });

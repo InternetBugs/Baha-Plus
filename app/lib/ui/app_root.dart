@@ -42,6 +42,12 @@ class _AppRootState extends State<AppRoot>
   bool _favoritePresentationScheduled = false;
   bool _updateCheckInProgress = false;
   double _tabDirection = 1;
+  static final _tabBarSettingsDark = LiquidGlassSettings.ios27Dark.copyWith(
+    backerColor: const Color(0x40000000),
+  );
+  static final _tabBarSettingsLight = LiquidGlassSettings.ios27Light.copyWith(
+    backerColor: const Color(0x45ffffff),
+  );
   AppStore get store => widget.store;
   bool get _favoritePortalVisible =>
       widget.mountPortal && store.browserVisible && store.favoriteLoginPending;
@@ -565,6 +571,7 @@ class _AppRootState extends State<AppRoot>
     return GlassScaffold(
       bottomEdgeFade: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      enableBackgroundSampling: false,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         title: Text(title),
@@ -572,27 +579,23 @@ class _AppRootState extends State<AppRoot>
         actions: [
           AnimatedBuilder(
             animation: controller,
-            builder: (context, child) => IgnorePointer(
-              ignoring: controller.collapseProgress < .5,
-              child: Opacity(
-                opacity: controller.collapseProgress,
-                child: _accountActions(),
-              ),
-            ),
+            child: _accountActions(),
+            builder: (context, child) {
+              final progress = controller.collapseProgress;
+              if (progress <= 0) return const SizedBox.shrink();
+              return IgnorePointer(
+                ignoring: progress < .5,
+                child: Opacity(opacity: progress, child: child),
+              );
+            },
           ),
         ],
       ),
       bottomBar: GlassTabBar.bottom(
         key: const ValueKey('main-tab-bar'),
-        settings:
-            (Theme.of(context).brightness == Brightness.dark
-                    ? LiquidGlassSettings.ios27Dark
-                    : LiquidGlassSettings.ios27Light)
-                .copyWith(
-                  backerColor: Theme.of(context).brightness == Brightness.dark
-                      ? const Color(0x40000000)
-                      : const Color(0x45ffffff),
-                ),
+        settings: Theme.of(context).brightness == Brightness.dark
+            ? _tabBarSettingsDark
+            : _tabBarSettingsLight,
         selectedIndex: store.tab,
         onTabSelected: _selectTab,
         horizontalPadding: 16,

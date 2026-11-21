@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import '../core/community.dart';
 import '../core/danmaku_animation.dart';
 import '../core/native_danmaku.dart';
+import '../core/playback_state.dart';
 import '../data/native_playback.dart';
 
 export '../core/native_danmaku.dart';
@@ -134,7 +135,10 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
       running: running,
       discontinuity: discontinuity,
     );
-    _scheduleDrawing(forceRedraw: forceRedraw || discontinuity || !running);
+    _scheduleDrawing(
+      forceRedraw: forceRedraw || discontinuity || !running,
+      currentState: state,
+    );
     final failed = state.phase.name == 'error' && !widget.suppressErrors;
     if (_video != widget.playback.video || _failed != failed) {
       setState(() {
@@ -171,7 +175,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     }
     _lastPresentedAt = now;
     final position = math.min(
-      widget.playback.state.duration,
+      widget.playback.duration,
       _animationClock.position,
     );
     if (_position.value != position) {
@@ -191,13 +195,15 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     _lastPresentedAt = null;
   }
 
-  void _scheduleDrawing({bool forceRedraw = false, bool atBoundary = false}) {
+  void _scheduleDrawing({
+    bool forceRedraw = false,
+    bool atBoundary = false,
+    PlaybackState? currentState,
+  }) {
     _boundaryTimer?.cancel();
     _boundaryTimer = null;
-    final position = math.min(
-      widget.playback.state.duration,
-      _animationClock.position,
-    );
+    final state = currentState ?? widget.playback.state;
+    final position = math.min(state.duration, _animationClock.position);
     // Items are sorted by media time, as required by the painter below.
     var low = 0, high = _enabledItems.length;
     while (low < high) {
@@ -235,7 +241,6 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
       _presentPosition(force: true);
     }
     _hadVisibleItems = visible;
-    final state = widget.playback.state;
     final running =
         !state.paused && !state.buffering && position < state.duration;
     if (running && rolling) {
@@ -271,7 +276,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   }
 
   void _recordTimings(List<ui.FrameTiming> timings) {
-    if (!mounted || _frameTimer == null || widget.playback.state.paused) {
+    if (!mounted || _frameTimer == null || widget.playback.isPaused) {
       _resetTimings();
       return;
     }
@@ -314,7 +319,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
           Center(
             child: AspectRatio(
               aspectRatio: _video!.value.aspectRatio,
-              child: VideoPlayer(_video!),
+              child: RepaintBoundary(child: VideoPlayer(_video!)),
             ),
           ),
         IgnorePointer(
@@ -373,8 +378,15 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
 }
 
 class _DanmakuSprite {
-  const _DanmakuSprite(this.image, this.width, this.height, this.bytes);
+  _DanmakuSprite(this.image, this.width, this.height, this.bytes)
+    : sourceRect = Rect.fromLTWH(
+        0,
+        0,
+        image.width.toDouble(),
+        image.height.toDouble(),
+      );
   final ui.Image image;
+  final Rect sourceRect;
   final double width, height;
   final int bytes;
 }
@@ -422,12 +434,20 @@ class _DanmakuRasterCache {
   }
 
   void retain(Set<String> ids) {
-    for (final id in _images.keys.where((id) => !ids.contains(id)).toList()) {
-      final sprite = _images.remove(id)!;
-      bytes -= sprite.bytes;
-      sprite.image.dispose();
+    List<String>? expired;
+    for (final id in _images.keys) {
+      if (!ids.contains(id)) (expired ??= <String>[]).add(id);
     }
-    _unavailable.removeWhere((id) => !ids.contains(id));
+    if (expired != null) {
+      for (final id in expired) {
+        final sprite = _images.remove(id)!;
+        bytes -= sprite.bytes;
+        sprite.image.dispose();
+      }
+    }
+    if (_unavailable.isNotEmpty) {
+      _unavailable.removeWhere((id) => !ids.contains(id));
+    }
   }
 
   void clear() {
@@ -457,6 +477,7 @@ class _DanmakuPainter extends CustomPainter {
   final StableDanmakuLanes lanes;
   final _DanmakuRasterCache sprites;
   final double pixelRatio;
+  static final _spritePaint = Paint()..filterQuality = FilterQuality.low;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -532,19 +553,14 @@ class _DanmakuPainter extends CustomPainter {
         } else {
           canvas.drawImageRect(
             sprite.image,
-            Rect.fromLTWH(
-              0,
-              0,
-              sprite.image.width.toDouble(),
-              sprite.image.height.toDouble(),
-            ),
+            sprite.sourceRect,
             Rect.fromLTWH(
               x - _DanmakuRasterCache.padding,
               y - _DanmakuRasterCache.padding,
               sprite.width,
               sprite.height,
             ),
-            Paint()..filterQuality = FilterQuality.low,
+            _spritePaint,
           );
         }
       }
@@ -552,8 +568,14 @@ class _DanmakuPainter extends CustomPainter {
     } else {
       lanes.clear();
     }
-    for (final id in text.keys.where((id) => !retained.contains(id)).toList()) {
-      text.remove(id)!.dispose();
+    if (text.length > retained.length) {
+      final expired = <String>[
+        for (final id in text.keys)
+          if (!retained.contains(id)) id,
+      ];
+      for (final id in expired) {
+        text.remove(id)!.dispose();
+      }
     }
     sprites.retain(retained);
   }

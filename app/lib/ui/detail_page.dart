@@ -22,6 +22,7 @@ class DetailPage extends StatelessWidget {
     listenable: store,
     builder: (context, child) => GlassScaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      enableBackgroundSampling: false,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         title: Text(store.t('details'), style: const TextStyle(fontSize: 17)),

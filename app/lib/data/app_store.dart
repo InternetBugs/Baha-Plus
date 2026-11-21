@@ -311,13 +311,32 @@ class AppStore extends ChangeNotifier {
   DanmakuSettings danmakuSettings = const DanmakuSettings();
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
+  int _readRevision = 0;
+  List<AnimeNotification>? _unreadNotificationsSource;
+  int _unreadNotificationsLength = -1;
+  int _unreadReadRevision = -1;
+  int _unreadNotificationsCache = 0;
   bool notificationsLoading = false;
   String? notificationsError;
   int _notificationGeneration = 0;
   final Set<String> _communityWrites = {};
 
-  int get unreadNotifications =>
-      notifications.where((item) => !notificationRead(item)).length;
+  int get unreadNotifications {
+    if (!identical(_unreadNotificationsSource, notifications) ||
+        _unreadNotificationsLength != notifications.length ||
+        _unreadReadRevision != _readRevision) {
+      var count = 0;
+      for (final item in notifications) {
+        if (!_readNotifications.contains(item.id)) count++;
+      }
+      _unreadNotificationsCache = count;
+      _unreadNotificationsSource = notifications;
+      _unreadNotificationsLength = notifications.length;
+      _unreadReadRevision = _readRevision;
+    }
+    return _unreadNotificationsCache;
+  }
+
   bool notificationRead(AnimeNotification item) =>
       _readNotifications.contains(item.id);
 
@@ -508,6 +527,7 @@ class AppStore extends ChangeNotifier {
         } catch (_) {}
       }
       _readNotifications.addAll(currentRead);
+      _readRevision++;
       notifications = items;
       _notificationOwner = actualOwner;
       diagnostics.record('notifications.completed', {'count': items.length});
@@ -522,6 +542,7 @@ class AppStore extends ChangeNotifier {
       if (notificationsError == 'login') {
         notifications = [];
         _readNotifications.clear();
+        _readRevision++;
       }
     } finally {
       if (!_disposed && generation == _notificationGeneration) {
@@ -538,6 +559,7 @@ class AppStore extends ChangeNotifier {
     _readNotifications.addAll(
       item == null ? notifications.map((e) => e.id) : [item.id],
     );
+    _readRevision++;
     _emit();
     final read = jsonEncode(
       _readNotifications.toList().reversed.take(500).toList(),
@@ -569,6 +591,7 @@ class AppStore extends ChangeNotifier {
     _notificationGeneration++;
     notifications = [];
     _readNotifications.clear();
+    _readRevision++;
     _notificationOwner = null;
     notificationsLoading = false;
     notificationsError = null;
@@ -667,10 +690,45 @@ class AppStore extends ChangeNotifier {
   Future<bool> _sendPlayerCommand(String action, double? value) async =>
       await nativeHttpPlayback?.command(action, value) ?? false;
 
-  List<Anime> get seasonal =>
-      catalog.items.where((item) => item.sections.contains('season')).toList();
-  List<Anime> get popular =>
-      catalog.items.where((item) => item.sections.contains('hot')).toList();
+  Catalog? _derivedCatalog;
+  List<Anime> _seasonalCache = const [];
+  List<Anime> _popularCache = const [];
+  List<Anime>? _favoriteIdsSource;
+  int _favoriteIdsLength = -1;
+  Set<String> _favoriteIds = const {};
+  Catalog? _libraryCatalog;
+  List<Anime>? _libraryFavorites;
+  int _libraryFavoritesLen = -1;
+  String? _libraryFilterCache;
+  String? _libraryQueryCache;
+  List<Anime>? _librarySearchResults;
+  String? _librarySearchedQuery;
+  List<Anime> _libraryItemsCache = const [];
+
+  void _ensureCatalogSections() {
+    if (identical(_derivedCatalog, catalog)) return;
+    final items = catalog.items;
+    _seasonalCache = List<Anime>.unmodifiable([
+      for (final item in items)
+        if (item.sections.contains('season')) item,
+    ]);
+    _popularCache = List<Anime>.unmodifiable([
+      for (final item in items)
+        if (item.sections.contains('hot')) item,
+    ]);
+    _derivedCatalog = catalog;
+  }
+
+  List<Anime> get seasonal {
+    _ensureCatalogSections();
+    return _seasonalCache;
+  }
+
+  List<Anime> get popular {
+    _ensureCatalogSections();
+    return _popularCache;
+  }
+
   bool get _usesOfficialSearch =>
       tab == 4 || (tab == 2 && libraryFilter == 'all');
   String get query => _query;
@@ -692,7 +750,16 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  bool isFavorite(Anime item) => favorites.any((e) => e.id == item.id);
+  bool isFavorite(Anime item) {
+    if (!identical(_favoriteIdsSource, favorites) ||
+        _favoriteIdsLength != favorites.length) {
+      _favoriteIds = {for (final entry in favorites) entry.id};
+      _favoriteIdsSource = favorites;
+      _favoriteIdsLength = favorites.length;
+    }
+    return _favoriteIds.contains(item.id);
+  }
+
   List<Anime> get searchMatches {
     if (query.trim().isEmpty) return catalog.items;
     return searchedQuery == query ? searchResults : [];
@@ -700,15 +767,32 @@ class AppStore extends ChangeNotifier {
 
   List<Anime> get libraryItems {
     if (libraryFilter == 'all' && query.trim().isNotEmpty) return searchMatches;
+    if (identical(_libraryCatalog, catalog) &&
+        identical(_libraryFavorites, favorites) &&
+        _libraryFavoritesLen == favorites.length &&
+        _libraryFilterCache == libraryFilter &&
+        _libraryQueryCache == _query &&
+        identical(_librarySearchResults, searchResults) &&
+        _librarySearchedQuery == searchedQuery) {
+      return _libraryItemsCache;
+    }
     final source = libraryFilter == 'favorites' ? favorites : catalog.items;
-    return source
-        .where(
-          (item) =>
-              (const ['all', 'favorites'].contains(libraryFilter) ||
-                  item.sections.contains(libraryFilter)) &&
-              folding.matches(item.title, query),
-        )
-        .toList();
+    final result = List<Anime>.unmodifiable([
+      for (final item in source)
+        if ((const ['all', 'favorites'].contains(libraryFilter) ||
+                item.sections.contains(libraryFilter)) &&
+            folding.matches(item.title, query))
+          item,
+    ]);
+    _libraryCatalog = catalog;
+    _libraryFavorites = favorites;
+    _libraryFavoritesLen = favorites.length;
+    _libraryFilterCache = libraryFilter;
+    _libraryQueryCache = _query;
+    _librarySearchResults = searchResults;
+    _librarySearchedQuery = searchedQuery;
+    _libraryItemsCache = result;
+    return result;
   }
 
   void selectTab(int value, {String? filter}) {

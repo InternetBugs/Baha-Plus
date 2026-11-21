@@ -12,17 +12,21 @@ class NativeHttpPlayer extends StatelessWidget {
   final AppStore store;
 
   @override
-  Widget build(BuildContext context) {
-    final session = store.nativeHttpPlayback!;
-    return ListenableBuilder(
-      listenable: Listenable.merge([session, store]),
-      builder: (context, _) => PlayerPage(
-        key: const ValueKey('app-playback-page'),
-        store: store,
-        video: _surface(session),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => PlayerPage(
+    key: const ValueKey('app-playback-page'),
+    store: store,
+    video: ListenableBuilder(
+      listenable: store,
+      builder: (context, _) {
+        final session = store.nativeHttpPlayback;
+        if (session == null) return const ColoredBox(color: Colors.black);
+        return ListenableBuilder(
+          listenable: session,
+          builder: (context, _) => _surface(session),
+        );
+      },
+    ),
+  );
 
   Widget _surface(NativeHttpPlayback session) {
     final player = session.player;

@@ -71,10 +71,25 @@ class NativeHlsCache {
   Directory? _directory;
   Future<void>? _starting, _closing;
   bool _closed = false;
-  int _diskBytes = 0, _requestSequence = 0;
+  int _diskBytes = 0, _requestSequence = 0, _version = 0;
   int downloadedBytes = 0;
+  int get version => _version;
+  final _bufferedRangesCache = <Uri, List<PlaybackBufferRange>>{};
   Future<void> _writes = Future.value();
   static Future<void>? _cleanup;
+  static final _extensionPattern = RegExp(r'\.[a-zA-Z0-9]{1,6}$');
+  static final _rangeHeaderPattern = RegExp(r'^bytes=(\d*)-(\d*)$');
+  static final _contentRangePattern = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$');
+  static final _byteRangeAttrPattern = RegExp(r'BYTERANGE="([^"]+)"');
+  static final _uriAttrPattern = RegExp(r'URI="([^"]+)"');
+  static final _stripByteRangeAttrPattern = RegExp(r'BYTERANGE="[^"]+",?');
+  static final _trailingCommaPattern = RegExp(r',$');
+  static final _byteRangeValuePattern = RegExp(r'^(\d+)(?:@(\d+))?$');
+
+  void _invalidateBufferedRanges() {
+    _version++;
+    _bufferedRangesCache.clear();
+  }
 
   static Future<Directory> _temporaryDirectory() async {
     final root = await getTemporaryDirectory();
@@ -144,7 +159,7 @@ class NativeHlsCache {
     final server = _server;
     if (_closed || server == null) throw StateError('Media cache is not ready');
     final original = resource.uri.path.split('/').last;
-    final suffix = RegExp(r'\.[a-zA-Z0-9]{1,6}$').firstMatch(original)?[0];
+    final suffix = _extensionPattern.firstMatch(original)?[0];
     final extension = resource.kind == _Kind.playlist
         ? '.m3u8'
         : suffix ?? '.bin';
@@ -159,6 +174,8 @@ class NativeHlsCache {
   /// Report only whole segments whose keys and initialization data are cached.
   /// The most recently requested variant represents AVPlayer's adaptive choice.
   List<PlaybackBufferRange> bufferedRanges(Uri source) {
+    final cached = _bufferedRangesCache[source];
+    if (cached != null) return cached;
     final root = _resources['${_Kind.playlist}|$source|null|null'];
     if (root == null) return const [];
     final visited = <_Resource>{};
@@ -190,7 +207,9 @@ class NativeHlsCache {
         ranges.add(segment.time);
       }
     }
-    return ranges;
+    final result = List<PlaybackBufferRange>.unmodifiable(ranges);
+    _bufferedRangesCache[source] = result;
+    return result;
   }
 
   Future<void> _serve(HttpRequest request) async {
@@ -215,6 +234,7 @@ class NativeHlsCache {
       }
       if (resource.kind == _Kind.playlist) {
         resource.requested = ++_requestSequence;
+        _invalidateBufferedRanges();
       }
       final data = await _read(resource);
       if (_closed) return;
@@ -232,7 +252,7 @@ class NativeHlsCache {
       final range = request.headers.value(HttpHeaders.rangeHeader);
       var start = 0, end = data.length - 1;
       if (range != null) {
-        final match = RegExp(r'^bytes=(\d*)-(\d*)$').firstMatch(range);
+        final match = _rangeHeaderPattern.firstMatch(range);
         if (match == null ||
             (match[1]!.isEmpty && match[2]!.isEmpty) ||
             data.isEmpty) {
@@ -326,9 +346,9 @@ class NativeHlsCache {
       _Kind.key => 64 * 1024,
       _ => 64 * 1024 * 1024,
     };
-    final contentRange = RegExp(
-      r'^bytes (\d+)-(\d+)/(\d+)$',
-    ).firstMatch(response.headers['content-range'] ?? '');
+    final contentRange = _contentRangePattern.firstMatch(
+      response.headers['content-range'] ?? '',
+    );
     if (response.statusCode != (bytes == null ? 200 : 206) ||
         (response.contentLength ?? 0) > limit ||
         (bytes != null &&
@@ -382,7 +402,7 @@ class NativeHlsCache {
         }
         final target = File('${_directory!.path}/${resource.id}.media');
         try {
-          await target.writeAsBytes(data, flush: true);
+          await target.writeAsBytes(data);
         } on FileSystemException {
           // Storage pressure must not prevent using the downloaded segment.
           return;
@@ -397,6 +417,7 @@ class NativeHlsCache {
       _writes = write;
       await write;
     }
+    _invalidateBufferedRanges();
     onChanged?.call();
     return data;
   }
@@ -407,6 +428,7 @@ class NativeHlsCache {
       ..file = null
       ..size = 0;
     _lru.remove(resource);
+    _invalidateBufferedRanges();
     onChanged?.call();
   }
 
@@ -490,10 +512,10 @@ class NativeHlsCache {
             line.startsWith('#EXT-X-SESSION-KEY:');
         final isMap = line.startsWith('#EXT-X-MAP:');
         final mapRange = isMap
-            ? RegExp(r'BYTERANGE="([^"]+)"').firstMatch(line)?.group(1)
+            ? _byteRangeAttrPattern.firstMatch(line)?.group(1)
             : null;
         _Resource? dependency;
-        line = line.replaceAllMapped(RegExp(r'URI="([^"]+)"'), (match) {
+        line = line.replaceAllMapped(_uriAttrPattern, (match) {
           final uri = playlist.uri.resolve(match[1]!);
           final resource = _register(
             uri,
@@ -514,8 +536,8 @@ class NativeHlsCache {
         if (isMap) {
           initialization = dependency;
           line = line
-              .replaceAll(RegExp(r'BYTERANGE="[^"]+",?'), '')
-              .replaceFirst(RegExp(r',$'), '');
+              .replaceAll(_stripByteRangeAttrPattern, '')
+              .replaceFirst(_trailingCommaPattern, '');
         }
       } else if (line.startsWith('#EXT-X-KEY:') &&
           line.contains('METHOD=NONE')) {
@@ -558,7 +580,7 @@ class NativeHlsCache {
   }
 
   static _Bytes _byteRange(String value, int? implicitStart) {
-    final match = RegExp(r'^(\d+)(?:@(\d+))?$').firstMatch(value);
+    final match = _byteRangeValuePattern.firstMatch(value);
     final length = match == null ? null : int.tryParse(match[1]!);
     final start = match?[2] == null ? implicitStart : int.tryParse(match![2]!);
     if (length == null ||
@@ -598,6 +620,7 @@ class NativeHlsCache {
     _resources.clear();
     _byId.clear();
     _lru.clear();
+    _invalidateBufferedRanges();
     final directory = _directory;
     if (directory != null) {
       try {

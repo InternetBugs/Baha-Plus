@@ -11,7 +11,9 @@ class PlaybackEnvironment {
     MethodChannel channel = const MethodChannel(
       'app.bahaplus.mobile/playback_environment',
     ),
-  }) : _channel = channel {
+    Duration Function()? now,
+  }) : _channel = channel,
+       _now = now {
     store.addListener(_sync);
     store.playback.addListener(_sync);
     _channel.setMethodCallHandler(_remoteCommand);
@@ -20,9 +22,16 @@ class PlaybackEnvironment {
 
   final AppStore store;
   final MethodChannel _channel;
+  final Duration Function()? _now;
+  final _clock = Stopwatch()..start();
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   bool _foreground = true, _disposed = false;
-  String _last = '';
+  bool _hasSent = false;
+  bool _lastActive = false, _lastNative = false;
+  bool _lastKeepAwake = false, _lastPlaying = false;
+  String _lastDocument = '', _lastTitle = '', _lastEpisode = '';
+  double _lastDuration = -1, _lastRate = -1, _lastPosition = -1;
+  Duration _lastSentAt = Duration.zero;
   Future<void> _updates = Future<void>.value();
 
   void setForeground(bool value) {
@@ -160,28 +169,67 @@ class PlaybackEnvironment {
     }
     final state = store.playback.value;
     final active = store.browserVisible && store.showsPlayer;
+    final native = store.usesNativePlayback;
+    final document = store.operation.id;
     final playing =
         active &&
         _foreground &&
         state.canOperate &&
         !state.paused &&
         !state.ended;
+    final keepAwake = playing;
+    final title = store.playingAnime?.title ?? '';
+    final episode = store.playingEpisodeLabel;
+    final duration = state.duration;
+    final rate = state.rate;
+    final now = _now?.call() ?? _clock.elapsed;
+
+    if (_hasSent &&
+        _lastActive == active &&
+        _lastNative == native &&
+        _lastDocument == document &&
+        _lastKeepAwake == keepAwake &&
+        _lastPlaying == playing &&
+        _lastTitle == title &&
+        _lastEpisode == episode &&
+        _lastDuration == duration &&
+        _lastRate == rate) {
+      if (!active) return;
+      if (playing) {
+        final elapsedSeconds = (now - _lastSentAt).inMicroseconds / 1e6;
+        final extrapolated = _lastPosition + elapsedSeconds * rate;
+        if ((state.position - extrapolated).abs() < 2.0) return;
+      } else if (state.position.floor() == _lastPosition.floor()) {
+        return;
+      }
+    }
+
+    _hasSent = true;
+    _lastActive = active;
+    _lastNative = native;
+    _lastDocument = document;
+    _lastKeepAwake = keepAwake;
+    _lastPlaying = playing;
+    _lastTitle = title;
+    _lastEpisode = episode;
+    _lastDuration = duration;
+    _lastRate = rate;
+    _lastPosition = state.position;
+    _lastSentAt = now;
+
     final body = <String, dynamic>{
       'active': active,
       'diagnostics': _diagnostics,
-      'native': store.usesNativePlayback,
-      'document': store.operation.id,
-      'keepAwake': playing,
+      'native': native,
+      'document': document,
+      'keepAwake': keepAwake,
       'playing': playing,
-      'title': store.playingAnime?.title ?? '',
-      'episode': store.playingEpisodeLabel,
+      'title': title,
+      'episode': episode,
       'position': state.position.floor(),
-      'duration': state.duration,
-      'rate': state.rate,
+      'duration': duration,
+      'rate': rate,
     };
-    final key = body.toString();
-    if (_last == key) return;
-    _last = key;
     _updates = _updates.then((_) => _send(body));
   }
 
@@ -197,6 +245,7 @@ class PlaybackEnvironment {
 
   void dispose() {
     _disposed = true;
+    _clock.stop();
     store.removeListener(_sync);
     store.playback.removeListener(_sync);
     _channel.setMethodCallHandler(null);

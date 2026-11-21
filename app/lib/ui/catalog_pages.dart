@@ -398,21 +398,27 @@ class ContinueCard extends StatelessWidget {
     return '$date ${two(watchedAt.hour)}:${two(watchedAt.minute)} · $watchedTo';
   }
 
+  static final _controlsGlassDark = LiquidGlassSettings.ios27Dark.copyWith(
+    bodyMode: GlassBodyMode.clear,
+    glassColor: const Color(0x20ffffff),
+    backerColor: Colors.transparent,
+    thickness: 14,
+    blur: 3,
+    chromaticAberration: .06,
+  );
+  static final _controlsGlassLight = LiquidGlassSettings.ios27Light.copyWith(
+    bodyMode: GlassBodyMode.clear,
+    glassColor: const Color(0x55ffffff),
+    backerColor: Colors.transparent,
+    thickness: 14,
+    blur: 3,
+    chromaticAberration: .06,
+  );
+
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final controlsGlass =
-        (dark ? LiquidGlassSettings.ios27Dark : LiquidGlassSettings.ios27Light)
-            .copyWith(
-              bodyMode: GlassBodyMode.clear,
-              glassColor: dark
-                  ? const Color(0x20ffffff)
-                  : const Color(0x55ffffff),
-              backerColor: Colors.transparent,
-              thickness: 14,
-              blur: 3,
-              chromaticAberration: .06,
-            );
+    final controlsGlass = dark ? _controlsGlassDark : _controlsGlassLight;
     final nextVideoId = entry.nextVideoId;
     final playButton = GlassIconButton(
       key: ValueKey('history-play-${entry.anime.id}'),
@@ -430,8 +436,7 @@ class ContinueCard extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => store.continueWatching(entry),
-      child: GlassBackdropGroup(
-        child: Container(
+      child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: secondary(context).withValues(alpha: .06),
@@ -543,6 +548,7 @@ class ContinueCard extends StatelessWidget {
                               width: 88,
                               height: 44,
                               useOwnLayer: true,
+                              quality: GlassQuality.standard,
                               settings: controlsGlass,
                               label: store.t('nextEpisode'),
                               onTap: () => store.play(
@@ -584,7 +590,6 @@ class ContinueCard extends StatelessWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }

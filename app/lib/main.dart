@@ -31,7 +31,10 @@ Future<void> main() async {
       adaptiveQuality: true,
       adaptiveConfig: const GlassAdaptiveScopeConfig(
         initialQuality: GlassQuality.standard,
-        minQuality: GlassQuality.standard,
+        minQuality: GlassQuality.minimal,
+        maxQuality: GlassQuality.standard,
+        targetFrameMs: 12,
+        allowStepUp: true,
         frostStep: true,
       ),
       child: BahaPlusApp(store: store),

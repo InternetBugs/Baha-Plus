@@ -77,12 +77,18 @@ void main() {
       expect(playlist, isNot(contains('bahamut.akamaized.net')));
       expect(playlist, isNot(contains('private')));
       expect(cache.bufferedRanges(master), isEmpty);
+      expect(
+        identical(cache.bufferedRanges(master), cache.bufferedRanges(master)),
+        isTrue,
+      );
       expect(await local.read(parts[0]), 'segment-data');
       expect(await local.read(parts[2]), 'segment-data');
-      expect(cache.bufferedRanges(master), [
+      final populated = cache.bufferedRanges(master);
+      expect(populated, [
         (start: 0.0, end: 10.0),
         (start: 20.0, end: 30.0),
       ]);
+      expect(identical(cache.bufferedRanges(master), populated), isTrue);
       final downloaded = cache.downloadedBytes;
       final count = requests.length;
       handle = (_) async => throw const SocketException('network offline');

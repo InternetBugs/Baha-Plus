@@ -123,6 +123,9 @@ class NativePlayback extends ChangeNotifier {
   final NativePlaybackSource source;
   final void Function(PlaybackState) onState;
   final NativeHlsCache Function()? _cacheFactory;
+  late final List<int> _qualities = List<int>.unmodifiable(
+    source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
+  );
   NativeHlsCache? _cache;
   late final _downloadSpeed = NativeDownloadSpeed(
     onSpeed: _downloadChanged,
@@ -147,13 +150,34 @@ class NativePlayback extends ChangeNotifier {
   String? failureStage, failureCode;
   Future<bool> _commands = Future.value(true);
   Future<void> _released = Future.value();
+  PlaybackState? _cachedState;
+  VideoPlayerValue? _cachedVideoValue;
+  int _cachedCacheVersion = -1;
 
   bool get active => _active && !_disposed;
   int get seekRevision => _seekRevision;
   Future<void> get released => _released;
   int get quality => _quality;
+  double get duration {
+    final value = video?.value;
+    return value?.isInitialized == true
+        ? value!.duration.inMilliseconds / 1000
+        : source.duration;
+  }
+
+  bool get isPaused => video?.value.isPlaying != true;
+
+  void _invalidateState() => _cachedState = null;
+
   PlaybackState get state {
     final value = video?.value;
+    final cacheVersion = _cache?.version ?? 0;
+    final cached = _cachedState;
+    if (cached != null &&
+        identical(value, _cachedVideoValue) &&
+        cacheVersion == _cachedCacheVersion) {
+      return cached;
+    }
     final duration = value?.isInitialized == true
         ? value!.duration.inMilliseconds / 1000
         : source.duration;
@@ -185,7 +209,7 @@ class NativePlayback extends ChangeNotifier {
         merged.add(range);
       }
     }
-    return PlaybackState(
+    final built = PlaybackState(
       phase: _blocked || value?.hasError == true
           ? PlaybackPhase.error
           : value?.isInitialized == true
@@ -202,11 +226,15 @@ class NativePlayback extends ChangeNotifier {
       bufferedRanges: List.unmodifiable(merged),
       downloadBytesPerSecond: _downloadBytesPerSecond,
       rate: value?.playbackSpeed ?? source.rate,
-      qualities: source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
+      qualities: _qualities,
       quality: _quality,
       hasDanmaku: true,
       danmaku: true,
     );
+    _cachedState = built;
+    _cachedVideoValue = value;
+    _cachedCacheVersion = cacheVersion;
+    return built;
   }
 
   Future<void> initialize(int preferredQuality) async {
@@ -245,6 +273,7 @@ class NativePlayback extends ChangeNotifier {
         ? preferredQuality
         : 0;
     _position = source.position;
+    _invalidateState();
     var loaded = await _load(_quality, initial: true);
     if (!loaded && _cache != null) {
       // Some iOS releases refuse the loopback playlist before decoding
@@ -253,6 +282,7 @@ class NativePlayback extends ChangeNotifier {
       final cache = _cache;
       final code = failureCode;
       _cache = null;
+      _invalidateState();
       await cache
           ?.close()
           .timeout(const Duration(seconds: 2), onTimeout: () {});
@@ -333,6 +363,7 @@ class NativePlayback extends ChangeNotifier {
       _lastVideoPosition = next.value.position;
       _quality = quality;
       failureStage = failureCode = null;
+      _invalidateState();
       next.addListener(_changed);
       notifyListeners();
       stage = 'release-previous';
@@ -372,6 +403,7 @@ class NativePlayback extends ChangeNotifier {
       }
       if (next != null && next == video) {
         _blocked = true;
+        _invalidateState();
         try {
           await next.pause();
         } catch (_) {}
@@ -408,7 +440,8 @@ class NativePlayback extends ChangeNotifier {
     final pauseVersion = _pauseVersion;
     final position = (timeline['position'] as num).toDouble();
     _seekRevision++;
-    _position = position.clamp(0, state.duration);
+    _position = position.clamp(0, duration);
+    _invalidateState();
     await video?.seekTo(Duration(milliseconds: (_position * 1000).round()));
     await video?.setPlaybackSpeed((timeline['rate'] as num).toDouble());
     await video?.setVolume(timeline['muted'] == true ? 0 : 1);
@@ -433,7 +466,11 @@ class NativePlayback extends ChangeNotifier {
           current == video &&
           revision == _seekRevision &&
           position != null) {
-        _position = position.inMilliseconds / 1000;
+        final seconds = position.inMilliseconds / 1000;
+        if (seconds != _position) {
+          _position = seconds;
+          _invalidateState();
+        }
         _publish();
       }
     } catch (_) {
@@ -452,24 +489,33 @@ class NativePlayback extends ChangeNotifier {
     if (!_seeking && position != null && position != _lastVideoPosition) {
       _lastVideoPosition = position;
       _position = position.inMilliseconds / 1000;
+      _invalidateState();
     }
     _publish();
   }
 
   void _syncDownloadSampling() {
-    final value = state;
+    final value = video?.value;
+    final failed = _blocked || value?.hasError == true;
+    final initialized = value?.isInitialized == true;
     final sampling =
         !_disposed &&
         _foreground &&
-        (value.phase == PlaybackPhase.loading ||
-            (value.phase == PlaybackPhase.content && value.buffering));
+        !failed &&
+        (!initialized || value!.isBuffering);
     _downloadSpeed.setEnabled(sampling);
-    if (!sampling) _downloadBytesPerSecond = 0;
+    if (!sampling && _downloadBytesPerSecond != 0) {
+      _downloadBytesPerSecond = 0;
+      _invalidateState();
+    }
   }
 
   void _downloadChanged(double speed) {
     if (_disposed) return;
-    _downloadBytesPerSecond = speed;
+    if (_downloadBytesPerSecond != speed) {
+      _downloadBytesPerSecond = speed;
+      _invalidateState();
+    }
     // Initialization already exposes the loading surface before handoff.
     if (active || video == null) onState(state);
   }
@@ -509,7 +555,8 @@ class NativePlayback extends ChangeNotifier {
         if (value == null || !value.isFinite) return false;
         final previous = _position;
         _seekRevision++;
-        _position = value.clamp(0, state.duration);
+        _position = value.clamp(0, duration);
+        _invalidateState();
         _seeking = true;
         // Publish the new revision and its target as one change. A buffering
         // notification during the platform seek must not consume that
@@ -522,6 +569,7 @@ class NativePlayback extends ChangeNotifier {
         } catch (_) {
           _seekRevision++;
           _position = previous;
+          _invalidateState();
           _publish();
           rethrow;
         } finally {
@@ -573,6 +621,7 @@ class NativePlayback extends ChangeNotifier {
     final current = video;
     current?.removeListener(_changed);
     video = null;
+    _invalidateState();
     _released = () async {
       try {
         await current?.dispose();

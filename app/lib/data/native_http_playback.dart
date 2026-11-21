@@ -63,6 +63,8 @@ class NativeHttpPlayback extends ChangeNotifier {
   bool _adAcknowledged = false, _progressPending = false;
   bool _contentStarted = false, _wasPlaying = false, _endedReported = false;
   int _revision = 0;
+  int _lastAdSeconds = -1;
+  bool _lastCanSkipAd = false;
   double _nextProgress = 60;
   int acceptedProgress = 0;
   int acceptedPeriodicProgress = 0;
@@ -117,6 +119,8 @@ class NativeHttpPlayback extends ChangeNotifier {
       final ad = preparation!.ad;
       if (ad != null) {
         _ad = true;
+        _lastAdSeconds = -1;
+        _lastCanSkipAd = false;
         await _install(
           NativePlaybackSource.fromJson({
             'master': ad.playlist.toString(),
@@ -303,7 +307,7 @@ class NativeHttpPlayback extends ChangeNotifier {
 
   void _mediaChanged(PlaybackState value) {
     if (_disposed || failureStage != null) return;
-    _publish(_project(value));
+    _publish(_project(value), notify: false);
     if (value.phase == PlaybackPhase.error) {
       _fail(const NativeHttpException('media'), _revision);
       return;
@@ -342,6 +346,8 @@ class NativeHttpPlayback extends ChangeNotifier {
             await api.startAd();
             if (_live(revision)) {
               _adAcknowledged = true;
+              _lastAdSeconds = adSecondsRemaining;
+              _lastCanSkipAd = canSkipAd;
               notifyListeners();
             }
           } catch (error) {
@@ -359,7 +365,13 @@ class NativeHttpPlayback extends ChangeNotifier {
           );
         }
       }
-      notifyListeners();
+      final seconds = adSecondsRemaining;
+      final skip = canSkipAd;
+      if (seconds != _lastAdSeconds || skip != _lastCanSkipAd) {
+        _lastAdSeconds = seconds;
+        _lastCanSkipAd = skip;
+        notifyListeners();
+      }
     } else if (_contentStarted) {
       if (watch.total >= _nextProgress && !_progressPending) {
         _nextProgress = watch.total + 60;
@@ -431,14 +443,17 @@ class NativeHttpPlayback extends ChangeNotifier {
     adWatch.discontinuity();
     await player?.setApplicationActive(active);
     if (!active && _contentStarted) _report(progress: true);
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      _lastCanSkipAd = canSkipAd;
+      notifyListeners();
+    }
   }
 
-  void _publish(PlaybackState value) {
+  void _publish(PlaybackState value, {bool notify = true}) {
     if (_disposed) return;
     _state = value;
     onState(value);
-    if (!_disposed) notifyListeners();
+    if (notify && !_disposed) notifyListeners();
   }
 
   void _fail(Object error, int revision) {

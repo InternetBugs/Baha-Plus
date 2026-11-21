@@ -22,29 +22,30 @@ class Artwork extends StatelessWidget {
   final String? url;
   final double? width, height;
   @override
-  Widget build(BuildContext context) => url == null
-      ? SizedBox(width: width, height: height, child: _placeholder(context))
-      : LayoutBuilder(
-          builder: (context, constraints) {
-            final displayWidth =
-                width ??
-                (constraints.hasBoundedWidth ? constraints.maxWidth : null);
-            return CachedNetworkImage(
-              imageUrl: url!,
-              width: width,
-              height: height,
-              memCacheWidth: displayWidth == null
-                  ? null
-                  : (displayWidth * MediaQuery.devicePixelRatioOf(context))
-                        .ceil()
-                        .clamp(1, 2048),
-              fit: BoxFit.cover,
-              fadeInDuration: const Duration(milliseconds: 180),
-              placeholder: (context, url) => _placeholder(context),
-              errorWidget: (context, url, error) => _placeholder(context),
-            );
-          },
-        );
+  Widget build(BuildContext context) {
+    if (url == null) {
+      return SizedBox(width: width, height: height, child: _placeholder(context));
+    }
+    Widget image(double? displayWidth) => CachedNetworkImage(
+      imageUrl: url!,
+      width: width,
+      height: height,
+      memCacheWidth: displayWidth == null
+          ? null
+          : (displayWidth * MediaQuery.devicePixelRatioOf(context))
+                .ceil()
+                .clamp(1, 2048),
+      fit: BoxFit.cover,
+      fadeInDuration: const Duration(milliseconds: 180),
+      placeholder: (context, url) => _placeholder(context),
+      errorWidget: (context, url, error) => _placeholder(context),
+    );
+    if (width != null) return image(width);
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          image(constraints.hasBoundedWidth ? constraints.maxWidth : null),
+    );
+  }
 
   Widget _placeholder(BuildContext context) => ColoredBox(
     color: secondary(context).withValues(alpha: .08),
@@ -274,7 +275,7 @@ class AnimeRow extends StatelessWidget {
         const SizedBox(width: 10),
         GlassButton.custom(
           shape: const LiquidRoundedRectangle(borderRadius: 18),
-          useOwnLayer: true,
+          quality: GlassQuality.standard,
           label: store.t('watch'),
           onTap: () => store.play(anime),
           width: 70,

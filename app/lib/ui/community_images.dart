@@ -99,6 +99,7 @@ class _AttachmentViewer extends StatelessWidget {
   Widget build(BuildContext context) => GlassScaffold(
     key: const ValueKey('comment-image-viewer'),
     extendBody: false,
+    enableBackgroundSampling: false,
     backgroundColor: Colors.black,
     appBar: GlassAppBar(
       title: Text(

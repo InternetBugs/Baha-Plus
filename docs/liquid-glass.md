@@ -15,7 +15,7 @@
 | 项目 | 当前实现 |
 | --- | --- |
 | 玻璃组件 | `liquid_glass_widgets: 1.16.1`；启动时初始化并包装应用，使用 `GlassThemeData.ios27()` |
-| 渲染质量 | 启用自适应质量；初始和最低质量均为 `GlassQuality.standard`，启用 `frostStep` |
+| 渲染质量 | 启用自适应质量；初始与上限质量为 `GlassQuality.standard`，支持在高负载时自适应降级至 `GlassQuality.minimal`，启用 `frostStep` |
 | 品牌及操作色 | `brandBlue`：`#007AFF`，用于选中导航、操作和强调 |
 | 页面背景 | 浅色 `#FFFFFF`，深色 `#08080A` |
 | 内容表面 | 浅色 `#FFFFFF`，深色 `#1C1C1E`；最低层容器分别为 `#F2F2F7`、`#000000` |
