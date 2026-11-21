@@ -7,6 +7,7 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/native_playback.dart';
 import 'package:baha_plus/ui/player_page.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/gestures.dart'
     show kDoubleTapTimeout, kLongPressTimeout;
 import 'package:flutter/material.dart';
@@ -846,6 +847,58 @@ void main() {
       expect(platform.positions.values.single, const Duration(seconds: 612));
       expect(position(tester), 612);
       expect(native.state.paused, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'long-pressing forward skips 85 seconds inside the OP window',
+    (tester) async {
+      final portal = await launch(tester, state: _playback(position: 30));
+      final forward = find.byIcon(CupertinoIcons.goforward_10);
+      expect(forward, findsOneWidget);
+      await tester.longPress(forward);
+      await tester.pump();
+      expect(portal.commands, [('seek', 115.0)]);
+      expect(portal.store.playback.value.position, 115);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'long-pressing forward stays a ten-second tap outside the OP window',
+    (tester) async {
+      final portal = await launch(tester, state: _playback(position: 300));
+      await tester.longPress(find.byIcon(CupertinoIcons.goforward_10));
+      await tester.pump();
+      expect(portal.commands, [('seek', 310.0)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'long-pressing forward stays a ten-second tap when disabled',
+    (tester) async {
+      final portal = await launch(tester, state: _playback(position: 30));
+      await portal.store.setSkipOpLongPress(false);
+      await tester.pump();
+      await tester.longPress(find.byIcon(CupertinoIcons.goforward_10));
+      await tester.pump();
+      expect(portal.commands, [('seek', 40.0)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'long-pressing forward skips only once per episode',
+    (tester) async {
+      final portal = await launch(tester, state: _playback(position: 30));
+      final forward = find.byIcon(CupertinoIcons.goforward_10);
+      await tester.longPress(forward);
+      await tester.pump();
+      await tester.longPress(forward);
+      await tester.pump();
+      expect(portal.commands, [('seek', 115.0), ('seek', 125.0)]);
       expect(tester.takeException(), isNull);
     },
   );

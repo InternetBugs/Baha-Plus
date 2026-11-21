@@ -30,6 +30,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   double? _scrub;
   String? _scrubDocument;
   int _scrubRevision = 0;
+  String? _opSkipVideoId;
   double? _swipeStartPosition;
   double _swipeLastX = 0;
   double _swipeSecondsPerPixel = 0;
@@ -224,6 +225,17 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         !state.paused &&
         !state.ended &&
         _scrub == null;
+  }
+
+  bool get _canSkipOp {
+    final state = store.playback.value;
+    return store.skipOpLongPress &&
+        store.applicationActive &&
+        !store.playerLocked &&
+        state.canControl &&
+        state.duration >= 300 &&
+        state.position < 240 &&
+        _opSkipVideoId != store.playingVideoId;
   }
 
   void _startHoldSpeed() {
@@ -1070,6 +1082,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 color,
                 size: fullscreen ? 27 : 24,
                 minimumSize: fullscreen ? 52 : (compact ? 38 : 42),
+                onLongPress: seekable && _canSkipOp
+                    ? () {
+                        if (!mounted || !_canSkipOp) return;
+                        HapticFeedback.mediumImpact();
+                        final playback = store.playback.value;
+                        setState(() => _opSkipVideoId = store.playingVideoId);
+                        store.controlPlayer(
+                          'seek',
+                          (playback.position + 85).clamp(0, playback.duration),
+                        );
+                      }
+                    : null,
               ),
               Expanded(
                 child: _PlaybackTimeText(
@@ -1117,6 +1141,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     Color color, {
     double size = 25,
     double minimumSize = 36,
+    VoidCallback? onLongPress,
   }) => Semantics(
     label: store.t(label),
     button: true,
@@ -1124,6 +1149,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       minimumSize: Size(minimumSize, minimumSize),
       padding: EdgeInsets.zero,
       onPressed: action,
+      onLongPress: onLongPress,
       child: Icon(
         icon,
         color: action == null ? color.withValues(alpha: .25) : color,

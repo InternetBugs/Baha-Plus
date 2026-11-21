@@ -70,7 +70,7 @@ class AccountPage extends StatelessWidget {
         centerTitle: false,
         padding: const EdgeInsets.symmetric(horizontal: 20),
         title: Text(
-          store.t('officialAccount'),
+          store.t('me'),
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
         ),
         actions: [
@@ -237,6 +237,14 @@ class AccountPage extends StatelessWidget {
                     ),
                 ],
                 onSelected: store.setAppearance,
+              ),
+              GlassSettingsSwitchRow(
+                key: const ValueKey('account-skip-op-switch'),
+                title: store.t('skipOpLongPress'),
+                description: store.t('skipOpLongPressHint'),
+                icon: CupertinoIcons.goforward,
+                value: store.skipOpLongPress,
+                onChanged: store.setSkipOpLongPress,
               ),
             ],
           ),

@@ -63,6 +63,8 @@
   "traditional": "繁體中文",
   "simplified": "简体中文",
   "appearance": "外观",
+  "skipOpLongPress": "长按前进键快进 85 秒",
+  "skipOpLongPressHint": "用于跳过开场动画；仅在每集前 4 分钟生效。",
   "system": "跟随系统",
   "light": "浅色",
   "dark": "深色",

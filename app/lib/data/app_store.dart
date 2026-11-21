@@ -112,12 +112,13 @@ class AppStore extends ChangeNotifier {
     for (final name in ['detail', 'account-sync']) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
-    String? language, appearance, danmaku, quality;
+    String? language, appearance, danmaku, quality, skipOpLongPress;
     try {
       language = await disk.read('baha.device.language');
       appearance = await disk.read('baha.device.appearance');
       danmaku = await disk.read('baha.device.danmaku');
       quality = await disk.read('baha.device.quality');
+      skipOpLongPress = await disk.read('baha.device.skipOpLongPress');
     } catch (_) {
       // Missing device preferences must not prevent startup.
     }
@@ -149,6 +150,8 @@ class AppStore extends ChangeNotifier {
             (preferredQuality >= 144 && preferredQuality <= 4320))) {
       store._preferredQuality = preferredQuality;
     }
+    store._skipOpLongPress =
+        skipOpLongPress != '0' && skipOpLongPress != 'false';
     try {
       if (danmaku != null) {
         store.danmakuSettings = DanmakuSettings.fromJson(
@@ -309,6 +312,7 @@ class AppStore extends ChangeNotifier {
   bool _loggingOut = false;
   Future<void>? _accountCacheWrite;
   int _preferredQuality = 0;
+  bool _skipOpLongPress = true;
   Future<void> _qualityPreferenceWrite = Future<void>.value();
   PlaybackState? _lastGoodPlayback;
   Future<void> retryPlayback() => reloadBrowser();
@@ -604,6 +608,7 @@ class AppStore extends ChangeNotifier {
 
   String t(String key) => dictionaries[language]?[key] ?? key;
   int get preferredQuality => _preferredQuality;
+  bool get skipOpLongPress => _skipOpLongPress;
   bool get simplified => language == 'zh-Hans';
   bool get showsPlayer =>
       operation.intent == BrowserIntent.play && playingAnime != null;
@@ -834,6 +839,13 @@ class AppStore extends ChangeNotifier {
     appearance = value;
     _emit();
     await _savePreference('baha.device.appearance', value);
+  }
+
+  Future<void> setSkipOpLongPress(bool value) async {
+    if (_skipOpLongPress == value) return;
+    _skipOpLongPress = value;
+    _emit();
+    await _savePreference('baha.device.skipOpLongPress', value ? '1' : '0');
   }
 
   Future<void> _savePreference(String key, String value) async {

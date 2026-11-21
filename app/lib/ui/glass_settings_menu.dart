@@ -660,6 +660,65 @@ class GlassSettingsRow extends StatelessWidget {
   );
 }
 
+/// Settings row with a trailing iOS switch. Tapping anywhere on the row
+/// toggles the value.
+class GlassSettingsSwitchRow extends StatelessWidget {
+  const GlassSettingsSwitchRow({
+    required this.title,
+    required this.icon,
+    required this.value,
+    required this.onChanged,
+    this.description,
+    super.key,
+  });
+
+  final String title;
+  final IconData icon;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  final String? description;
+
+  @override
+  Widget build(BuildContext context) => GlassSettingsHighlight(
+    onTap: () => onChanged(!value),
+    semanticButton: false,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(
+        children: [
+          Icon(icon, color: brandBlue, size: 22),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 15)),
+                if (description != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    description!,
+                    style: TextStyle(
+                      color: secondary(context),
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          CupertinoSwitch(
+            value: value,
+            activeTrackColor: brandBlue,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 /// Settings picker row whose trailing control opens an anchored iOS 26 Liquid
 /// Glass secondary option card with checkmark alignment.
 class GlassSettingsPickerRow<T> extends StatefulWidget {

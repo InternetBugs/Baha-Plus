@@ -14,6 +14,7 @@ import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/community.dart';
 import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/chrome.dart';
+import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/player_page.dart';
@@ -215,7 +216,13 @@ void main() {
     final store = await launch(tester);
     await tester.tap(find.byType(AccountAvatar).hitTestable());
     await frames(tester);
-    expect(find.text(store.t('officialAccount')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AccountPage),
+        matching: find.text(store.t('me')),
+      ),
+      findsOneWidget,
+    );
     expect(find.text(store.t('localProfile')), findsOneWidget);
     expect(find.text(store.t('connectAccount')), findsOneWidget);
     expect(find.text(store.t('openOfficial')), findsNothing);

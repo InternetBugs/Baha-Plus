@@ -284,4 +284,59 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('skip OP switch toggles and persists in device preferences', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    await openAccount(tester);
+    final row = find.byKey(const ValueKey('account-skip-op-switch'));
+    await tester.scrollUntilVisible(
+      row,
+      150,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await frames(tester);
+    expect(store.skipOpLongPress, isTrue);
+    expect(find.text(store.t('skipOpLongPress')), findsOneWidget);
+
+    await tester.tap(row);
+    await frames(tester);
+    expect(store.skipOpLongPress, isFalse);
+    expect(
+      (store.storage as MemoryStorage).values['baha.device.skipOpLongPress'],
+      '0',
+    );
+
+    await tester.tap(find.byType(CupertinoSwitch));
+    await frames(tester);
+    expect(store.skipOpLongPress, isTrue);
+    expect(
+      (store.storage as MemoryStorage).values['baha.device.skipOpLongPress'],
+      '1',
+    );
+
+    await tester.tap(find.byType(CupertinoSwitch));
+    await frames(tester);
+    expect(store.skipOpLongPress, isFalse);
+    expect(
+      (store.storage as MemoryStorage).values['baha.device.skipOpLongPress'],
+      '0',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('skip OP preference loads from device storage', (tester) async {
+    final storage = MemoryStorage()
+      ..values['baha.device.skipOpLongPress'] = '0';
+    final store = (await tester.runAsync(
+      () => AppStore.create(
+        storage: storage,
+        metadataApi: FakeMetadata(),
+        animeSearch: FakeSearch(),
+      ),
+    ))!;
+    addTearDown(store.dispose);
+    expect(store.skipOpLongPress, isFalse);
+  });
 }
