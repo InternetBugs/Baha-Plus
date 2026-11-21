@@ -9,6 +9,7 @@ import 'package:html/parser.dart' show parseFragment;
 import '../core/models.dart';
 import '../core/native_danmaku.dart';
 import 'native_playback.dart';
+import 'official_cookie_rotation.dart';
 import 'official_user_agent.dart';
 
 class NativeHttpException implements Exception {
@@ -47,9 +48,12 @@ class NativeHttpPreparation {
 class NativeHttpCookieJar {
   NativeHttpCookieJar({
     Set<String> allowedHosts = const {'ani.gamer.com.tw', 'api.gamer.com.tw'},
+    this.persistLoginRotation = false,
   }) : _allowedHosts = Set.unmodifiable(allowedHosts);
 
   final Set<String> _allowedHosts;
+  final bool persistLoginRotation;
+  final _generation = OfficialCookieRotation.generation;
   final _cookies =
       <String, ({Cookie cookie, bool hostOnly, DateTime? until})>{};
 
@@ -59,8 +63,9 @@ class NativeHttpCookieJar {
       uri.userInfo.isEmpty &&
       _allowedHosts.contains(uri.host);
 
-  void receive(Uri uri, String raw, {DateTime? now}) {
-    if (!_trusted(uri)) return;
+  (Cookie, bool)? receive(Uri uri, String raw, {DateTime? now}) {
+    if (!_trusted(uri)) return null;
+    (Cookie, bool)? rotation;
     final time = now ?? DateTime.now().toUtc();
     // package:http joins repeated headers. Do not split the comma in Expires.
     for (final item in raw.split(RegExp(r',(?=\s*[^;,\s=]+=)'))) {
@@ -86,10 +91,29 @@ class NativeHttpCookieJar {
         if (until == null || until.isAfter(time)) {
           _cookies[key] = (cookie: cookie, hostOnly: hostOnly, until: until);
         }
+        if (cookie.name == 'BAHARUNE') rotation = (cookie, hostOnly);
       } on FormatException {
         // Ignore a malformed cookie without exposing its value.
       }
     }
+    return rotation;
+  }
+
+  Future<void> receiveResponse(
+    Uri uri,
+    String raw,
+    String sentHeader,
+    bool Function() isCurrent,
+  ) async {
+    final rotation = receive(uri, raw);
+    if (rotation == null || !persistLoginRotation) return;
+    await OfficialCookieRotation.persist(
+      uri,
+      rotation.$1,
+      rotation.$2,
+      sentHeader,
+      () => _generation == OfficialCookieRotation.generation && isCurrent(),
+    );
   }
 
   String header(Uri uri, {DateTime? now}) {
@@ -116,6 +140,40 @@ class NativeHttpCookieJar {
     return matching
         .map((entry) => '${entry.cookie.name}=${entry.cookie.value}')
         .join('; ');
+  }
+
+  String fingerprint(Iterable<Uri> urls, {bool ignoreCsrf = false}) => urls
+      .map((uri) {
+        final entries = header(uri).split('; ');
+        if (ignoreCsrf) {
+          entries.removeWhere((entry) => entry.startsWith('ckBahamutCsrfToken='));
+        }
+        for (var i = 0; i < entries.length; i++) {
+          const prefix = 'BAHARUNE=';
+          if (entries[i].startsWith(prefix)) {
+            final token = entries[i].substring(prefix.length);
+            entries[i] = '$prefix${OfficialCookieRotation.fingerprintValue(token)}';
+          }
+        }
+        entries.sort();
+        return entries.join('; ');
+      })
+      .join('\n');
+
+  // Revalidation already matched the original device snapshot. Import only
+  // its renewed credential, preserving operation-local playback/CSRF cookies.
+  void adoptDeviceRotation(NativeHttpCookieJar current) {
+    if (!current._cookies.values.any((entry) =>
+        entry.cookie.name == 'BAHARUNE' &&
+        OfficialCookieRotation.isLatest(entry.cookie.value))) {
+      return;
+    }
+    _cookies.removeWhere((_, entry) => entry.cookie.name == 'BAHARUNE');
+    for (final entry in current._cookies.entries) {
+      if (entry.value.cookie.name == 'BAHARUNE') {
+        _cookies[entry.key] = entry.value;
+      }
+    }
   }
 
   void clear() => _cookies.clear();
@@ -172,7 +230,7 @@ class NativeHttpApi {
       try {
         imported = await _cookieLoader().timeout(timeout);
         if (_disposed) throw const NativeHttpException('disposed');
-        _deviceCookieFingerprint = _fingerprint(imported);
+        _deviceCookieFingerprint = imported.fingerprint(cookieURLs);
         _cookies.clear();
         _cookies = imported;
       } on NativeHttpException {
@@ -524,21 +582,15 @@ class NativeHttpApi {
   Uri _api(String path, Map<String, String> query) =>
       Uri.https('api.gamer.com.tw', path, query);
 
-  static String _fingerprint(NativeHttpCookieJar cookies) => cookieURLs
-      .map((uri) {
-        final values = cookies.header(uri).split('; ')..sort();
-        return values.join('; ');
-      })
-      .join('\n');
-
   Future<void> _checkDeviceSession() async {
     if (_cookieLoader == null) return;
     final current = await _cookieLoader();
     try {
       if (_disposed) throw const NativeHttpException('disposed');
-      if (_fingerprint(current) != _deviceCookieFingerprint) {
+      if (current.fingerprint(cookieURLs) != _deviceCookieFingerprint) {
         throw const NativeHttpException('session-changed');
       }
+      _cookies.adoptDeviceRotation(current);
     } finally {
       current.clear();
     }
@@ -608,8 +660,10 @@ class NativeHttpApi {
     }
     final abort = Completer<void>();
     _requests.add(abort);
+    String? responseCookies;
+    var sentHeader = '';
     try {
-      return await (() async {
+      final text = await (() async {
         if (uri.host == 'ani.gamer.com.tw' || uri.host == 'api.gamer.com.tw') {
           await _checkDeviceSession();
         }
@@ -619,6 +673,7 @@ class NativeHttpApi {
           uri,
           abortTrigger: abort.future,
         )..followRedirects = false;
+        sentHeader = _cookies.header(uri);
         request.headers.addAll({
           'User-Agent': uri.host == 'bahamut.akamaized.net'
               ? mediaUserAgent
@@ -626,15 +681,13 @@ class NativeHttpApi {
           'Origin': 'https://ani.gamer.com.tw',
           'Referer': _web('/animeVideo.php', {'sn': _video}).toString(),
           'Accept': '*/*',
-          if (_cookies.header(uri).isNotEmpty) 'Cookie': _cookies.header(uri),
+          if (sentHeader.isNotEmpty) 'Cookie': sentHeader,
         });
         final response = await _client.send(request);
         onEvent?.call(stage, response.statusCode);
         if (response.statusCode < 200 || response.statusCode >= 300) {
           throw NativeHttpException(stage, response.statusCode);
         }
-        final cookie = response.headers['set-cookie'];
-        if (cookie != null) _cookies.receive(uri, cookie);
         if ((response.contentLength ?? 0) > 2000000) {
           throw const NativeHttpException('response-size');
         }
@@ -650,8 +703,13 @@ class NativeHttpApi {
         if (body.contains('challenge-platform') || body.contains('cf-chl-')) {
           throw const NativeHttpException('verification-required');
         }
+        responseCookies = response.headers['set-cookie'];
         return body;
       })().timeout(timeout);
+      if (responseCookies != null && !_disposed) {
+        await _cookies.receiveResponse(uri, responseCookies!, sentHeader, () => !_disposed);
+      }
+      return text;
     } on NativeHttpException {
       rethrow;
     } on TimeoutException {

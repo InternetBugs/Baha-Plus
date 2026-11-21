@@ -513,7 +513,7 @@ void main() {
       expect(store.accountNeedsRefresh, isTrue);
       expect(store.accountSynced, isFalse);
       expect(store.browserVisible, isFalse);
-      // A subsequent independently confirmed guest refresh can clear identity.
+      api.profileLoader = () async => null;
       await store.syncAccount();
       expect(store.hasAccount, isFalse);
     },

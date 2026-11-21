@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:html/parser.dart' show parse;
 import 'package:http/http.dart' as http;
 
@@ -10,6 +9,7 @@ import '../core/models.dart';
 import '../core/native_danmaku.dart';
 import 'native_http_api.dart';
 import 'official_account_profile.dart';
+import 'official_http_client.dart';
 import 'official_user_agent.dart';
 
 /// An explicit account write with its own short-lived account HTTP client.
@@ -32,49 +32,8 @@ class NativeDanmakuSender {
   final _requests = <Completer<void>>{};
   bool _disposed = false, _sending = false;
 
-  static Future<NativeHttpCookieJar> _officialCookies() async {
-    final jar = NativeHttpCookieJar();
-    final manager = CookieManager.instance();
-    for (final uri in [_account, _token, _send]) {
-      final cookies = await manager.getCookies(url: WebUri(uri.toString()));
-      for (final cookie in cookies) {
-        final name = cookie.name, value = '${cookie.value}';
-        if (!RegExp(r'^[!#$%&*+\-.^_`|~0-9A-Za-z]+$').hasMatch(name) ||
-            value.contains(RegExp(r'[\x00-\x20\x7f";,\\]'))) {
-          continue;
-        }
-        final path = cookie.path ?? '/';
-        final domain = cookie.domain;
-        if (!path.startsWith('/') || path.contains(RegExp(r'[;\r\n]'))) {
-          continue;
-        }
-        if (domain != null &&
-            !const [
-              'gamer.com.tw',
-              'ani.gamer.com.tw',
-            ].contains(domain.replaceFirst(RegExp(r'^\.'), '').toLowerCase())) {
-          continue;
-        }
-        final expiry = cookie.expiresDate;
-        if (expiry != null && expiry <= DateTime.now().millisecondsSinceEpoch) {
-          continue;
-        }
-        jar.receive(
-          uri,
-          '$name=$value; Path=$path${domain == null ? '' : '; Domain=$domain'}',
-        );
-      }
-    }
-    return jar;
-  }
-
-  static String _fingerprint(NativeHttpCookieJar jar) =>
-      [_account, _token, _send]
-          .map((uri) {
-            final values = jar.header(uri).split('; ')..sort();
-            return values.join('; ');
-          })
-          .join('\n');
+  static Future<NativeHttpCookieJar> _officialCookies() =>
+      OfficialHttpClient.loadCookies(urls: [_account, _token, _send]);
 
   Future<NativeDanmaku> send({
     required String videoId,
@@ -107,8 +66,9 @@ class NativeDanmakuSender {
       if (cookies.header(_account).isEmpty) {
         throw const CommunityException('login');
       }
-      final fingerprint = _fingerprint(cookies);
-      final page = parse(await _request(_account, cookies, videoId));
+      final urls = [_account, _token, _send];
+      final fingerprint = cookies.fingerprint(urls);
+      final page = parse(await _request(_account, cookies, videoId, checkCurrent));
       final actualOwner = officialAccountProfile(page)?['id'] as String?;
       if (actualOwner == null) {
         throw const CommunityException('login');
@@ -117,7 +77,7 @@ class NativeDanmakuSender {
         throw const CommunityException('stale');
       }
       checkCurrent();
-      final token = (await _request(_token, cookies, videoId)).trim();
+      final token = (await _request(_token, cookies, videoId, checkCurrent)).trim();
       if (token.isEmpty ||
           token.length > 500 ||
           token.contains(RegExp(r'[<>\r\n]'))) {
@@ -127,9 +87,10 @@ class NativeDanmakuSender {
       // an earlier account's cookies, even if its display cache is unchanged.
       final currentCookies = await _cookieLoader().timeout(timeout);
       try {
-        if (fingerprint != _fingerprint(currentCookies)) {
+        if (fingerprint != currentCookies.fingerprint(urls)) {
           throw const CommunityException('stale');
         }
+        cookies.adoptDeviceRotation(currentCookies);
       } finally {
         currentCookies.clear();
       }
@@ -144,6 +105,7 @@ class NativeDanmakuSender {
           _send,
           cookies,
           videoId,
+          checkCurrent,
           form: {
             'sn': videoId,
             'content': text.trim(),
@@ -194,14 +156,17 @@ class NativeDanmakuSender {
   Future<String> _request(
     Uri uri,
     NativeHttpCookieJar cookies,
-    String videoId, {
+    String videoId,
+    void Function() checkCurrent, {
     Map<String, String>? form,
   }) async {
     if (_disposed) throw const CommunityException('unavailable');
     final abort = Completer<void>();
     _requests.add(abort);
+    String? responseCookies;
+    final sentHeader = cookies.header(uri);
     try {
-      return await (() async {
+      final body = await (() async {
         final request = http.AbortableRequest(
           form == null ? 'GET' : 'POST',
           uri,
@@ -213,7 +178,7 @@ class NativeDanmakuSender {
           'Referer': Uri.https('ani.gamer.com.tw', '/animeVideo.php', {
             'sn': videoId,
           }).toString(),
-          'Cookie': cookies.header(uri),
+          'Cookie': sentHeader,
         });
         if (form != null) request.bodyFields = form;
         final response = await _client.send(request);
@@ -221,8 +186,6 @@ class NativeDanmakuSender {
         if (response.statusCode < 200 || response.statusCode >= 300) {
           throw const CommunityException('unavailable');
         }
-        final setCookie = response.headers['set-cookie'];
-        if (setCookie != null) cookies.receive(uri, setCookie);
         final bytes = <int>[];
         if ((response.contentLength ?? 0) > 1000000) {
           throw const CommunityException('format');
@@ -238,8 +201,16 @@ class NativeDanmakuSender {
         if (text.contains('challenge-platform') || text.contains('cf-chl-')) {
           throw const CommunityException('unavailable');
         }
+        responseCookies = response.headers['set-cookie'];
         return text;
       })().timeout(timeout);
+      if (responseCookies != null) {
+        await cookies.receiveResponse(uri, responseCookies!, sentHeader, () {
+          checkCurrent();
+          return !_disposed;
+        });
+      }
+      return body;
     } finally {
       if (!abort.isCompleted) abort.complete();
       _requests.remove(abort);

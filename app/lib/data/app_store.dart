@@ -17,6 +17,7 @@ import 'native_http_api.dart';
 import 'native_http_playback.dart';
 import 'native_danmaku_sender.dart';
 import 'native_account_api.dart';
+import 'official_cookie_rotation.dart';
 import 'official_http_client.dart';
 
 abstract interface class OfficialPortal {
@@ -171,7 +172,8 @@ class AppStore extends ChangeNotifier {
       store.history = (account['history'] as List)
           .map((item) => WatchEntry.fromJson(item as Json))
           .toList();
-      store.accountSynced = true;
+      store.accountSynced = account['collectionsSynced'] != false;
+      store.accountNeedsRefresh = !store.accountSynced;
     }
     return store;
   }
@@ -196,6 +198,9 @@ class AppStore extends ChangeNotifier {
   final NativeAccountApi accountApi;
   int _accountGeneration = 0;
   int _accountSnapshotRevision = 0;
+  // A newer identity observation supersedes a pending guest confirmation,
+  // even when a collection sync authenticates the same owner again.
+  int _accountIdentityRevision = 0;
   bool accountLoading = false;
   (Anime, bool)? _favoriteAfterLogin;
   bool get favoriteLoginPending => _favoriteAfterLogin != null;
@@ -1059,7 +1064,7 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<void> connectAccount() async {
-    if (loggingOut) return;
+    if (_disposed || loggingOut) return;
     _invalidateAccountRequests();
     _resetNotifications();
     accountProfile = null;
@@ -1067,6 +1072,17 @@ class AppStore extends ChangeNotifier {
     history = [];
     accountSynced = false;
     unawaited(_saveAccountSnapshot(null));
+    final pending = OfficialCookieRotation.pending;
+    if (pending != null) {
+      final generation = _accountGeneration;
+      final document = operation.id;
+      await pending;
+      if (_disposed ||
+          generation != _accountGeneration ||
+          document != operation.id) {
+        return;
+      }
+    }
     browserTitle = t('officialAccount');
     await _load(
       OfficialSite.home.resolve('mygather.php'),
@@ -1335,6 +1351,24 @@ class AppStore extends ChangeNotifier {
 
   Future<void> goBack() async => _portal?.goBack();
 
+  void _checkAccountGeneration(int generation) {
+    if (_disposed || loggingOut || generation != _accountGeneration) {
+      throw const CommunityException('stale');
+    }
+  }
+
+  Future<AccountProfile?> _fetchFreshProfile(int generation) async {
+    final raw = await accountApi.fetchProfile(
+      checkCurrent: () => _checkAccountGeneration(generation),
+    );
+    _checkAccountGeneration(generation);
+    return raw == null ? null : AccountProfile.fromJson(raw);
+  }
+
+  bool _sameAccountOwner(AccountProfile? profile) =>
+      profile != null &&
+      profile.id.toLowerCase() == accountProfile?.id.toLowerCase();
+
   Future<bool> refreshAccountProfile({bool force = false}) async {
     if (_disposed ||
         !_applicationActive ||
@@ -1350,21 +1384,23 @@ class AppStore extends ChangeNotifier {
     }
     _profileRefreshing = true;
     final generation = _accountGeneration;
+    final revision = _accountSnapshotRevision;
+    final identityRevision = _accountIdentityRevision;
     _emit();
     try {
-      final raw = await accountApi.fetchProfile(
-        checkCurrent: () {
-          if (_disposed || loggingOut || generation != _accountGeneration) {
-            throw const CommunityException('stale');
-          }
-        },
-      );
-      if (_disposed || generation != _accountGeneration) return false;
-      final profile = raw == null ? null : AccountProfile.fromJson(raw);
+      var profile = await _fetchFreshProfile(generation);
+      final confirmGuest = profile == null && hasAccount;
+      bool canApply() =>
+          (revision == _accountSnapshotRevision &&
+              identityRevision == _accountIdentityRevision) ||
+          (!confirmGuest && _sameAccountOwner(profile));
+      if (!canApply()) return false;
+      if (confirmGuest) {
+        profile = await _fetchFreshProfile(generation);
+        if (!canApply()) return false;
+      }
       final avatar = profile?.avatar;
-      final sameOwner =
-          profile != null &&
-          profile.id.toLowerCase() == accountProfile?.id.toLowerCase();
+      final sameOwner = _sameAccountOwner(profile);
       if (avatar != null) {
         if (force ||
             (sameOwner &&
@@ -1386,27 +1422,9 @@ class AppStore extends ChangeNotifier {
         }
         await CachedNetworkImageProvider(avatar).evict();
       }
-      if (_disposed || generation != _accountGeneration) return false;
-      _applyAccountProfile(profile, fresh: true);
-      if (profile == null) {
-        favorites = [];
-        history = [];
-        accountSynced = false;
-        accountNeedsRefresh = false;
-      }
-      _profileCheckedAt = profile == null
-          ? null
-          : DateTime.now().millisecondsSinceEpoch;
-      accountPortraitVersion++;
-      await _saveAccountSnapshot(
-        accountProfile == null
-            ? null
-            : {
-                'profile': accountProfile!.toJson(),
-                'favorites': [for (final anime in favorites) anime.toJson()],
-                'history': [for (final entry in history) entry.toJson()],
-              },
-      );
+      _checkAccountGeneration(generation);
+      if (!canApply()) return false;
+      await _saveFreshProfile(profile);
       return true;
     } catch (_) {
       return false;
@@ -1418,44 +1436,74 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  Future<void> _saveFreshProfile(AccountProfile? profile) {
+    _applyAccountProfile(profile, fresh: true);
+    if (profile == null) {
+      favorites = [];
+      history = [];
+      accountSynced = false;
+      accountNeedsRefresh = false;
+    } else if (!accountSynced) {
+      accountNeedsRefresh = true;
+    }
+    _profileCheckedAt = profile == null
+        ? null
+        : DateTime.now().millisecondsSinceEpoch;
+    accountPortraitVersion++;
+    return _saveAccountSnapshot(
+      profile == null
+          ? null
+          : {
+              'profile': profile.toJson(),
+              'favorites': [for (final anime in favorites) anime.toJson()],
+              'history': [for (final entry in history) entry.toJson()],
+            },
+    );
+  }
+
   Future<void> syncAccount({String? expectedOwner}) async {
     if (_disposed || loggingOut || accountLoading) return;
     final generation = _accountGeneration;
     final revision = _accountSnapshotRevision;
+    var identityRevision = _accountIdentityRevision;
+    bool canApply(AccountProfile? profile) =>
+        revision == _accountSnapshotRevision &&
+        (identityRevision == _accountIdentityRevision ||
+            _sameAccountOwner(profile));
     accountLoading = true;
     try {
       final snapshot = await accountApi.fetchAccount(
         expectedOwner: expectedOwner,
         onAuthenticated: (raw) {
-          if (_disposed ||
-              loggingOut ||
-              generation != _accountGeneration ||
-              revision != _accountSnapshotRevision) {
-            return;
-          }
-          _applyAccountProfile(AccountProfile.fromJson(raw));
+          _checkAccountGeneration(generation);
+          final profile = AccountProfile.fromJson(raw);
+          if (!canApply(profile)) throw const CommunityException('stale');
+          _applyAccountProfile(profile);
+          identityRevision = _accountIdentityRevision;
           accountNeedsRefresh = true;
           _emit();
         },
-        checkCurrent: () {
-          if (_disposed || loggingOut || generation != _accountGeneration) {
-            throw const CommunityException('stale');
-          }
-        },
+        checkCurrent: () => _checkAccountGeneration(generation),
       );
-      if (_disposed || loggingOut || generation != _accountGeneration) return;
-      if (revision != _accountSnapshotRevision) {
-        accountNeedsRefresh = true;
-        return;
-      }
+      _checkAccountGeneration(generation);
       if (snapshot == null && expectedOwner != null) {
         throw const CommunityException('login');
       }
-      _applyAccountProfile(
-        snapshot?['profile'] == null
-            ? null
-            : AccountProfile.fromJson(snapshot!['profile'] as Json),
-      );
+      final profile = snapshot == null
+          ? null
+          : AccountProfile.fromJson(snapshot['profile'] as Json);
+      if (!canApply(profile)) return;
+      if (snapshot == null && hasAccount) {
+        final confirmed = await _fetchFreshProfile(generation);
+        _checkAccountGeneration(generation);
+        if (!canApply(null)) return;
+        if (confirmed != null) {
+          accountNeedsRefresh = true;
+          await _saveFreshProfile(confirmed);
+          return;
+        }
+      }
+      _applyAccountProfile(profile);
       favorites = [
         for (final raw in snapshot?['favorites'] as List? ?? [])
           Anime.fromJson(raw as Json),
@@ -1472,11 +1520,14 @@ class AppStore extends ChangeNotifier {
             ? null
             : {...snapshot, 'profile': accountProfile?.toJson()},
       );
-    } on CommunityException catch (error) {
-      if (!_disposed && generation == _accountGeneration) {
+    } catch (error) {
+      if (!_disposed &&
+          generation == _accountGeneration &&
+          revision == _accountSnapshotRevision &&
+          identityRevision == _accountIdentityRevision) {
         accountNeedsRefresh = true;
         notice = t(
-          error.code == 'verification'
+          error is CommunityException && error.code == 'verification'
               ? 'officialVerificationHint'
               : 'accountSyncError',
         );
@@ -1490,8 +1541,10 @@ class AppStore extends ChangeNotifier {
   }
 
   void _applyAccountProfile(AccountProfile? profile, {bool fresh = false}) {
+    _accountIdentityRevision++;
     final previous = accountProfile;
-    if (previous?.id.toLowerCase() != profile?.id.toLowerCase()) {
+    if (previous?.id.toLowerCase() != profile?.id.toLowerCase() ||
+        (profile == null && accountSynced)) {
       _profileCheckedAt = null;
       _resetNotifications();
       favorites = [];
@@ -1634,7 +1687,7 @@ class AppStore extends ChangeNotifier {
         _begin(BrowserIntent.idle);
       case 'account-guest':
         _resetNotifications();
-        _profileCheckedAt = null;
+        _invalidateAccountRequests();
         accountProfile = null;
         favorites = [];
         history = [];
@@ -1660,6 +1713,7 @@ class AppStore extends ChangeNotifier {
         ? null
         : {
             ...snapshot,
+            if (!accountSynced) 'collectionsSynced': false,
             if (_profileCheckedAt != null)
               'profileCheckedAt': _profileCheckedAt,
           };

@@ -11,6 +11,7 @@ import 'package:baha_plus/core/browser_presentation.dart';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/device_storage.dart';
+import 'package:baha_plus/data/official_cookie_rotation.dart';
 import 'package:baha_plus/data/official_search.dart';
 
 class FakeSearch implements AnimeSearch {
@@ -180,6 +181,7 @@ void main() {
       final logout = store.logoutAccount();
       expect(store.loggingOut, isTrue);
       expect(api.logoutCalls, 1);
+      expect(api.profileReads, 0);
       await store.syncAccount();
       await send(staleAccount);
       await Future<void>.delayed(Duration.zero);
@@ -317,6 +319,32 @@ void main() {
     },
   );
 
+  for (final cancelLogin in [false, true]) {
+    test('login waits for pending cookie writes (cancel=$cancelLogin)', () async {
+      final store = await _createStore();
+      addTearDown(store.dispose);
+      store.catalog = catalog;
+      final portal = FakePortal();
+      await store.attach(portal);
+      final release = Completer<void>();
+      final writing = OfficialCookieRotation.clear(() => release.future);
+      final login = store.connectAccount();
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(portal.visited, isEmpty);
+        if (cancelLogin) await store.closeBrowser();
+      } finally {
+        release.complete();
+        await writing;
+        await login;
+      }
+      expect(store.browserVisible, !cancelLogin);
+      expect(portal.visited, [
+        if (!cancelLogin) OfficialSite.home.resolve('mygather.php'),
+      ]);
+    });
+  }
+
   test('native account refresh leaves an open login document intact', () async {
     final api = FakeAccountApi()..accountLoader = () async => null;
     final store = await _createStore(accountApi: api);
@@ -332,6 +360,7 @@ void main() {
     final document = store.operation.id;
     await store.syncAccount();
     expect(api.accountReads, 1);
+    expect(api.profileReads, 0);
     expect(portal.visited.length, visits);
     expect(store.operation.id, document);
     expect(store.browserVisible, isTrue);
@@ -359,6 +388,7 @@ void main() {
         isMainFrame: true,
       );
       expect(store.busy, isFalse);
+      expect((store.accountApi as FakeAccountApi).profileReads, 0);
       store.navigationStarted();
       final newRequest = store.operation.id;
       expect(newRequest, isNot(oldRequest));
@@ -419,6 +449,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(await AccountCache(disk).load(), isNull);
       api.accountLoader = () async => null;
+      api.profileLoader = () async => null;
       await store.syncAccount();
       expect(store.accountProfile, isNull);
     },
@@ -581,6 +612,7 @@ void main() {
       expect(disk.values[AccountCache.key], isNotEmpty);
       await store.syncAccount();
       api.accountLoader = () async => null;
+      api.profileLoader = () async => null;
       await store.syncAccount();
       expect(store.accountProfile, isNull);
       expect(store.accountSynced, isFalse);
@@ -637,8 +669,11 @@ void main() {
       restored.catalog = catalog;
       await restored.attach(FakePortal());
       restored.updateNavigation(OfficialSite.home, canGoBack: false);
-      (restored.accountApi as FakeAccountApi).accountLoader = () async => null;
+      final restoredApi = restored.accountApi as FakeAccountApi;
+      restoredApi.accountLoader = () async => null;
+      restoredApi.profileLoader = () async => null;
       await restored.syncAccount();
+      expect(restoredApi.profileReads, 1);
       await Future<void>.delayed(Duration.zero);
       final afterLogout = await _createStore(storage: disk);
       addTearDown(afterLogout.dispose);

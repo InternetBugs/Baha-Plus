@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 
 import '../core/community.dart';
 import '../core/models.dart';
 import 'native_http_api.dart';
+import 'official_cookie_rotation.dart';
 import 'official_user_agent.dart';
 
 /// Account HTTP operations import the device's official cookies into memory.
@@ -87,12 +89,15 @@ class OfficialHttpClient {
 
   Future<void> clearCookies() async {
     invalidate();
-    await _cookieClearer().timeout(timeout);
+    await OfficialCookieRotation.clear(_cookieClearer).timeout(timeout);
   }
 
   static Future<NativeHttpCookieJar> loadCookies({List<Uri>? urls}) async {
-    final jar = NativeHttpCookieJar(allowedHosts: hosts);
-    final manager = CookieManager.instance();
+    final jar = NativeHttpCookieJar(allowedHosts: hosts, persistLoginRotation: true);
+    final manager = OfficialCookieRotation.manager;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // WebView2 returns CDP expiry in seconds and -1 for session cookies.
+    final windows = defaultTargetPlatform == TargetPlatform.windows;
     for (final uri in urls ?? _cookieURLs) {
       for (final cookie in await manager.getCookies(
         url: WebUri(uri.toString()),
@@ -102,6 +107,7 @@ class OfficialHttpClient {
         final domain = cookie.domain
             ?.replaceFirst(RegExp(r'^\.'), '')
             .toLowerCase();
+        final expires = cookie.expiresDate;
         if (!RegExp(r'^[!#$%&*+\-.^_`|~0-9A-Za-z]+$').hasMatch(name) ||
             value.contains(RegExp(r'[\x00-\x20\x7f";,\\]')) ||
             !path.startsWith('/') ||
@@ -109,8 +115,8 @@ class OfficialHttpClient {
             (domain != null &&
                 domain != 'gamer.com.tw' &&
                 domain != uri.host) ||
-            (cookie.expiresDate != null &&
-                cookie.expiresDate! <= DateTime.now().millisecondsSinceEpoch)) {
+            (expires != null && cookie.isSessionOnly != true &&
+                expires <= (windows ? now ~/ 1000 : now))) {
           continue;
         }
         jar.receive(
@@ -121,15 +127,6 @@ class OfficialHttpClient {
     }
     return jar;
   }
-
-  static String _fingerprint(NativeHttpCookieJar cookies) => _cookieURLs
-      .map((uri) {
-        final values = cookies.header(uri).split('; ')
-          ..removeWhere((cookie) => cookie.startsWith('ckBahamutCsrfToken='))
-          ..sort();
-        return values.join('; ');
-      })
-      .join('\n');
 
   Future<T> session<T>(
     Future<T> Function(OfficialHttpSession session) action, {
@@ -149,7 +146,7 @@ class OfficialHttpClient {
       cookies = await _cookieLoader().timeout(timeout);
       check();
       return await action(
-        OfficialHttpSession._(this, cookies, _fingerprint(cookies), check),
+        OfficialHttpSession._(this, cookies, cookies.fingerprint(_cookieURLs, ignoreCsrf: true), check),
       );
     } on CommunityException {
       rethrow;
@@ -181,8 +178,10 @@ class OfficialHttpClient {
     }
     final abort = Completer<void>();
     _requests.add(abort);
+    String? responseCookies;
+    final sentHeader = session.cookies.header(uri);
     try {
-      return await (() async {
+      final body = await (() async {
         final request = http.AbortableRequest(
           form == null ? 'GET' : 'POST',
           uri,
@@ -196,8 +195,7 @@ class OfficialHttpClient {
           'Referer': uri == OfficialSite.logout
               ? OfficialSite.logout.toString()
               : 'https://ani.gamer.com.tw/',
-          if (session.cookies.header(uri).isNotEmpty)
-            'Cookie': session.cookies.header(uri),
+          if (sentHeader.isNotEmpty) 'Cookie': sentHeader,
           ...headers,
         });
         if (form != null) request.bodyFields = form;
@@ -255,11 +253,17 @@ class OfficialHttpClient {
             text.contains('id="challenge-form"')) {
           throw const CommunityException('verification');
         }
-        final setCookie = response.headers['set-cookie'];
-        if (setCookie != null) session.cookies.receive(uri, setCookie);
-        if (form == null) session.checkCurrent();
+        responseCookies = response.headers['set-cookie'];
         return text;
       })().timeout(timeout);
+      if (responseCookies != null) {
+        await session.cookies.receiveResponse(uri, responseCookies!, sentHeader, () {
+          session.checkCurrent();
+          return uri != OfficialSite.logout;
+        });
+      }
+      if (form == null) session.checkCurrent();
+      return body;
     } finally {
       if (!abort.isCompleted) abort.complete();
       _requests.remove(abort);
@@ -268,6 +272,7 @@ class OfficialHttpClient {
 
   /// Invalidates reads and writes before a login/logout or account change.
   void invalidate() {
+    OfficialCookieRotation.invalidate();
     _generation++;
     for (final abort in _requests) {
       if (!abort.isCompleted) abort.complete();
@@ -302,9 +307,10 @@ class OfficialHttpSession {
     final current = await _client._cookieLoader().timeout(_client.timeout);
     try {
       checkCurrent();
-      if (OfficialHttpClient._fingerprint(current) != _fingerprint) {
+      if (current.fingerprint(OfficialHttpClient._cookieURLs, ignoreCsrf: true) != _fingerprint) {
         throw const CommunityException('stale');
       }
+      cookies.adoptDeviceRotation(current);
     } finally {
       current.clear();
     }

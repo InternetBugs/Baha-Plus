@@ -27,6 +27,7 @@ const _newProfile = {
   'displayName': '新暱稱',
   'avatar': 'https://avatar2.bahamut.com.tw/reader.png?v=3',
 };
+const _otherProfile = {'id': 'other', 'displayName': '另一位讀者'};
 
 class _FileInfo extends Fake implements FileInfo {}
 
@@ -66,16 +67,17 @@ void main() {
 
   Future<(AppStore, FakeAccountApi, MemoryStorage)> setup() async {
     final storage = MemoryStorage();
+    final anime = const Anime(
+      id: '10',
+      title: '動畫',
+      cover: 'https://p2.bahamut.com.tw/10.jpg',
+    ).toJson();
     await AccountCache(storage).save({
       'profile': _oldProfile,
-      'favorites': [
-        const Anime(
-          id: '10',
-          title: '動畫',
-          cover: 'https://p2.bahamut.com.tw/10.jpg',
-        ).toJson(),
+      'favorites': [anime],
+      'history': [
+        {'anime': anime, 'videoId': '20', 'episodeLabel': '1'},
       ],
-      'history': [],
     });
     final account = FakeAccountApi();
     final store = await AppStore.create(
@@ -186,6 +188,7 @@ void main() {
     final (store, account, storage) = await setup();
     account.profileLoader = () async => null;
     await store.refreshAccountProfile();
+    expect(account.profileReads, 2);
     expect(store.accountProfile, isNull);
     expect(store.favorites, isEmpty);
     expect(await AccountCache(storage).load(), isNull);
@@ -199,19 +202,178 @@ void main() {
       store.accountProfile = null;
       account.profileLoader = () async => null;
       await store.refreshAccountProfile();
+      expect(account.profileReads, 2);
       expect(store.hasAccount, isFalse);
       expect(store.favorites, isEmpty);
       expect(await AccountCache(storage).load(), isNull);
     },
   );
 
+  for (final sync in [false, true]) {
+    final source = sync ? 'collection sync' : 'profile refresh';
+
+    Future<void> readAfterGuest(
+      AppStore store,
+      FakeAccountApi account,
+      Future<Json?> Function() confirm,
+    ) async {
+      account.accountLoader = () async => null;
+      account.profileLoader = () async {
+        if (!sync && account.profileReads == 1) return null;
+        return confirm();
+      };
+      if (sync) {
+        await store.syncAccount();
+      } else {
+        await store.refreshAccountProfile();
+      }
+    }
+
+    test('$source recovers a cached owner after one guest result', () async {
+      final (store, account, storage) = await setup();
+      final started = Completer<void>(), result = Completer<Json?>();
+      final before = storage.values[AccountCache.key];
+      final reading = readAfterGuest(store, account, () {
+        started.complete();
+        return result.future;
+      });
+      await started.future;
+      expect(store.accountProfile?.toJson(), _oldProfile);
+      expect(store.favorites.single.id, '10');
+      expect(store.history.single.videoId, '20');
+      expect(storage.values[AccountCache.key], before);
+      result.complete({..._newProfile, 'id': 'READER'});
+      await reading;
+      expect(account.profileReads, sync ? 1 : 2);
+      expect(account.accountReads, sync ? 1 : 0);
+      expect(store.accountSynced, isTrue);
+      expect(store.accountNeedsRefresh, sync);
+      final cached = (await AccountCache(storage).load())!;
+      expect(cached['profile'], {..._newProfile, 'id': 'READER'});
+      expect((cached['favorites'] as List).single['id'], '10');
+      expect((cached['history'] as List).single['videoId'], '20');
+    });
+
+    test('$source isolates collections after switching owners', () async {
+      final (store, account, storage) = await setup();
+      await readAfterGuest(store, account, () async => _otherProfile);
+      expect(store.accountProfile?.toJson(), _otherProfile);
+      expect(store.favorites, isEmpty);
+      expect(store.history, isEmpty);
+      expect(store.accountSynced, isFalse);
+      expect(store.accountNeedsRefresh, isTrue);
+      final restored = await AppStore.create(storage: storage);
+      addTearDown(restored.dispose);
+      expect(restored.accountProfile?.toJson(), _otherProfile);
+      expect(restored.favorites, isEmpty);
+      expect(restored.history, isEmpty);
+      expect(restored.accountSynced, isFalse);
+      expect(restored.accountNeedsRefresh, isTrue);
+    });
+
+    test('$source preserves the cache when confirmation fails', () async {
+      final (store, account, storage) = await setup();
+      final before = storage.values[AccountCache.key];
+      await readAfterGuest(
+        store,
+        account,
+        () async => throw const CommunityException('network'),
+      );
+      expect(account.profileReads, sync ? 1 : 2);
+      expect(store.accountProfile?.toJson(), _oldProfile);
+      expect(store.favorites.single.id, '10');
+      expect(store.history.single.videoId, '20');
+      expect(storage.values[AccountCache.key], before);
+      expect(store.accountNeedsRefresh, sync);
+      expect(store.notice, sync ? store.t('accountSyncError') : null);
+    });
+  }
+
+  test('a guest confirmation cannot clear a newer authenticated sync', () async {
+    final (store, account, storage) = await setup();
+    final started = Completer<void>(), result = Completer<Json?>();
+    account.profileLoader = () async {
+      if (account.profileReads == 1) return null;
+      started.complete();
+      return result.future;
+    };
+    final checking = store.refreshAccountProfile();
+    await started.future;
+    account.accountLoader = () async => {
+      'profile': _newProfile,
+      'favorites': [],
+      'history': [],
+    };
+    await store.syncAccount();
+    result.complete(null);
+    expect(await checking, isFalse);
+    expect(store.accountProfile?.toJson(), _newProfile);
+    expect((await AccountCache(storage).load())!['profile'], _newProfile);
+    expect(store.accountNeedsRefresh, isFalse);
+  });
+
+  test('a delayed sync confirmation cannot restore a previous owner', () async {
+    final (store, account, storage) = await setup();
+    final started = Completer<void>(), result = Completer<Json?>();
+    account.accountLoader = () async => null;
+    account.profileLoader = () {
+      started.complete();
+      return result.future;
+    };
+    final syncing = store.syncAccount();
+    await started.future;
+    account.profileLoader = () async => _otherProfile;
+    expect(await store.refreshAccountProfile(), isTrue);
+    result.complete(_oldProfile);
+    await syncing;
+    expect(store.accountProfile?.toJson(), _otherProfile);
+    expect(store.favorites, isEmpty);
+    expect(store.history, isEmpty);
+    expect((await AccountCache(storage).load())!['profile'], _otherProfile);
+  });
+
+  test('logout invalidates an outstanding guest confirmation', () async {
+    final (store, account, storage) = await setup();
+    final started = Completer<void>(), result = Completer<Json?>();
+    account.accountLoader = () async => null;
+    account.profileLoader = () {
+      started.complete();
+      return result.future;
+    };
+    final syncing = store.syncAccount();
+    await started.future;
+    expect(await store.logoutAccount(), isTrue);
+    result.complete(_newProfile);
+    await syncing;
+    expect(account.profileReads, 1);
+    expect(store.hasAccount, isFalse);
+    expect(await AccountCache(storage).load(), isNull);
+  });
+
+  test('an initial guest refresh needs only one profile read', () async {
+    final api = FakeAccountApi()..profileLoader = () async => null;
+    final store = await AppStore.create(
+      storage: MemoryStorage(),
+      accountApi: api,
+    );
+    addTearDown(store.dispose);
+    expect(await store.refreshAccountProfile(), isTrue);
+    expect(api.profileReads, 1);
+    expect(store.hasAccount, isFalse);
+  });
+
   test(
-    'a late refresh cannot restore an account after starting login',
+    'a late guest confirmation cannot restore an account after starting login',
     () async {
       final (store, account, _) = await setup();
-      final pending = Completer<Json?>();
-      account.profileLoader = () => pending.future;
+      final started = Completer<void>(), pending = Completer<Json?>();
+      account.profileLoader = () async {
+        if (account.profileReads == 1) return null;
+        started.complete();
+        return pending.future;
+      };
       final reading = store.refreshAccountProfile();
+      await started.future;
       await store.connectAccount();
       pending.complete(_newProfile);
       await reading;

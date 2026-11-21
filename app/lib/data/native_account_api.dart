@@ -10,7 +10,7 @@ import 'official_http_client.dart';
 
 /// Official account, collection and community endpoints, executed in Dart.
 /// The collection/profile endpoints return HTML; it is parsed as inert data.
-/// All account cookies remain in the per-operation HTTP session.
+/// The transport persists official login-cookie rotations in the device store.
 class NativeAccountApi {
   NativeAccountApi({OfficialHttpClient? transport})
     : transport = transport ?? OfficialHttpClient();
