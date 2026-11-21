@@ -235,7 +235,6 @@ class _CommentsPageState extends State<CommentsPage> {
     builder: (context, _) => GlassScaffold(
       key: const ValueKey('comments-page'),
       extendBody: false,
-      enableBackgroundSampling: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: GlassAppBar(
         leading: GlassIconButton(

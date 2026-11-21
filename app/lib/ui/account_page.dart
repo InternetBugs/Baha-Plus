@@ -63,7 +63,6 @@ class AccountPage extends StatelessWidget {
     listenable: Listenable.merge([store, store.updates]),
     builder: (context, child) => GlassScaffold(
       extendBody: false,
-      enableBackgroundSampling: false,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(

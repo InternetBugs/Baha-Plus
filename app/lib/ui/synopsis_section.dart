@@ -89,7 +89,6 @@ class SynopsisPage extends StatelessWidget {
   Widget build(BuildContext context) => GlassScaffold(
     key: const ValueKey('full-synopsis-page'),
     extendBody: false,
-    enableBackgroundSampling: false,
     backgroundColor: Theme.of(context).scaffoldBackgroundColor,
     appBar: GlassAppBar(
       title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),

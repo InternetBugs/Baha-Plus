@@ -98,7 +98,6 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       CupertinoPageRoute(
         builder: (context) => GlassScaffold(
           extendBody: false,
-          enableBackgroundSampling: false,
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
           appBar: GlassAppBar(
             title: Text(store.t('diagnosticsPreview')),
@@ -159,7 +158,6 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       final diagnostics = store.diagnostics;
       return GlassScaffold(
         extendBody: false,
-        enableBackgroundSampling: false,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
         appBar: GlassAppBar(
           title: Text(store.t('diagnosticsTitle')),

@@ -571,7 +571,6 @@ class _AppRootState extends State<AppRoot>
     return GlassScaffold(
       bottomEdgeFade: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      enableBackgroundSampling: false,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         title: Text(title),

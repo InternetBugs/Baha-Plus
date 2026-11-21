@@ -94,7 +94,6 @@ class _NotificationsPageState extends State<NotificationsPage>
       return GlassScaffold(
         key: const ValueKey('notifications-page'),
         extendBody: false,
-        enableBackgroundSampling: false,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: GlassAppBar(
           leading: GlassIconButton(

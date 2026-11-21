@@ -29,7 +29,7 @@ void main() {
     }
   }
 
-  Future<AppStore> launch(WidgetTester tester) async {
+  Future<AppStore> launch(WidgetTester tester, {bool adaptive = false}) async {
     tester.view.physicalSize = const Size(400, 850);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -56,12 +56,29 @@ void main() {
       LiquidGlassWidgets.wrap(
         brightnessResolver: Theme.maybeBrightnessOf,
         theme: GlassThemeData.simple(quality: GlassQuality.standard),
+        adaptiveQuality: adaptive,
+        adaptiveConfig: adaptive ? glassAdaptiveConfig : null,
         child: BahaPlusApp(store: store, mountPortal: false),
       ),
     );
     await frames(tester);
     return store;
   }
+
+  testWidgets('navigation glass samples the page backdrop instead of a '
+      'synthetic frost tint', (tester) async {
+    final store = await launch(tester, adaptive: true);
+    expect(find.text(store.t('explore')), findsWidgets);
+    // Both regressions lose the liquid-glass look: `GlassQuality.minimal`
+    // swaps in a shader-free BackdropFilter frost, and an explicit
+    // `enableBackgroundSampling: false` makes glass fall back to a synthetic
+    // frost tint. Either one leaves every GlassBackgroundSource disabled.
+    final sources = tester.widgetList<GlassBackgroundSource>(
+      find.byType(GlassBackgroundSource),
+    );
+    expect(sources, isNotEmpty);
+    expect(sources.map((source) => source.enabled), everyElement(isTrue));
+  });
 
   testWidgets('a fresh home shows navigation but no catalog filler', (
     tester,

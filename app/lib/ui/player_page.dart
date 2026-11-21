@@ -458,7 +458,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     return GlassScaffold(
       key: const ValueKey('native-player-page'),
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      enableBackgroundSampling: false,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         title: Text(

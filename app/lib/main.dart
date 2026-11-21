@@ -29,18 +29,25 @@ Future<void> main() async {
       brightnessResolver: Theme.maybeBrightnessOf,
       theme: const GlassThemeData.ios27(),
       adaptiveQuality: true,
-      adaptiveConfig: const GlassAdaptiveScopeConfig(
-        initialQuality: GlassQuality.standard,
-        minQuality: GlassQuality.minimal,
-        maxQuality: GlassQuality.standard,
-        targetFrameMs: 12,
-        allowStepUp: true,
-        frostStep: true,
-      ),
+      adaptiveConfig: glassAdaptiveConfig,
       child: BahaPlusApp(store: store),
     ),
   );
 }
+
+/// Adaptive glass quality shared by the app and its tests.
+///
+/// The floor stays at [GlassQuality.standard]. [GlassQuality.minimal] renders a
+/// shader-free `BackdropFilter` frost and also turns off page background
+/// sampling, so the liquid-glass refraction disappears entirely.
+const glassAdaptiveConfig = GlassAdaptiveScopeConfig(
+  initialQuality: GlassQuality.standard,
+  minQuality: GlassQuality.standard,
+  maxQuality: GlassQuality.standard,
+  targetFrameMs: 12,
+  allowStepUp: true,
+  frostStep: true,
+);
 
 class BahaPlusApp extends StatefulWidget {
   const BahaPlusApp({required this.store, this.mountPortal = true, super.key});

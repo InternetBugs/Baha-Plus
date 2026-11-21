@@ -222,7 +222,6 @@ class _OfficialBrowserState extends State<OfficialBrowser>
     final surface = _surface(background);
     return GlassScaffold(
       backgroundColor: background,
-      enableBackgroundSampling: false,
       extendBody: false,
       edgeFade: false,
       statusBarStyle: GlassStatusBarStyle.auto,

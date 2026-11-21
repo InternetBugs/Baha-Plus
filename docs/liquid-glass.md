@@ -15,7 +15,7 @@
 | 项目 | 当前实现 |
 | --- | --- |
 | 玻璃组件 | `liquid_glass_widgets: 1.16.1`；启动时初始化并包装应用，使用 `GlassThemeData.ios27()` |
-| 渲染质量 | 启用自适应质量；初始与上限质量为 `GlassQuality.standard`，支持在高负载时自适应降级至 `GlassQuality.minimal`，启用 `frostStep` |
+| 渲染质量 | 启用自适应质量；初始、下限与上限质量均为 `GlassQuality.standard`，不再降级到仅 `BackdropFilter` 的 `GlassQuality.minimal`（该档为磨砂替代，丢失折射） |
 | 品牌及操作色 | `brandBlue`：`#007AFF`，用于选中导航、操作和强调 |
 | 页面背景 | 浅色 `#FFFFFF`，深色 `#08080A` |
 | 内容表面 | 浅色 `#FFFFFF`，深色 `#1C1C1E`；最低层容器分别为 `#F2F2F7`、`#000000` |
@@ -48,6 +48,7 @@
 
 ## 交互与背景采样
 
+- 页面玻璃要有真实折射，页面容器必须存在可采样的背景：设置 `backgroundColor` 或 `background` 时 `GlassScaffold` 默认开启背景采样；显式传 `enableBackgroundSampling: false` 会让玻璃退化为合成磨砂染色。仅在没有背景可采样（例如纯透明覆盖层）时才关闭。
 - 目录页横向切换使用 280 毫秒的位移与淡入；重复点按当前标签可回到顶部。系统要求减少动画时直接切换或跳转。
 - 页面内容为底部浮动导航与系统安全区域预留空间；交互控件应保留清晰的点击范围和无障碍语义。
 - 原生目录、搜索与有影片 ID 的详情不创建 WebView。官方操作期间需要隐藏网页时以 `Offstage` 保留当前会话，不提交平台视图到画面合成；操作及清理结束后卸载 WebView。登录时显示官方页面，详见[原生资料与视图生命周期](native-metadata.md)。
