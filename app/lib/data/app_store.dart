@@ -54,6 +54,7 @@ class AppStore extends ChangeNotifier {
     NativeAccountApi? accountApi,
     this.language = 'zh-Hant',
     this.appearance = 'system',
+    this.glassStyle = 'standard',
     this.catalog = const Catalog(),
   }) : danmakuSender = danmakuSender ?? NativeDanmakuSender(),
        accountApi = accountApi ?? NativeAccountApi(),
@@ -112,13 +113,14 @@ class AppStore extends ChangeNotifier {
     for (final name in ['detail', 'account-sync']) {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
-    String? language, appearance, danmaku, quality, skipOpLongPress;
+    String? language, appearance, danmaku, quality, glass, skipOpLongPress;
     try {
       language = await disk.read('baha.device.language');
       appearance = await disk.read('baha.device.appearance');
       danmaku = await disk.read('baha.device.danmaku');
       quality = await disk.read('baha.device.quality');
       skipOpLongPress = await disk.read('baha.device.skipOpLongPress');
+      glass = await disk.read('baha.device.glass');
     } catch (_) {
       // Missing device preferences must not prevent startup.
     }
@@ -142,6 +144,13 @@ class AppStore extends ChangeNotifier {
       appearance: const ['system', 'light', 'dark'].contains(appearance)
           ? appearance!
           : 'system',
+      glassStyle: const [
+        'performance',
+        'standard',
+        'premium',
+      ].contains(glass)
+          ? glass!
+          : 'standard',
       catalog: await CatalogCache(disk).load() ?? const Catalog(),
     );
     final preferredQuality = int.tryParse(quality ?? '');
@@ -253,7 +262,7 @@ class AppStore extends ChangeNotifier {
   final Map<String, Map<String, String>> dictionaries;
   final SearchFolding folding;
   final Map<String, String> scripts;
-  String language, appearance;
+  String language, appearance, glassStyle;
   Catalog catalog;
   String catalogSource;
   List<Anime> favorites = [], searchResults = [];
@@ -848,6 +857,19 @@ class AppStore extends ChangeNotifier {
     appearance = value;
     _emit();
     await _savePreference('baha.device.appearance', value);
+  }
+
+  /// User-selected glass tier: `performance`, `standard` or `premium`.
+  ///
+  /// `main.dart` maps this onto the theme's glass quality tier; the strings
+  /// stay stable because they are persisted under `baha.device.glass`.
+  Future<void> setGlassStyle(String value) async {
+    if (!const ['performance', 'standard', 'premium'].contains(value)) {
+      return;
+    }
+    glassStyle = value;
+    _emit();
+    await _savePreference('baha.device.glass', value);
   }
 
   Future<void> setSkipOpLongPress(bool value) async {

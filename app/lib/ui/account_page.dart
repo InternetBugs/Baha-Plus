@@ -237,6 +237,30 @@ class AccountPage extends StatelessWidget {
                 ],
                 onSelected: store.setAppearance,
               ),
+              GlassSettingsPickerRow<String>(
+                key: const ValueKey('account-glass-style-picker'),
+                title: store.t('glassStyle'),
+                icon: CupertinoIcons.drop,
+                valueLabel: switch (store.glassStyle) {
+                  'performance' => store.t('glassStylePerformance'),
+                  'premium' => store.t('glassStylePremium'),
+                  _ => store.t('glassStyleStandard'),
+                },
+                selectedValue: store.glassStyle,
+                options: [
+                  for (final MapEntry(key: value, value: labelKey) in {
+                    'performance': 'glassStylePerformance',
+                    'standard': 'glassStyleStandard',
+                    'premium': 'glassStylePremium',
+                  }.entries)
+                    GlassSettingsOption(
+                      key: ValueKey('glass-style-option-$value'),
+                      value: value,
+                      label: store.t(labelKey),
+                    ),
+                ],
+                onSelected: store.setGlassStyle,
+              ),
               GlassSettingsSwitchRow(
                 key: const ValueKey('account-skip-op-switch'),
                 title: store.t('skipOpLongPress'),

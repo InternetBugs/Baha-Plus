@@ -28,26 +28,10 @@ Future<void> main() async {
     LiquidGlassWidgets.wrap(
       brightnessResolver: Theme.maybeBrightnessOf,
       theme: const GlassThemeData.ios27(),
-      adaptiveQuality: true,
-      adaptiveConfig: glassAdaptiveConfig,
       child: BahaPlusApp(store: store),
     ),
   );
 }
-
-/// Adaptive glass quality shared by the app and its tests.
-///
-/// The floor stays at [GlassQuality.standard]. [GlassQuality.minimal] renders a
-/// shader-free `BackdropFilter` frost and also turns off page background
-/// sampling, so the liquid-glass refraction disappears entirely.
-const glassAdaptiveConfig = GlassAdaptiveScopeConfig(
-  initialQuality: GlassQuality.standard,
-  minQuality: GlassQuality.standard,
-  maxQuality: GlassQuality.standard,
-  targetFrameMs: 12,
-  allowStepUp: true,
-  frostStep: true,
-);
 
 class BahaPlusApp extends StatefulWidget {
   const BahaPlusApp({required this.store, this.mountPortal = true, super.key});
@@ -60,7 +44,7 @@ class BahaPlusApp extends StatefulWidget {
 
 class _BahaPlusAppState extends State<BahaPlusApp> {
   AppStore get store => widget.store;
-  late String _language, _appearance;
+  late String _language, _appearance, _glassStyle;
 
   @override
   void initState() {
@@ -71,14 +55,20 @@ class _BahaPlusAppState extends State<BahaPlusApp> {
   void _observePreferences() {
     _language = store.language;
     _appearance = store.appearance;
+    _glassStyle = store.glassStyle;
     store.addListener(_preferencesChanged);
   }
 
   void _preferencesChanged() {
-    if (_language == store.language && _appearance == store.appearance) return;
+    if (_language == store.language &&
+        _appearance == store.appearance &&
+        _glassStyle == store.glassStyle) {
+      return;
+    }
     setState(() {
       _language = store.language;
       _appearance = store.appearance;
+      _glassStyle = store.glassStyle;
     });
   }
 
@@ -148,12 +138,28 @@ class _BahaPlusAppState extends State<BahaPlusApp> {
               tabLabelTextStyle: text.copyWith(fontSize: 11),
             ),
           ),
-          child: child ?? const SizedBox.shrink(),
+          child: GlassTheme(
+            data: _glassTheme(),
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       );
     },
     home: AppRoot(store: store, mountPortal: widget.mountPortal),
   );
+
+  /// Glass tier chosen by the user in the settings; see [AppStore.glassStyle].
+  GlassThemeData _glassTheme() {
+    final quality = switch (_glassStyle) {
+      'performance' => GlassQuality.minimal,
+      'premium' => GlassQuality.premium,
+      _ => GlassQuality.standard,
+    };
+    return GlassThemeData(
+      light: GlassThemeVariant.ios27Light.copyWith(quality: quality),
+      dark: GlassThemeVariant.ios27Dark.copyWith(quality: quality),
+    );
+  }
 
   ThemeData _theme(Brightness brightness) {
     final dark = brightness == Brightness.dark;

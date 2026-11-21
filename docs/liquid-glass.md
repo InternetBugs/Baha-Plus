@@ -15,7 +15,7 @@
 | 项目 | 当前实现 |
 | --- | --- |
 | 玻璃组件 | `liquid_glass_widgets: 1.16.1`；启动时初始化并包装应用，使用 `GlassThemeData.ios27()` |
-| 渲染质量 | 启用自适应质量；初始、下限与上限质量均为 `GlassQuality.standard`，不再降级到仅 `BackdropFilter` 的 `GlassQuality.minimal`（该档为磨砂替代，丢失折射） |
+| 渲染质量 | 用户在设置中选择 玻璃效果 三档：性能（`GlassQuality.minimal`，仅 `BackdropFilter` 磨砂）、标准（轻量 fragment shader）、质量（`GlassQuality.premium` 完整折射），默认标准。已删除自适应降档；`main.dart` 用嵌套 `GlassTheme` 按选择固定全档质量，偏好持久化在 `baha.device.glass` |
 | 品牌及操作色 | `brandBlue`：`#007AFF`，用于选中导航、操作和强调 |
 | 页面背景 | 浅色 `#FFFFFF`，深色 `#08080A` |
 | 内容表面 | 浅色 `#FFFFFF`，深色 `#1C1C1E`；最低层容器分别为 `#F2F2F7`、`#000000` |

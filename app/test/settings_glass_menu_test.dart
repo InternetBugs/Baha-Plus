@@ -1,6 +1,7 @@
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
+import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/community_widgets.dart';
 import 'package:flutter/cupertino.dart';
@@ -147,6 +148,75 @@ void main() {
         Theme.of(tester.element(appearanceRow)).brightness,
         Brightness.dark,
       );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'account glass style picker swaps the glass tier and persists it',
+    (tester) async {
+      final store = await launch(tester);
+      await openAccount(tester);
+
+      final glassRow = find.byKey(
+        const ValueKey('account-glass-style-picker'),
+      );
+      await tester.scrollUntilVisible(
+        glassRow,
+        150,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await frames(tester);
+      await tester.tap(glassRow);
+      await frames(tester);
+
+      final standardOption = find.byKey(
+        const ValueKey('glass-style-option-standard'),
+      );
+      final premiumOption = find.byKey(
+        const ValueKey('glass-style-option-premium'),
+      );
+      final performanceOption = find.byKey(
+        const ValueKey('glass-style-option-performance'),
+      );
+      expect(premiumOption, findsOneWidget);
+      expect(performanceOption, findsOneWidget);
+      expect(
+        find.descendant(
+          of: standardOption,
+          matching: find.byIcon(CupertinoIcons.checkmark),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(premiumOption);
+      await frames(tester);
+      expect(store.glassStyle, 'premium');
+      expect(await store.storage.read('baha.device.glass'), 'premium');
+      expect(
+        GlassThemeData.of(
+          tester.element(find.byType(AccountPage)),
+        ).qualityFor(tester.element(find.byType(AccountPage))),
+        GlassQuality.premium,
+      );
+      expect(
+        find.byKey(const ValueKey('glass-style-option-premium')),
+        findsNothing,
+      );
+      await tester.tap(glassRow);
+      await frames(tester);
+      await tester.tap(performanceOption);
+      await frames(tester);
+      expect(store.glassStyle, 'performance');
+      expect(await store.storage.read('baha.device.glass'), 'performance');
+      expect(
+        GlassThemeData.of(
+          tester.element(find.byType(AccountPage)),
+        ).qualityFor(tester.element(find.byType(AccountPage))),
+        GlassQuality.minimal,
+      );
+      // The settings sheet keeps rendering on the shader-free minimal tier.
+      expect(find.text(store.t('glassStyle')), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

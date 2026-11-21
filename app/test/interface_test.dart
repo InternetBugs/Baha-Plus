@@ -29,7 +29,7 @@ void main() {
     }
   }
 
-  Future<AppStore> launch(WidgetTester tester, {bool adaptive = false}) async {
+  Future<AppStore> launch(WidgetTester tester) async {
     tester.view.physicalSize = const Size(400, 850);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -56,8 +56,6 @@ void main() {
       LiquidGlassWidgets.wrap(
         brightnessResolver: Theme.maybeBrightnessOf,
         theme: GlassThemeData.simple(quality: GlassQuality.standard),
-        adaptiveQuality: adaptive,
-        adaptiveConfig: adaptive ? glassAdaptiveConfig : null,
         child: BahaPlusApp(store: store, mountPortal: false),
       ),
     );
@@ -67,7 +65,7 @@ void main() {
 
   testWidgets('navigation glass samples the page backdrop instead of a '
       'synthetic frost tint', (tester) async {
-    final store = await launch(tester, adaptive: true);
+    final store = await launch(tester);
     expect(find.text(store.t('explore')), findsWidgets);
     // Both regressions lose the liquid-glass look: `GlassQuality.minimal`
     // swaps in a shader-free BackdropFilter frost, and an explicit
