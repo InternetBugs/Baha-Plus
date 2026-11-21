@@ -11,6 +11,7 @@ import 'buffered_playback_track.dart';
 import 'chrome.dart';
 import 'comments_preview.dart';
 import 'danmaku_panel.dart';
+import 'glass_settings_menu.dart';
 import 'synopsis_section.dart';
 
 /// The complete app playback page. The session-owned video surface is passed
@@ -40,8 +41,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   bool _restoringHoldSpeed = false;
   bool _fullscreen = false;
   bool _controlsVisible = true;
+  bool _settingsMenuOpen = false;
   String _controlState = '';
   Timer? _hideTimer;
+  final _settingsMenuController = GlassSettingsMenuController();
   final _videoSurfaceKey = GlobalKey(debugLabel: 'player-video-surface');
   // The top strip of the landscape surface never starts a seek. Pulling down
   // from the screen edge belongs to the system panel (status bar, notification
@@ -81,7 +84,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _hideTimer?.cancel();
     if (!_controlsVisible && mounted) setState(() => _controlsVisible = true);
     final state = store.playback.value;
-    if (_scrub == null &&
+    if (!_settingsMenuOpen &&
+        _scrub == null &&
         store.playerFullscreen &&
         (store.playerLocked ||
             (state.phase == PlaybackPhase.content && !state.paused))) {
@@ -92,6 +96,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _hideControls() {
+    if (_settingsMenuOpen) return;
     _hideTimer?.cancel();
     if (_controlsVisible && mounted) setState(() => _controlsVisible = false);
   }
@@ -105,6 +110,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _setLocked(bool locked) {
+    if (locked) _settingsMenuController.close();
     store.setPlayerLocked(locked);
     _revealControls();
   }
@@ -133,6 +139,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       _cancelScrub();
     }
     if (_fullscreen == store.playerFullscreen) return;
+    _settingsMenuController.close();
     _fullscreen = store.playerFullscreen;
     _revealControls();
     unawaited(_screenMode(_fullscreen));
@@ -780,11 +787,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                     const SizedBox(width: 8),
                     ..._danmakuActions(),
                     const SizedBox(width: 8),
-                    _videoAction(
-                      CupertinoIcons.ellipsis,
-                      'playbackSettings',
-                      _settingsMenu,
-                    ),
+                    _settingsButton(fullscreen: false),
                   ],
                 ),
               ),
@@ -1089,119 +1092,107 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     ),
   );
 
-  Future<T?> _showMenu<T>(WidgetBuilder builder) async {
-    final route = _PlayerMenuRoute<T>(
-      builder: builder,
-      barrierLabel: CupertinoLocalizations.of(context).modalBarrierDismissLabel,
-      barrierColor: CupertinoDynamicColor.resolve(
-        kCupertinoModalBarrierColor,
-        context,
-      ),
-    );
-    final result = await Navigator.of(
-      context,
-      rootNavigator: true,
-    ).push<T>(route);
-    // Finish removing the old sheet and its barrier before opening a submenu.
-    await route.completed;
-    return result;
-  }
+  String _rateLabel(double rate) => '$rate×'.replaceAll('.0×', '×');
 
-  void _speed(double current) => _showMenu<void>(
-    (sheet) => CupertinoActionSheet(
-      title: Text(store.t('playbackSpeed')),
-      actions: [
-        for (final rate in [.5, .75, 1.0, 1.25, 1.5, 1.75, 2.0])
-          CupertinoActionSheetAction(
-            isDefaultAction: rate == current,
-            onPressed: () {
-              Navigator.pop(sheet);
-              store.controlPlayer('rate', rate);
-            },
-            child: Text('$rate×'.replaceAll('.0×', '×')),
+  String _qualityLabel(int height) =>
+      height == 0 ? store.t('automaticQuality') : '${height}p';
+
+  Widget _settingsButton({required bool fullscreen}) => ValueListenableBuilder(
+    valueListenable: store.playback,
+    builder: (context, state, child) {
+      final forceDark = fullscreen;
+      final items = <Widget>[
+        if (state.canControl && state.qualities.isNotEmpty)
+          glassSettingsSubmenuItem(
+            context,
+            key: const ValueKey('player-menu-quality'),
+            icon: CupertinoIcons.slider_horizontal_3,
+            title: store.t('videoQuality'),
+            value: _qualityLabel(state.quality),
+            forceDark: forceDark,
+            submenu: [
+              for (final height in [0, ...state.qualities])
+                glassSettingsOptionItem(
+                  context,
+                  key: ValueKey('player-quality-$height'),
+                  title: _qualityLabel(height),
+                  selected: state.quality == height,
+                  forceDark: forceDark,
+                  onTap: () => store.controlPlayer('quality', height.toDouble()),
+                ),
+            ],
           ),
-      ],
-      cancelButton: CupertinoActionSheetAction(
-        onPressed: () => Navigator.pop(sheet),
-        child: Text(store.t('close')),
-      ),
-    ),
+        if (state.canControl)
+          glassSettingsSubmenuItem(
+            context,
+            key: const ValueKey('player-menu-speed'),
+            icon: CupertinoIcons.gauge,
+            title: store.t('playbackSpeed'),
+            value: _rateLabel(state.rate),
+            forceDark: forceDark,
+            submenu: [
+              for (final rate in [.5, .75, 1.0, 1.25, 1.5, 1.75, 2.0])
+                glassSettingsOptionItem(
+                  context,
+                  key: ValueKey('player-speed-$rate'),
+                  title: _rateLabel(rate),
+                  selected: rate == state.rate,
+                  forceDark: forceDark,
+                  onTap: () => store.controlPlayer('rate', rate),
+                ),
+            ],
+          ),
+        if (state.canControl && state.hasDanmaku)
+          glassSettingsActionItem(
+            context,
+            key: const ValueKey('player-menu-danmaku'),
+            icon: CupertinoIcons.text_bubble,
+            title: store.t('danmakuSettings'),
+            forceDark: forceDark,
+            onTap: () => showDanmakuPanel(context, store),
+          ),
+        glassSettingsActionItem(
+          context,
+          key: const ValueKey('player-menu-refresh'),
+          icon: CupertinoIcons.arrow_clockwise,
+          title: store.t('refresh'),
+          forceDark: forceDark,
+          onTap: () => unawaited(store.reloadBrowser()),
+        ),
+      ];
+      return GlassSettingsMenu(
+        controller: _settingsMenuController,
+        menuAlignment: GlassMenuAlignment.topRight,
+        platformViewBackdrop: true,
+        forceDark: forceDark,
+        onOpen: () {
+          _settingsMenuOpen = true;
+          _hideTimer?.cancel();
+        },
+        onClose: () {
+          _settingsMenuOpen = false;
+          _revealControls();
+        },
+        items: items,
+        triggerBuilder: (context, toggleMenu) => fullscreen
+            ? GlassIconButton(
+                useOwnLayer: true,
+                platformViewBackdrop: true,
+                settings: mediaGlass.copyWith(
+                  backerColor: const Color(0x66000000),
+                ),
+                semanticLabel: store.t('playbackSettings'),
+                onPressed: toggleMenu,
+                icon: const Icon(CupertinoIcons.ellipsis, color: Colors.white),
+              )
+            : _videoAction(
+                CupertinoIcons.ellipsis,
+                'playbackSettings',
+                toggleMenu,
+              ),
+      );
+    },
   );
-
-  Future<void> _settingsMenu() async {
-    final state = store.playback.value;
-    final action = await _showMenu<_PlayerMenuAction>(
-      (sheet) => CupertinoActionSheet(
-        title: Text(store.t('playbackSettings')),
-        actions: [
-          if (state.canControl && state.qualities.isNotEmpty)
-            CupertinoActionSheetAction(
-              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.quality),
-              child: Text(
-                '${store.t('videoQuality')} · ${state.quality == 0 ? store.t('automaticQuality') : '${state.quality}p'}',
-              ),
-            ),
-          if (state.canControl)
-            CupertinoActionSheetAction(
-              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.speed),
-              child: Text(store.t('playbackSpeed')),
-            ),
-          if (state.canControl && state.hasDanmaku)
-            CupertinoActionSheetAction(
-              onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.danmaku),
-              child: Text(store.t('danmakuSettings')),
-            ),
-          CupertinoActionSheetAction(
-            onPressed: () => Navigator.pop(sheet, _PlayerMenuAction.refresh),
-            child: Text(store.t('refresh')),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.pop(sheet),
-          child: Text(store.t('close')),
-        ),
-      ),
-    );
-    if (!mounted) return;
-    switch (action) {
-      case _PlayerMenuAction.quality:
-        _qualityMenu();
-      case _PlayerMenuAction.speed:
-        _speed(state.rate);
-      case _PlayerMenuAction.danmaku:
-        showDanmakuPanel(context, store);
-      case _PlayerMenuAction.refresh:
-        unawaited(store.reloadBrowser());
-      case null:
-        break;
-    }
-  }
-
-  void _qualityMenu() {
-    final state = store.playback.value;
-    _showMenu<void>(
-      (sheet) => CupertinoActionSheet(
-        title: Text(store.t('videoQuality')),
-        actions: [
-          for (final height in [0, ...state.qualities])
-            CupertinoActionSheetAction(
-              isDefaultAction: state.quality == height,
-              onPressed: () {
-                Navigator.pop(sheet);
-                store.controlPlayer('quality', height.toDouble());
-              },
-              child: Text(
-                height == 0 ? store.t('automaticQuality') : '${height}p',
-              ),
-            ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.pop(sheet),
-          child: Text(store.t('close')),
-        ),
-      ),
-    );
-  }
 
   Widget _cinema(BuildContext context) => ColoredBox(
     color: Colors.black,
@@ -1254,19 +1245,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                       const SizedBox(width: 16),
                       ..._danmakuActions(),
                       const SizedBox(width: 12),
-                      GlassIconButton(
-                        useOwnLayer: true,
-                        platformViewBackdrop: true,
-                        settings: mediaGlass.copyWith(
-                          backerColor: const Color(0x66000000),
-                        ),
-                        semanticLabel: store.t('playbackSettings'),
-                        onPressed: _settingsMenu,
-                        icon: const Icon(
-                          CupertinoIcons.ellipsis,
-                          color: Colors.white,
-                        ),
-                      ),
+                      _settingsButton(fullscreen: true),
                     ],
                   ),
                 ),
@@ -1343,45 +1322,4 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     final minutes = value ~/ 60;
     return '${minutes.toString().padLeft(2, '0')}:${(value % 60).toString().padLeft(2, '0')}';
   }
-}
-
-enum _PlayerMenuAction { quality, speed, danmaku, refresh }
-
-/// Keep the sheet and its barrier on one bounded animation. The default
-/// Cupertino popup spring retains its barrier while the spring settles,
-/// even after the sheet has already moved out of view.
-class _PlayerMenuRoute<T> extends RawDialogRoute<T> {
-  _PlayerMenuRoute({
-    required WidgetBuilder builder,
-    required super.barrierColor,
-    required super.barrierLabel,
-  }) : super(
-         transitionDuration: const Duration(milliseconds: 160),
-         pageBuilder: (context, animation, secondaryAnimation) =>
-             CupertinoUserInterfaceLevel(
-               data: CupertinoUserInterfaceLevelData.elevated,
-               child: Builder(builder: builder),
-             ),
-         transitionBuilder: (context, animation, secondaryAnimation, child) =>
-             Align(
-               alignment: Alignment.bottomCenter,
-               child: SlideTransition(
-                 position: animation
-                     .drive(CurveTween(curve: Curves.easeOutCubic))
-                     .drive(
-                       Tween<Offset>(
-                         begin: const Offset(0, 1),
-                         end: Offset.zero,
-                       ),
-                     ),
-                 child: child,
-               ),
-             ),
-       );
-
-  @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 90);
-
-  @override
-  Curve get barrierCurve => Curves.linear;
 }

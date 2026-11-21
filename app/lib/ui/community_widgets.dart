@@ -5,6 +5,7 @@ import '../core/community.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'glass_settings_menu.dart';
 
 const collapsedCommentLines = 3;
 
@@ -98,50 +99,43 @@ class BoardEpisodePicker extends StatelessWidget {
     return Semantics(
       label: store.t('selectBoardEpisode'),
       button: true,
-      child: GlassButton.custom(
-        key: const ValueKey('board-episode-selector'),
-        width: 150,
-        height: 38,
-        shape: const LiquidRoundedRectangle(borderRadius: 20),
-        onTap: () {
-          if (!enabled) return;
-          showCupertinoModalPopup<void>(
-            context: context,
-            builder: (sheet) => CupertinoActionSheet(
-              title: Text(store.t('selectBoardEpisode')),
-              actions: [
-                for (final episode in episodes)
-                  CupertinoActionSheetAction(
-                    key: ValueKey('board-select-${episode.id}'),
-                    isDefaultAction: episode.id == videoId,
-                    onPressed: () {
-                      Navigator.pop(sheet);
-                      onSelected(episode);
-                    },
-                    child: Text(boardEpisodeLabel(store, episode.id, episodes)),
-                  ),
-              ],
-              cancelButton: CupertinoActionSheetAction(
-                onPressed: () => Navigator.pop(sheet),
-                child: Text(store.t('close')),
-              ),
+      child: GlassSettingsMenu(
+        menuAlignment: GlassMenuAlignment.none,
+        items: [
+          for (final episode in episodes)
+            glassSettingsOptionItem(
+              context,
+              key: ValueKey('board-select-${episode.id}'),
+              title: boardEpisodeLabel(store, episode.id, episodes),
+              selected: episode.id == videoId,
+              onTap: () => onSelected(episode),
             ),
-          );
-        },
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Flexible(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: brandBlue, fontSize: 13),
+        ],
+        triggerBuilder: (context, toggleMenu) => GlassButton.custom(
+          key: const ValueKey('board-episode-selector'),
+          width: 150,
+          height: 38,
+          shape: const LiquidRoundedRectangle(borderRadius: 20),
+          onTap: enabled ? toggleMenu : () {},
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: brandBlue, fontSize: 13),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(CupertinoIcons.chevron_down, size: 12, color: brandBlue),
-          ],
+              const SizedBox(width: 8),
+              const Icon(
+                CupertinoIcons.chevron_up_chevron_down,
+                size: 12,
+                color: brandBlue,
+              ),
+            ],
+          ),
         ),
       ),
     );

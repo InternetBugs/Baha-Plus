@@ -978,6 +978,14 @@ void main() {
       await tester.pump();
       expect(find.byType(CupertinoActionSheet), findsNothing);
       expect(
+        find.byKey(const ValueKey('glass-settings-menu-barrier')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('player-menu-refresh')),
+        findsNothing,
+      );
+      expect(
         find.byWidgetPredicate(
           (widget) =>
               widget is ModalBarrier && widget.dismissible ||
@@ -999,20 +1007,28 @@ void main() {
     }
 
     await openSettings();
+    expect(find.byKey(const ValueKey('player-menu-speed')), findsOneWidget);
     await tester.tapAt(const Offset(10, 100));
     await expectDismissed();
 
     await openSettings();
-    await tester.tap(find.text(store.t('playbackSpeed')));
+    await tester.tap(find.byKey(const ValueKey('player-menu-speed')));
     await frames(tester);
-    expect(find.byType(CupertinoActionSheet), findsOneWidget);
-    await tester.tap(find.text(store.t('close')).last);
+    expect(find.byKey(const ValueKey('player-speed-1.5')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('player-speed-1.0')),
+        matching: find.byIcon(CupertinoIcons.checkmark),
+      ),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(10, 100));
     await expectDismissed();
 
     await openSettings();
-    await tester.tap(find.textContaining(store.t('videoQuality')));
+    await tester.tap(find.byKey(const ValueKey('player-menu-quality')));
     await frames(tester);
-    expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    expect(find.byKey(const ValueKey('player-quality-360')), findsOneWidget);
     await tester.tap(find.text('360p'));
     expect(portal.scripts.last, contains('"quality",360.0'));
     await expectDismissed();
@@ -1322,11 +1338,12 @@ void main() {
         find.bySemanticsLabel(store.t('playbackSettings')).hitTestable(),
       );
       await frames(tester);
-      expect(find.byType(CupertinoActionSheet), findsOneWidget);
+      expect(find.byType(CupertinoActionSheet), findsNothing);
+      expect(find.byKey(const ValueKey('player-menu-refresh')), findsOneWidget);
       expect(find.text(store.t('connectAccount')), findsNothing);
       await tester.tapAt(const Offset(10, 100));
       await frames(tester);
-      expect(find.byType(CupertinoActionSheet), findsNothing);
+      expect(find.byKey(const ValueKey('player-menu-refresh')), findsNothing);
 
       playback(paused: true);
       await frames(tester);
