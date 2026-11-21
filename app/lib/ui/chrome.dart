@@ -275,8 +275,6 @@ class AnimeRow extends StatelessWidget {
         const SizedBox(width: 10),
         GlassButton.custom(
           shape: const LiquidRoundedRectangle(borderRadius: 18),
-          useOwnLayer: true,
-          quality: GlassQuality.standard,
           label: store.t('watch'),
           onTap: () => store.play(anime),
           width: 70,

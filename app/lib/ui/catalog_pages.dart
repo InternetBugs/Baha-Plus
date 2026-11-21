@@ -423,8 +423,6 @@ class ContinueCard extends StatelessWidget {
     final playButton = GlassIconButton(
       key: ValueKey('history-play-${entry.anime.id}'),
       size: 44,
-      useOwnLayer: true,
-      quality: GlassQuality.standard,
       settings: controlsGlass,
       semanticLabel: '${store.t('history')} ${entry.anime.title}',
       icon: const Padding(
@@ -547,8 +545,6 @@ class ContinueCard extends StatelessWidget {
                               ),
                               width: 88,
                               height: 44,
-                              useOwnLayer: true,
-                              quality: GlassQuality.standard,
                               settings: controlsGlass,
                               label: store.t('nextEpisode'),
                               onTap: () => store.play(
