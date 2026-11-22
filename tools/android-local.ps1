@@ -19,7 +19,9 @@ if (-not $FlutterSdk) {
     if ($flutterCommand) { $FlutterSdk = Split-Path -Parent (Split-Path -Parent $flutterCommand.Source) }
 }
 if (-not $FlutterSdk) { throw 'Set FLUTTER_ROOT or pass -FlutterSdk.' }
-if (-not $AndroidSdk) { $AndroidSdk = Join-Path $projectRoot '.tools\android-sdk' }
+if (-not $AndroidSdk) { $AndroidSdk = $env:ANDROID_SDK_ROOT }
+if (-not $AndroidSdk) { throw 'Set ANDROID_HOME to the global Android SDK or pass -AndroidSdk.' }
+if (-not (Test-Path -LiteralPath $AndroidSdk)) { throw "Android SDK not found: $AndroidSdk" }
 $flutterTool = Join-Path $FlutterSdk 'bin\flutter.bat'
 if (-not (Test-Path -LiteralPath $flutterTool)) { throw "Flutter not found: $flutterTool" }
 $env:FLUTTER_ROOT = $FlutterSdk

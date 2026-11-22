@@ -17,7 +17,17 @@ tools/windows-debug.ps1
 
 ## 本地开发
 
-要求 Flutter **3.47.9**、Java 21、Android SDK 和模拟器。玻璃组件锁定 **1.16.1**，要求 Flutter 3.41 以上。工具链、缓存、构建产物与账号会话不提交到仓库。
+要求 Flutter **3.47.9**、Java 21、Android SDK 和模拟器。玻璃组件锁定 **1.16.1**，要求 Flutter 3.41 以上。工具链、缓存、构建产物与账号会话不提交到仓库；Android SDK、模拟器与 AVD 只用本机全局安装，项目内不保存副本，也不创建 AVD。
+
+全局模拟器与 AVD 由本机 Android SDK 管理，仓库内不创建：
+
+```powershell
+emulator -list-avds
+emulator -avd <全局 AVD 名称>
+adb devices
+```
+
+本地构建：
 
 ```powershell
 $env:FLUTTER_ROOT = 'D:\BahaPlusTools\flutter'
@@ -26,7 +36,7 @@ $env:FLUTTER_ROOT = 'D:\BahaPlusTools\flutter'
 .\tools\android-local.ps1 -Action Run -Device emulator-5554
 ```
 
-本地脚本会优先读取 `FLUTTER_ROOT`、`ANDROID_HOME`，当前开发机也可以使用项目内的 `.tools/android-sdk`。只有这台电脑的网络需要代理时，才传入 `-ProxyUrl http://127.0.0.1:7890`。该选项不修改系统代理。
+本地脚本只读取全局 `FLUTTER_ROOT`、`ANDROID_HOME`（当前为 `D:\BahaPlusTools\flutter` 与 `D:\Android\Sdk`），不再使用项目内 SDK 副本。只有这台电脑的网络需要代理时，才传入 `-ProxyUrl http://127.0.0.1:7890`。该选项不修改系统代理。
 
 默认构建用于当前 x86_64 模拟器的 debug APK，输出到 `artifacts/flutter-local/BahaPlus-debug.apk`。连接 Android 真机时可用：
 

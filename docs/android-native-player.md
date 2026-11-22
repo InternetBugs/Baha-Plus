@@ -38,17 +38,17 @@ Android 没有额外的系统后台分片预取任务；原生媒体缓冲仍由
 
 ## 本地验证
 
-接管与授权边界的离线测试位于 `tests/native-playback.test.ts`（Android 分支原名 `tests/android-playback.test.ts`）；原生画质、资源释放、后台切源和弹幕绘制对象上限位于 `app/test/native_playback_test.dart`。
+接管与授权边界的离线测试位于 `app/test/native_http_api_test.dart`；原生画质、资源释放、后台切源和弹幕绘制对象上限位于 `app/test/native_playback_test.dart`。
 
 真实 Android 模拟器测试入口：
 
 ```powershell
-flutter test integration_test/native_player_smoke_test.dart `
-  -d <现有模拟器ID> --no-uninstall `
+flutter test integration_test/native_http_playback_smoke_test.dart `
+  -d <全局模拟器ID> --no-uninstall `
   --dart-define=BAHA_DIAGNOSTICS=true
 ```
 
-该测试选择官方的“同意”年龄按钮，等待官方广告和授权，确认真实 ExoPlayer 纹理及网页媒体源卸载，验证画质、暂停、定位、全屏和生命周期，再连续播放十分钟并退出。年龄确认仅在该测试中操作，不在产品中自动选择。保留 `--no-uninstall`，避免清除模拟器登录与偏好。
+该测试从界面内播放入口完成授权，等待真实广告和正片，确认广告不可跳过、原生视频纹理、弹幕加载与开关、暂停、定位、画质和倍速，并验证切后台后暂停且播放器实例保留；随后继续播放直到真实观看进度超过 61 秒并收到官方进度回报，全程断言 WebView 组件数量为零。保留 `--no-uninstall`，避免清除模拟器登录与偏好。
 
 普通主入口安装包另行验证 Android 实际桌面往返和系统媒体命令；不要在连续播放的 Flutter 集成测试中插入外部点击，测试框架会截获这些设备事件。原始日志、内存采样和截图保留在本地忽略的 `artifacts/android-native-player/`。
 

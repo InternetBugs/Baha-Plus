@@ -78,10 +78,10 @@ flutter build ios --profile --no-codesign --dart-define=BAHA_DIAGNOSTICS=true
 现有真实网络集成测试已支持 iOS 后端识别，可在有 Flutter／Xcode 的设备环境中执行：
 
 ```sh
-flutter test integration_test/native_player_smoke_test.dart \
+flutter test integration_test/native_http_playback_smoke_test.dart \
   -d <iPhone设备ID> --no-uninstall --dart-define=BAHA_DIAGNOSTICS=true
 ```
 
-该集成测试会点击真实官方年龄“同意”按钮并连续播放十分钟，只在操作者明确同意该操作时运行。保留 `--no-uninstall`，避免清理现有账号与偏好。控制中心、来电、耳机断开及真实锁屏应另外用普通主入口包测试。
+该集成测试适用于已登录并完成官网年龄确认的设备，会等待真实广告和正片，验证暂停、定位、画质、倍速、后台暂停与播放器保留，并连续播放到真实观看进度超过 61 秒；只在操作者明确同意消耗真实流量时运行。保留 `--no-uninstall`，避免清理现有账号与偏好。控制中心、来电、耳机断开及真实锁屏应另外用普通主入口包测试。
 
 Windows 离线验证不能替代 iOS 编译、AVPlayer 实际解码、控制中心／耳机事件、真机性能及官方进度写回验收。既有 Android 实播和较早的 iOS WebView 构建结果不作为本迁移的 iPhone 验收证据。
