@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -5,7 +6,6 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 import 'diagnostics_page.dart';
 import 'glass_settings_menu.dart';
-import 'layout.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({
@@ -81,16 +81,14 @@ class AccountPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Builder(
-        builder: (context) {
-          final hPad = AppLayout.of(
-            context,
-          ).pageHorizontalPadding(maxWidth: 640);
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final side = 20.0 + math.max(0.0, (constraints.maxWidth - 640.0) / 2);
           return ListView(
             padding: EdgeInsets.fromLTRB(
-              hPad.left,
+              side,
               18,
-              hPad.right,
+              side,
               MediaQuery.paddingOf(context).bottom + 40,
             ),
             children: [

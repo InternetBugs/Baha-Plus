@@ -52,6 +52,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   Future<void>? _holdStart;
   bool _restoringHoldSpeed = false;
   bool _fullscreen = false;
+  bool _isTablet = false;
   bool _controlsVisible = true;
   bool _settingsMenuOpen = false;
   String _controlState = '';
@@ -127,7 +128,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     store.addListener(_syncFullscreen);
     store.playback.addListener(_playbackChanged);
-    _syncFullscreen();
     _playbackChanged();
   }
 
@@ -412,6 +412,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _isTablet = AppLayout.of(context).isTablet;
+    _syncFullscreen();
     if (_holdingSpeed && _holdViewport != MediaQuery.sizeOf(context)) {
       _stopHoldSpeed();
     }
@@ -431,9 +433,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   Future<void> _screenMode(bool expanded) async {
-    final tablet = mounted && AppLayout.of(context).isTablet;
     await SystemChrome.setPreferredOrientations(
-      expanded && !tablet
+      expanded && !_isTablet
           ? [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
           : DeviceOrientation.values,
     );

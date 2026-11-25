@@ -30,17 +30,17 @@
 | 场景 | 当前做法 |
 | --- | --- |
 | 页面容器与标题 | `GlassScaffold`、`GlassAppBar`；目录页使用随滚动折叠的 `GlassLargeTitle` |
-| 底部导航 | `GlassTabBar.bottom` 浮于内容上方；选中项使用蓝色图标和文字、胶囊指示器，并按明暗模式调整薄背衬 |
-| 搜索 | `GlassSearchBar`，目录页使用实色表面和 48 高度 |
+| 底部与侧边导航 | 手机与窄分屏使用 `GlassTabBar.bottom` 浮于内容上方；平板竖屏／中等分屏（600–899pt）居中限宽展示；宽平板（≥900pt 且高度 ≥560pt）切换为左侧浮动液态玻璃导航栏 `GlassNavigationRail` |
+| 搜索 | `GlassSearchBar`，目录页使用实色表面和 48 高度；宽屏限制最大宽度并与大标题左对齐 |
 | 圆形操作 | `GlassIconButton`，用于头像、关闭、返回、刷新、收藏等；头像入口尺寸为 44 |
 | 主要操作 | `GlassButton.custom` 配合圆角形状；封面上的播放操作使用独立玻璃层 |
-| 账号面板 | `GlassModalSheet`，接近全屏，顶部圆角 36，展开背景随明暗模式变化 |
+| 账号与弹幕面板 | 手机与窄分屏使用 `GlassModalSheet`；平板（≥640×540）以居中圆角浮层卡片呈现 |
 | 内容图片 | 封面和海报使用不透明图像、圆角裁切；普通作品缩略图圆角 18，横向列表图圆角 14 |
-| 播放控制 | 竖屏在视频下方显示 `GlassContainer`、`GlassSlider` 与 Cupertino 图标；横屏叠放于视频画面，使用较大的按钮和深色背衬 |
-| 作品资料 | 详情页与播放页均使用无背景的标签、数值分栏，不添加独立卡片 |
-| 评分与留言 | 使用不透明内容表面，并以柔和外部投影和较短的接触阴影加强层次；横向留言预览为上下投影预留空间 |
+| 播放控制 | 竖屏在视频下方显示 `GlassContainer`、`GlassSlider` 与 Cupertino 图标；横屏全屏叠放于视频画面；宽平板非全屏采用左播放、右选集／简介／留言双栏布局，全屏不强锁方向 |
+| 作品资料 | 详情页与播放页均使用无背景的标签、数值分栏，不添加独立卡片；宽屏详情页采用海报横幅与双栏排版 |
+| 评分与留言 | 使用不透明内容表面，并以柔和外部投影和较短的接触阴影加强层次；横向留言预览在平板限制单卡宽度并列展示，二级阅读页居中限宽 |
 
-常用共享组件及媒体玻璃设置位于 `app/lib/ui/chrome.dart`；导航、搜索与面板见 `app/lib/ui/app_root.dart`，封面与详情见 `catalog_pages.dart`、`detail_page.dart`，播放控制见 `player_page.dart`。修改共享样式时，应同时检查这些场景。
+常用共享组件及媒体玻璃设置位于 `app/lib/ui/chrome.dart`，响应式断点、平板导航栏与浮层卡片位于 `app/lib/ui/layout.dart`；导航、搜索与面板见 `app/lib/ui/app_root.dart`，封面与详情见 `catalog_pages.dart`、`detail_page.dart`，播放控制见 `player_page.dart`。修改共享样式时，应同时检查这些场景。
 
 封面操作使用的 `mediaGlass` 为透明主体：`glassColor` 为 `0x35FFFFFF`、`backerColor` 为 `0x25FFFFFF`、厚度 12、模糊 5。视频内的控制条和浮动按钮根据需要增加深色背衬，不应直接假定相同参数在所有图片上都清晰。
 

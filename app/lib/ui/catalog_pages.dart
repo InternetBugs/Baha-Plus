@@ -379,9 +379,16 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
       } else if (singleWide) {
         fraction = 1.0;
         height = math.min(bounds.maxWidth * .54, 440.0);
+      } else if (bounds.maxWidth >= 960) {
+        final visible = math.min(3, widget.items.length);
+        // Size pages so the trailing card aligns flush with the content grid
+        // right edge while preserving the 16px inter-card gap.
+        fraction = (bounds.maxWidth + 16.0) / (visible * bounds.maxWidth);
+        final cardWidth = bounds.maxWidth * fraction - 16.0;
+        height = math.min(cardWidth * 1.28, 480.0);
       } else {
-        final targetCardWidth = bounds.maxWidth >= 900 ? 370.0 : 350.0;
-        fraction = (targetCardWidth / bounds.maxWidth).clamp(.32, .54);
+        const targetCardWidth = 350.0;
+        fraction = (targetCardWidth / bounds.maxWidth).clamp(.42, .54);
         height = math.min(targetCardWidth * 1.28, 480.0);
       }
       final controller = _controllerFor(fraction);

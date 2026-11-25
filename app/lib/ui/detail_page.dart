@@ -118,13 +118,18 @@ class DetailPage extends StatelessWidget {
                       size: 17,
                     ),
                     const SizedBox(width: 9),
-                    Text(
-                      store.t(
-                        anime.latestVideoId == null ? 'play' : 'playLatest',
-                      ),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+                    Flexible(
+                      child: Text(
+                        store.t(
+                          anime.latestVideoId == null ? 'play' : 'playLatest',
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
