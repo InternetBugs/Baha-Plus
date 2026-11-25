@@ -1,7 +1,15 @@
 package app.bahaplus.mobile
 
+import android.app.PictureInPictureParams
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Rect
+import android.os.Build
+import android.util.Rational
+import android.view.View
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import android.view.WindowManager
 import android.media.MediaMetadata
@@ -12,12 +20,15 @@ import android.os.Looper
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.upstream.BandwidthMeter
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
+import kotlin.math.roundToInt
 
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class MainActivity : FlutterActivity() {
     private var nativeMediaSession: MediaSession? = null
     private var playbackChannel: MethodChannel? = null
     private var playbackDocument: String? = null
+    private var pictureInPictureChannel: MethodChannel? = null
+    private var pictureInPictureRequest: String? = null
     private var keepScreenOn = false
     private var metadataKey = ""
     private var downloadChannel: MethodChannel? = null
@@ -34,6 +45,16 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        pictureInPictureChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
+            "app.bahaplus.mobile/picture_in_picture").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "isSupported" -> result.success(supportsPictureInPicture())
+                    "enter" -> result.success(enterPictureInPicture(call))
+                    else -> result.notImplemented()
+                }
+            }
+        }
         // ExoPlayer's default builder uses this singleton for media transfers.
         // It excludes WebView requests, artwork and the rest of the app.
         bandwidthMeter = DefaultBandwidthMeter.getSingletonInstance(applicationContext).also {
@@ -89,6 +110,59 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun supportsPictureInPicture(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun enterPictureInPicture(call: MethodCall): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+            !supportsPictureInPicture() || isFinishing || isInPictureInPictureMode) {
+            return false
+        }
+        val request = call.argument<String>("id") ?: return false
+        val ratio = call.argument<Double>("aspectRatio")
+            ?.takeIf { it.isFinite() && it > 0 } ?: return false
+        val aspect = Rational((ratio * 1000).roundToInt(), 1000)
+            .coerceIn(Rational(100, 239), Rational(239, 100))
+        val params = PictureInPictureParams.Builder()
+            .setAspectRatio(aspect)
+        val flutterView = findViewById<View>(FLUTTER_VIEW_ID) ?: return false
+        val origin = IntArray(2)
+        flutterView.getLocationInWindow(origin)
+        val density = flutterView.resources.displayMetrics.density
+        fun coordinate(name: String, offset: Int): Int =
+            ((call.argument<Double>(name) ?: 0.0) * density).roundToInt() + offset
+
+        val source = Rect(
+            coordinate("left", origin[0]), coordinate("top", origin[1]),
+            coordinate("right", origin[0]), coordinate("bottom", origin[1]),
+        )
+        if (source.intersect(origin[0], origin[1],
+                origin[0] + flutterView.width, origin[1] + flutterView.height)) {
+            params.setSourceRectHint(source)
+        }
+        pictureInPictureRequest = request
+        val entered = try {
+            enterPictureInPictureMode(params.build())
+        } catch (_: IllegalArgumentException) {
+            false
+        } catch (_: IllegalStateException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
+        if (!entered) pictureInPictureRequest = null
+        return entered
+    }
+
+    override fun onPictureInPictureModeChanged(active: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(active, newConfig)
+        val request = pictureInPictureRequest ?: return
+        if (!active) pictureInPictureRequest = null
+        pictureInPictureChannel?.invokeMethod("modeChanged", mapOf(
+            "id" to request, "active" to active))
+    }
+
     private fun remoteCommand(action: String, value: Double? = null) {
         val document = playbackDocument ?: return
         playbackChannel?.invokeMethod("remoteCommand", mapOf(
@@ -139,6 +213,9 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        pictureInPictureChannel?.setMethodCallHandler(null)
+        pictureInPictureChannel = null
+        pictureInPictureRequest = null
         bandwidthMeter?.removeEventListener(bandwidthListener)
         bandwidthMeter = null
         downloadChannel?.setMethodCallHandler(null)

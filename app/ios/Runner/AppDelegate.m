@@ -2,15 +2,55 @@
 #import "GeneratedPluginRegistrant.h"
 #import <AVFAudio/AVFAudio.h>
 #import <AVFoundation/AVFoundation.h>
+#import <AVKit/AVKit.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <math.h>
 
-@interface AppDelegate () <NSURLSessionDelegate>
+static void *PictureInPicturePossible = &PictureInPicturePossible;
+static void *PictureInPicturePlayback = &PictureInPicturePlayback;
+
+static AVPlayerLayer *PlaybackLayerForSource(UIView *view, NSURL *source) {
+  if (view.hidden || view.alpha == 0) return nil;
+  if ([view.layer isKindOfClass:AVPlayerLayer.class] && !CGRectIsEmpty(view.bounds)) {
+    AVPlayerLayer *layer = (AVPlayerLayer *)view.layer;
+    AVAsset *asset = layer.player.currentItem.asset;
+    if ([asset isKindOfClass:AVURLAsset.class] && [((AVURLAsset *)asset).URL isEqual:source]) {
+      return layer;
+    }
+  }
+  for (UIView *child in view.subviews.reverseObjectEnumerator) {
+    AVPlayerLayer *layer = PlaybackLayerForSource(child, source);
+    if (layer) return layer;
+  }
+  return nil;
+}
+
+static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if (![scene isKindOfClass:UIWindowScene.class] ||
+        scene.activationState != UISceneActivationStateForegroundActive) continue;
+    for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+      if (!window.isKeyWindow) continue;
+      AVPlayerLayer *layer = PlaybackLayerForSource(window, source);
+      if (layer) return layer;
+    }
+  }
+  return nil;
+}
+
+@interface AppDelegate () <NSURLSessionDelegate, AVPictureInPictureControllerDelegate>
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
 @property(nonatomic, strong) NSURLSession *retiredPlaybackDownloads;
 @property(nonatomic, copy) void (^retiredPlaybackCompletion)(void);
 @property(nonatomic, strong) FlutterMethodChannel *playbackEnvironmentChannel;
 @property(nonatomic, strong) FlutterMethodChannel *playbackDownloadChannel;
+@property(nonatomic, strong) FlutterMethodChannel *pictureInPictureChannel;
+@property(nonatomic, strong) AVPictureInPictureController *pictureInPictureController;
+@property(nonatomic, strong) AVPlayer *pictureInPicturePlayer;
+@property(nonatomic, copy) NSString *pictureInPictureRequest;
+@property(nonatomic, copy) NSString *pictureInPictureDocument;
+@property(nonatomic, assign) BOOL pictureInPictureStarting;
+@property(nonatomic, assign) BOOL pictureInPicturePlaying;
 @property(nonatomic, copy) NSString *downloadDocument;
 @property(nonatomic, copy) NSSet<NSString *> *downloadSources;
 @property(nonatomic, weak) AVPlayerItem *downloadItem;
@@ -50,6 +90,12 @@
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/playback_environment"
                                  binaryMessenger:registrar.messenger];
   __weak AppDelegate *weakSelf = self;
+  self.pictureInPictureChannel =
+      [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/picture_in_picture"
+                                 binaryMessenger:registrar.messenger];
+  [self.pictureInPictureChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    [weakSelf handlePictureInPictureCall:call result:result];
+  }];
   self.playbackDownloadChannel =
       [FlutterMethodChannel methodChannelWithName:@"app.bahaplus.mobile/playback_download"
                                  binaryMessenger:registrar.messenger];
@@ -105,6 +151,7 @@
     }
     // Dart releases the native player before exit.
     // Deactivate only on exit, never on a normal pause or quality change.
+    [weakSelf stopPictureInPicture];
     [weakSelf clearPlaybackControls];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
     NSError *error = nil;
@@ -120,6 +167,160 @@
     }
     result(nil);
   }];
+}
+
+- (void)handlePictureInPictureCall:(FlutterMethodCall *)call result:(FlutterResult)result {
+  if ([call.method isEqualToString:@"isSupported"]) {
+    result(@([AVPictureInPictureController isPictureInPictureSupported]));
+    return;
+  }
+  NSDictionary *arguments = [call.arguments isKindOfClass:NSDictionary.class] ? call.arguments : @{};
+  NSString *request = [arguments[@"id"] isKindOfClass:NSString.class] ? arguments[@"id"] : nil;
+  if ([call.method isEqualToString:@"stop"]) {
+    if ([request isEqualToString:self.pictureInPictureRequest]) [self stopPictureInPicture];
+    result(nil);
+    return;
+  }
+  if (![call.method isEqualToString:@"enter"]) {
+    result(FlutterMethodNotImplemented);
+    return;
+  }
+  NSString *document = [arguments[@"document"] isKindOfClass:NSString.class] ? arguments[@"document"] : nil;
+  NSString *sourceString = [arguments[@"source"] isKindOfClass:NSString.class] ? arguments[@"source"] : nil;
+  NSURL *source = sourceString.length ? [NSURL URLWithString:sourceString] : nil;
+  if (!request.length || !document.length || !source || self.pictureInPictureRequest ||
+      ![AVPictureInPictureController isPictureInPictureSupported]) {
+    result(@NO);
+    return;
+  }
+  self.pictureInPictureRequest = request;
+  self.pictureInPictureDocument = document;
+  result(@YES);
+  [self preparePictureInPictureForSource:source request:request retriesRemaining:20];
+}
+
+- (void)preparePictureInPictureForSource:(NSURL *)source request:(NSString *)request
+                       retriesRemaining:(NSUInteger)retriesRemaining {
+  if (![request isEqualToString:self.pictureInPictureRequest]) return;
+  AVPlayerLayer *layer = ForegroundPlaybackLayerForSource(source);
+  if (!layer) {
+    if (retriesRemaining == 0) {
+      [self finishPictureInPictureWithReason:@"layer-unavailable" error:nil];
+      return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
+        dispatch_get_main_queue(), ^{
+          [self preparePictureInPictureForSource:source request:request
+                                retriesRemaining:retriesRemaining - 1];
+        });
+    return;
+  }
+  NSError *audioError = nil;
+  if (![AVAudioSession.sharedInstance setActive:YES error:&audioError]) {
+    [self finishPictureInPictureWithReason:@"audio-session" error:audioError];
+    return;
+  }
+  AVPictureInPictureController *controller = self.pictureInPictureController;
+  if (controller.playerLayer != layer) {
+    controller = [[AVPictureInPictureController alloc] initWithPlayerLayer:layer];
+    self.pictureInPictureController = controller;
+  }
+  if (!controller) {
+    [self finishPictureInPictureWithReason:@"controller-unavailable" error:nil];
+    return;
+  }
+  self.pictureInPicturePlayer = layer.player;
+  controller.delegate = self;
+  [controller addObserver:self forKeyPath:@"pictureInPicturePossible"
+                   options:NSKeyValueObservingOptionNew context:PictureInPicturePossible];
+  [self.pictureInPicturePlayer addObserver:self forKeyPath:@"timeControlStatus"
+                                   options:NSKeyValueObservingOptionNew context:PictureInPicturePlayback];
+  [self startPictureInPictureIfPossible:controller];
+}
+
+- (void)startPictureInPictureIfPossible:(AVPictureInPictureController *)controller {
+  if (controller == self.pictureInPictureController && self.pictureInPicturePlayer &&
+      controller.isPictureInPicturePossible && !self.pictureInPictureStarting) {
+    self.pictureInPictureStarting = YES;
+    [controller startPictureInPicture];
+  }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change context:(void *)context {
+  if (context == PictureInPicturePossible) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self startPictureInPictureIfPossible:object];
+    });
+  } else if (context == PictureInPicturePlayback) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (object != self.pictureInPicturePlayer ||
+          !self.pictureInPictureController.isPictureInPictureActive) return;
+      BOOL playing = self.pictureInPicturePlayer.timeControlStatus != AVPlayerTimeControlStatusPaused;
+      if (playing == self.pictureInPicturePlaying) return;
+      self.pictureInPicturePlaying = playing;
+      [self.pictureInPictureChannel invokeMethod:@"playingChanged"
+          arguments:@{@"id": self.pictureInPictureRequest, @"playing": @(playing)}];
+    });
+  } else {
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+  }
+}
+
+- (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)controller {
+  if (controller != self.pictureInPictureController || !self.pictureInPictureRequest) return;
+  self.pictureInPicturePlaying =
+      self.pictureInPicturePlayer.timeControlStatus != AVPlayerTimeControlStatusPaused;
+  [self.pictureInPictureChannel invokeMethod:@"modeChanged"
+      arguments:@{@"id": self.pictureInPictureRequest, @"active": @YES}];
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)controller
+           failedToStartPictureInPictureWithError:(NSError *)error {
+  if (controller != self.pictureInPictureController) return;
+  [self finishPictureInPictureWithReason:@"avkit-start" error:error];
+  self.pictureInPictureController = nil;
+}
+
+- (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)controller {
+  if (controller != self.pictureInPictureController) return;
+  [self finishPictureInPictureWithReason:@"stopped" error:nil];
+}
+
+- (void)pictureInPictureController:(AVPictureInPictureController *)controller
+    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL))completionHandler {
+  completionHandler(controller == self.pictureInPictureController &&
+      [self.pictureInPictureDocument isEqualToString:self.playbackDocument]);
+}
+
+- (void)stopPictureInPicture {
+  AVPictureInPictureController *controller = self.pictureInPictureController;
+  if (self.pictureInPictureStarting) [controller stopPictureInPicture];
+  [self finishPictureInPictureWithReason:@"cancelled" error:nil];
+  self.pictureInPictureController = nil;
+}
+
+- (void)finishPictureInPictureWithReason:(NSString *)reason error:(NSError *)error {
+  NSString *request = self.pictureInPictureRequest;
+  if (!request) return;
+  AVPictureInPictureController *controller = self.pictureInPictureController;
+  if (self.pictureInPicturePlayer) {
+    [controller removeObserver:self forKeyPath:@"pictureInPicturePossible" context:PictureInPicturePossible];
+    [self.pictureInPicturePlayer removeObserver:self forKeyPath:@"timeControlStatus"
+                                       context:PictureInPicturePlayback];
+  }
+  controller.delegate = nil;
+  self.pictureInPicturePlayer = nil;
+  self.pictureInPictureRequest = nil;
+  self.pictureInPictureDocument = nil;
+  self.pictureInPictureStarting = NO;
+  self.pictureInPicturePlaying = NO;
+  NSMutableDictionary *arguments = [@{@"id": request, @"active": @NO, @"reason": reason} mutableCopy];
+  if (error) {
+    arguments[@"errorDomain"] = error.domain;
+    arguments[@"errorCode"] = @(error.code);
+  }
+  [self.pictureInPictureChannel invokeMethod:@"modeChanged" arguments:arguments];
 }
 
 - (void)playbackAccessLogChanged:(NSNotification *)notification {

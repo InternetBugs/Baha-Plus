@@ -1130,7 +1130,7 @@ void main() {
   );
 
   testWidgets(
-    'double tap toggles playback only on unlocked fullscreen content',
+    'double tap toggles unlocked portrait and fullscreen content',
     (tester) async {
       final store = await launch(tester);
       final portal = FakePortal();
@@ -1184,6 +1184,21 @@ void main() {
       playback();
       await frames(tester);
       var before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before + 1);
+      expect(portal.scripts.last, contains('"pause"'));
+
+      playback(paused: true);
+      await frames(tester);
+      before = portal.scripts.length;
+      await doubleTapVideo();
+      expect(portal.scripts.length, before + 1);
+      expect(portal.scripts.last, contains('"play"'));
+
+      tester.view.physicalSize = const Size(850, 400);
+      playback();
+      await frames(tester);
+      before = portal.scripts.length;
       await doubleTapVideo();
       expect(portal.scripts.length, before);
 

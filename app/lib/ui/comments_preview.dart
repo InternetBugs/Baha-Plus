@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/community.dart';
@@ -136,26 +137,29 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
             _openAll(),
           ] else ...[
             LayoutBuilder(
-              builder: (context, constraints) => SingleChildScrollView(
-                key: ValueKey('inline-comments-$_videoId'),
-                controller: _scroll,
-                scrollDirection: Axis.horizontal,
-                primary: false,
-                padding: const EdgeInsets.only(top: 12, bottom: 20),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final comment in comments)
-                      SizedBox(
-                        width: constraints.maxWidth * .9,
-                        child: Padding(
-                          padding: const EdgeInsets.only(right: 12),
-                          child: _comment(context, comment),
+              builder: (context, constraints) {
+                final cardWidth = math.min(constraints.maxWidth * .9, 380.0);
+                return SingleChildScrollView(
+                  key: ValueKey('inline-comments-$_videoId'),
+                  controller: _scroll,
+                  scrollDirection: Axis.horizontal,
+                  primary: false,
+                  padding: const EdgeInsets.only(top: 12, bottom: 20),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final comment in comments)
+                        SizedBox(
+                          width: cardWidth,
+                          child: Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: _comment(context, comment),
+                          ),
                         ),
-                      ),
-                  ],
-                ),
-              ),
+                    ],
+                  ),
+                );
+              },
             ),
             _openAll(),
           ],
@@ -166,31 +170,41 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
 
   Widget _openAll() => Padding(
     padding: const EdgeInsets.only(top: 14, bottom: 8),
-    child: GlassButton.custom(
-      key: const ValueKey('open-full-comments'),
-      useOwnLayer: true,
-      shape: const LiquidRoundedRectangle(borderRadius: 24),
-      height: 48,
-      width: double.infinity,
-      onTap: _open,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(CupertinoIcons.text_bubble, size: 18, color: brandBlue),
-          const SizedBox(width: 9),
-          Flexible(
-            child: Text(
-              widget.store.t('viewAllRatings'),
-              style: const TextStyle(
-                color: brandBlue,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+    child: Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: GlassButton.custom(
+          key: const ValueKey('open-full-comments'),
+          useOwnLayer: true,
+          shape: const LiquidRoundedRectangle(borderRadius: 24),
+          height: 48,
+          width: double.infinity,
+          onTap: _open,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(CupertinoIcons.text_bubble, size: 18, color: brandBlue),
+              const SizedBox(width: 9),
+              Flexible(
+                child: Text(
+                  widget.store.t('viewAllRatings'),
+                  style: const TextStyle(
+                    color: brandBlue,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              const Icon(
+                CupertinoIcons.chevron_right,
+                size: 14,
+                color: brandBlue,
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          const Icon(CupertinoIcons.chevron_right, size: 14, color: brandBlue),
-        ],
+        ),
       ),
     ),
   );

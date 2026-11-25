@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -7,6 +8,7 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_images.dart';
 import 'community_widgets.dart';
+import 'layout.dart';
 import 'secondary_page_route.dart';
 
 Future<void> openComments(
@@ -230,137 +232,152 @@ class _CommentsPageState extends State<CommentsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
-    builder: (context, _) => GlassScaffold(
-      key: const ValueKey('comments-page'),
-      extendBody: false,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: GlassAppBar(
-        leading: GlassIconButton(
-          semanticLabel: store.t('close'),
-          icon: const Icon(CupertinoIcons.xmark),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          GlassIconButton(
-            semanticLabel: store.t('refresh'),
-            icon: const Icon(CupertinoIcons.arrow_clockwise),
-            onPressed: _loading || _sending ? null : () => _load(),
+  Widget build(BuildContext context) {
+    final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 780);
+    final composerExtraLeft = math.max(0.0, hPad.left - 20);
+    final composerExtraRight = math.max(0.0, hPad.right - 20);
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) => GlassScaffold(
+        key: const ValueKey('comments-page'),
+        extendBody: false,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        appBar: GlassAppBar(
+          leading: GlassIconButton(
+            semanticLabel: store.t('close'),
+            icon: const Icon(CupertinoIcons.xmark),
+            onPressed: () => Navigator.pop(context),
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: () => _load(),
-              child: Builder(
-                builder: (context) {
-                  final showError = _error != null;
-                  final showEmpty =
-                      !_loading && _comments.isEmpty && _error == null;
-                  final commentCount = _loading ? 0 : _comments.length;
-                  final showMore = !_loading && _nextPage != 0;
-                  final prefixCount =
-                      1 +
-                      (_loading ? 1 : 0) +
-                      (showError ? 1 : 0) +
-                      (showEmpty ? 1 : 0);
-                  final totalCount = prefixCount + commentCount + (showMore ? 1 : 0) + 1;
-                  return ListView.builder(
-                    key: const ValueKey('comment-list'),
-                    controller: _list,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    itemCount: totalCount,
-                    itemBuilder: (context, index) {
-                      var cursor = index;
-                      if (cursor == 0) return _header();
-                      cursor--;
-                      if (_loading) {
-                        if (cursor == 0) {
-                          return const Padding(
-                            padding: EdgeInsets.all(30),
-                            child: Center(child: CupertinoActivityIndicator()),
-                          );
-                        }
+          actions: [
+            GlassIconButton(
+              semanticLabel: store.t('refresh'),
+              icon: const Icon(CupertinoIcons.arrow_clockwise),
+              onPressed: _loading || _sending ? null : () => _load(),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () => _load(),
+                child: Builder(
+                  builder: (context) {
+                    final showError = _error != null;
+                    final showEmpty =
+                        !_loading && _comments.isEmpty && _error == null;
+                    final commentCount = _loading ? 0 : _comments.length;
+                    final showMore = !_loading && _nextPage != 0;
+                    final prefixCount =
+                        1 +
+                        (_loading ? 1 : 0) +
+                        (showError ? 1 : 0) +
+                        (showEmpty ? 1 : 0);
+                    final totalCount =
+                        prefixCount + commentCount + (showMore ? 1 : 0) + 1;
+                    return ListView.builder(
+                      key: const ValueKey('comment-list'),
+                      controller: _list,
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.only(
+                        left: hPad.left,
+                        right: hPad.right,
+                      ),
+                      itemCount: totalCount,
+                      itemBuilder: (context, index) {
+                        var cursor = index;
+                        if (cursor == 0) return _header();
                         cursor--;
-                      }
-                      if (showError) {
-                        if (cursor == 0) {
-                          return CommunityEmpty(
-                            icon: CupertinoIcons.wifi_exclamationmark,
-                            title: communityError(store, _error),
-                            action: CupertinoButton(
-                              onPressed: () =>
-                                  _load(more: _comments.isNotEmpty),
-                              child: Text(store.t('retry')),
+                        if (_loading) {
+                          if (cursor == 0) {
+                            return const Padding(
+                              padding: EdgeInsets.all(30),
+                              child: Center(child: CupertinoActivityIndicator()),
+                            );
+                          }
+                          cursor--;
+                        }
+                        if (showError) {
+                          if (cursor == 0) {
+                            return CommunityEmpty(
+                              icon: CupertinoIcons.wifi_exclamationmark,
+                              title: communityError(store, _error),
+                              action: CupertinoButton(
+                                onPressed: () =>
+                                    _load(more: _comments.isNotEmpty),
+                                child: Text(store.t('retry')),
+                              ),
+                            );
+                          }
+                          cursor--;
+                        }
+                        if (showEmpty) {
+                          if (cursor == 0) {
+                            return CommunityEmpty(
+                              icon: CupertinoIcons.chat_bubble_2,
+                              title: store.t('noComments'),
+                              message: store.t('commentHint'),
+                            );
+                          }
+                          cursor--;
+                        }
+                        if (cursor < commentCount) {
+                          return _thread(_comments[cursor]);
+                        }
+                        cursor -= commentCount;
+                        if (showMore && cursor == 0) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            child: Center(
+                              child: _more
+                                  ? const CupertinoActivityIndicator()
+                                  : GlassButton.custom(
+                                      key: const ValueKey('comments-more'),
+                                      shape: const LiquidRoundedRectangle(
+                                        borderRadius: 22,
+                                      ),
+                                      width: 160,
+                                      height: 44,
+                                      onTap: () => _load(more: true),
+                                      child: Text(store.t('loadMore')),
+                                    ),
                             ),
                           );
                         }
-                        cursor--;
-                      }
-                      if (showEmpty) {
-                        if (cursor == 0) {
-                          return CommunityEmpty(
-                            icon: CupertinoIcons.chat_bubble_2,
-                            title: store.t('noComments'),
-                            message: store.t('commentHint'),
-                          );
-                        }
-                        cursor--;
-                      }
-                      if (cursor < commentCount) {
-                        return _thread(_comments[cursor]);
-                      }
-                      cursor -= commentCount;
-                      if (showMore && cursor == 0) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Center(
-                            child: _more
-                                ? const CupertinoActivityIndicator()
-                                : GlassButton.custom(
-                                    key: const ValueKey('comments-more'),
-                                    shape: const LiquidRoundedRectangle(
-                                      borderRadius: 22,
-                                    ),
-                                    width: 160,
-                                    height: 44,
-                                    onTap: () => _load(more: true),
-                                    child: Text(store.t('loadMore')),
-                                  ),
-                          ),
-                        );
-                      }
-                      return const SizedBox(height: 12);
-                    },
-                  );
-                },
+                        return const SizedBox(height: 12);
+                      },
+                    );
+                  },
+                ),
               ),
             ),
-          ),
-          CommunityComposer(
-            store: store,
-            controller: _draft,
-            hint: store.t(
-              _replyTo == null ? 'commentPlaceholder' : 'replyPlaceholder',
+            Padding(
+              padding: EdgeInsets.only(
+                left: composerExtraLeft,
+                right: composerExtraRight,
+              ),
+              child: CommunityComposer(
+                store: store,
+                controller: _draft,
+                hint: store.t(
+                  _replyTo == null ? 'commentPlaceholder' : 'replyPlaceholder',
+                ),
+                sending: _sending,
+                onSend: _loading || _page == null ? null : _send,
+                maximum: 2000,
+                focusNode: _focus,
+                error: _actionError == null
+                    ? null
+                    : communityError(store, _actionError),
+                replyName: _replyTo?.name,
+                cancelReply: () => setState(() => _replyTo = null),
+              ),
             ),
-            sending: _sending,
-            onSend: _loading || _page == null ? null : _send,
-            maximum: 2000,
-            focusNode: _focus,
-            error: _actionError == null
-                ? null
-                : communityError(store, _actionError),
-            replyName: _replyTo?.name,
-            cancelReply: () => setState(() => _replyTo = null),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _header() => Padding(
     padding: const EdgeInsets.only(top: 12, bottom: 22),

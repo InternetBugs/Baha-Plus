@@ -6,6 +6,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'layout.dart';
 
 class DiagnosticsPage extends StatefulWidget {
   const DiagnosticsPage({required this.store, super.key});
@@ -107,21 +108,28 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
               onPressed: () => Navigator.pop(context),
             ),
           ),
-          body: ListView.builder(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              20,
-              20,
-              MediaQuery.paddingOf(context).bottom + 20,
-            ),
-            itemCount: lines.length,
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: SelectableText(
-                lines[index],
-                style: const TextStyle(fontSize: 12, height: 1.5),
-              ),
-            ),
+          body: Builder(
+            builder: (context) {
+              final previewPad = AppLayout.of(
+                context,
+              ).pageHorizontalPadding(maxWidth: 920);
+              return ListView.builder(
+                padding: EdgeInsets.fromLTRB(
+                  previewPad.left,
+                  20,
+                  previewPad.right,
+                  MediaQuery.paddingOf(context).bottom + 20,
+                ),
+                itemCount: lines.length,
+                itemBuilder: (context, index) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: SelectableText(
+                    lines[index],
+                    style: const TextStyle(fontSize: 12, height: 1.5),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -156,6 +164,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     listenable: store.diagnostics,
     builder: (context, _) {
       final diagnostics = store.diagnostics;
+      final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 680);
       return GlassScaffold(
         extendBody: false,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
@@ -169,9 +178,9 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
         ),
         body: ListView(
           padding: EdgeInsets.fromLTRB(
+            hPad.left,
             20,
-            20,
-            20,
+            hPad.right,
             MediaQuery.paddingOf(context).bottom + 40,
           ),
           children: [

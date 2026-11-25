@@ -77,6 +77,7 @@ class _SeekAwareVideoPlayerController extends VideoPlayerController {
     super.url, {
     required super.httpHeaders,
     required super.videoPlayerOptions,
+    required super.viewType,
   }) : super.networkUrl(formatHint: VideoFormat.hls);
 
   int _seekEpoch = 0, _pendingSeeks = 0;
@@ -101,7 +102,7 @@ class _SeekAwareVideoPlayerController extends VideoPlayerController {
   }
 }
 
-/// AVPlayer/ExoPlayer owns the video texture and actual media clock.
+/// AVPlayer/ExoPlayer owns the video surface and actual media clock.
 /// Media URLs never enter logs or preferences.
 class NativePlayback extends ChangeNotifier {
   NativePlayback({
@@ -110,6 +111,9 @@ class NativePlayback extends ChangeNotifier {
     required this.userAgent,
     this.mediaUserAgent,
     required this.onState,
+    this.viewType = VideoViewType.textureView,
+    this.initializeTimeout = const Duration(seconds: 35),
+    this.retryDelay = const Duration(milliseconds: 300),
     AppDiagnostics? diagnostics,
     NativeHlsCache Function()? cacheFactory,
   }) : diagnostics = diagnostics ?? AppDiagnostics.instance,
@@ -121,6 +125,9 @@ class NativePlayback extends ChangeNotifier {
   /// Media CDN identity, kept apart from the official-site [userAgent].
   final String? mediaUserAgent;
   final NativePlaybackSource source;
+  final VideoViewType viewType;
+  final Duration initializeTimeout;
+  final Duration retryDelay;
   final void Function(PlaybackState) onState;
   final NativeHlsCache Function()? _cacheFactory;
   late final List<int> _qualities = List<int>.unmodifiable(
@@ -283,14 +290,26 @@ class NativePlayback extends ChangeNotifier {
       final code = failureCode;
       _cache = null;
       _invalidateState();
-      await cache
-          ?.close()
-          .timeout(const Duration(seconds: 2), onTimeout: () {});
+      await cache?.close().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () {},
+      );
       if (_disposed) return;
       loaded = await _load(_quality, initial: true);
       diagnostics.record('player.native-cache-bypass', {
         'code': code,
         'fallback': loaded,
+      });
+    } else if (!loaded && !_disposed && failureStage == 'initialize') {
+      final code = failureCode;
+      if (retryDelay > Duration.zero) {
+        await Future<void>.delayed(retryDelay);
+        if (_disposed) return;
+      }
+      loaded = await _load(_quality, initial: true);
+      diagnostics.record('player.native-load-retry', {
+        'code': code,
+        'recovered': loaded,
       });
     }
     if (!loaded) throw StateError('Native media initialization failed');
@@ -330,18 +349,18 @@ class NativePlayback extends ChangeNotifier {
       next = _SeekAwareVideoPlayerController(
         _cache?.playlist(media) ?? media,
         httpHeaders: _cache == null ? _mediaHeaders : const {},
+        viewType: viewType,
         videoPlayerOptions: VideoPlayerOptions(
           mixWithOthers: false,
           // Our lifecycle guard owns pause intent, including source changes.
           // Disable the plugin observer that otherwise resumes on foreground.
-          // This does not enable iOS background audio or add UIBackgroundModes.
           allowBackgroundPlayback: true,
           // PlaybackEnvironment is the sole owner of the app's idle timer.
           preventsDisplaySleepDuringVideoPlayback: false,
         ),
       );
       stage = 'initialize';
-      await next.initialize().timeout(const Duration(seconds: 25));
+      await next.initialize().timeout(initializeTimeout);
       if (_disposed || generation != _generation) {
         await next.dispose();
         return false;

@@ -449,7 +449,9 @@ class _GlassSettingsMenuState extends State<GlassSettingsMenu> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final targetWidth = widget.menuWidth ?? (screenWidth * .56).clamp(196, 232);
+    final targetWidth =
+        widget.menuWidth ??
+        (screenWidth * .56).clamp(196, screenWidth >= 600 ? 256 : 232);
     final effectiveWidth = math.min(
       targetWidth,
       math.max(180.0, screenWidth - 32.0),
@@ -519,11 +521,13 @@ class GlassSettingsGroup extends StatelessWidget {
   const GlassSettingsGroup({
     required this.children,
     this.dividerIndent = 54,
+    this.color,
     super.key,
   });
 
   final List<Widget> children;
   final double dividerIndent;
+  final Color? color;
 
   static const _shape = LiquidRoundedSuperellipse(borderRadius: 26);
 
@@ -533,7 +537,7 @@ class GlassSettingsGroup extends StatelessWidget {
     final dividerColor = secondary(context).withValues(alpha: dark ? .18 : .12);
     return DecoratedBox(
       decoration: ShapeDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: color ?? Theme.of(context).colorScheme.surface,
         shape: _shape,
       ),
       child: ClipPath(

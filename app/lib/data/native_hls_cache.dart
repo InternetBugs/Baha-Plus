@@ -34,6 +34,27 @@ class _Resource {
   bool get cached => memory != null || file != null;
 }
 
+class _HlsCachePool {
+  _HlsCachePool(this.client);
+  final http.Client client;
+  int inFlight = 0;
+  bool retired = false;
+  bool closed = false;
+
+  void closeIfUnused() {
+    if (!closed && retired && inFlight == 0) {
+      closed = true;
+      client.close();
+    }
+  }
+}
+
+class _TransientMediaError implements Exception {
+  const _TransientMediaError(this.reason, {this.isTimeout = false});
+  final String reason;
+  final bool isTimeout;
+}
+
 /// A session-only HLS cache for AVPlayer's otherwise disposable media buffer.
 ///
 /// Only URLs registered from the authorized CDN's playlists can be requested.
@@ -45,14 +66,27 @@ class NativeHlsCache {
     this.onChanged,
     this.onDiagnostic,
     this.maxBytes = 256 * 1024 * 1024,
+    this.retryDelay = const Duration(milliseconds: 200),
     http.Client? client,
+    http.Client Function()? clientFactory,
     Future<Directory> Function()? createDirectory,
   }) : _headers = Map.unmodifiable(headers),
-       _client = client ?? http.Client(),
-       _createDirectory = createDirectory ?? _temporaryDirectory;
+       _ownsClient = client == null,
+       _clientFactory = clientFactory ?? http.Client.new,
+       _pool = _HlsCachePool(
+         client ?? (clientFactory?.call() ?? http.Client()),
+       ),
+       _createDirectory = createDirectory ?? _temporaryDirectory {
+    _pools.add(_pool);
+  }
 
   final Map<String, String> _headers;
-  final http.Client _client;
+  final bool _ownsClient;
+  final http.Client Function() _clientFactory;
+  final Duration retryDelay;
+  _HlsCachePool _pool;
+  final _pools = <_HlsCachePool>{};
+  final _waits = <Completer<void>>{};
   final Future<Directory> Function() _createDirectory;
   final void Function()? onChanged;
 
@@ -290,6 +324,8 @@ class NativeHlsCache {
       onDiagnostic?.call('player.cache-reject', {
         'reason': error is FormatException
             ? error.message
+            : error is _TransientMediaError
+            ? error.reason
             : error.runtimeType.toString(),
       });
     } finally {
@@ -315,6 +351,154 @@ class NativeHlsCache {
     }
   }
 
+  void _rotateClient() {
+    if (!_ownsClient || _closed) return;
+    final previous = _pool;
+    previous.retired = true;
+    previous.closeIfUnused();
+    if (previous.closed) _pools.remove(previous);
+    _pool = _HlsCachePool(_clientFactory());
+    _pools.add(_pool);
+  }
+
+  Future<void> _waitRetry(Duration delay) async {
+    final wake = Completer<void>();
+    _waits.add(wake);
+    final timer = Timer(delay, () {
+      if (!wake.isCompleted) wake.complete();
+    });
+    try {
+      await wake.future;
+    } finally {
+      timer.cancel();
+      _waits.remove(wake);
+    }
+  }
+
+  Future<Uint8List> _download(_Resource resource) async {
+    for (var attempt = 0; ; attempt++) {
+      if (_closed) throw const FormatException('Media cache is closed');
+      try {
+        return await _downloadOnce(
+          resource,
+          persistentConnection: attempt == 0,
+        );
+      } on _TransientMediaError catch (error) {
+        final maxRetries = error.isTimeout ? 1 : 2;
+        if (_closed || attempt >= maxRetries) rethrow;
+        _rotateClient();
+        final delay = retryDelay * (attempt == 0 ? 1 : 2);
+        if (delay > Duration.zero) {
+          await _waitRetry(delay);
+        }
+      }
+    }
+  }
+
+  Future<Uint8List> _downloadOnce(
+    _Resource resource, {
+    required bool persistentConnection,
+  }) async {
+    final pool = _pool;
+    pool.inFlight++;
+    try {
+      final request = http.Request('GET', resource.uri)
+        ..followRedirects = false
+        ..persistentConnection = persistentConnection
+        ..headers.addAll(_headers);
+      final bytes = resource.bytes;
+      if (bytes != null) {
+        request.headers[HttpHeaders.rangeHeader] =
+            'bytes=${bytes.start}-${bytes.start + bytes.length - 1}';
+      }
+      final http.StreamedResponse response;
+      try {
+        response = await pool.client
+            .send(request)
+            .timeout(const Duration(seconds: 20));
+      } on TimeoutException {
+        throw const _TransientMediaError(
+          'Media response timed out',
+          isTimeout: true,
+        );
+      } on SocketException {
+        throw const _TransientMediaError('Media transport failed');
+      } on HandshakeException {
+        throw const _TransientMediaError('Media TLS failed');
+      } on HttpException {
+        throw const _TransientMediaError('Media HTTP failed');
+      } on http.ClientException {
+        throw const _TransientMediaError('Media client failed');
+      }
+      final limit = switch (resource.kind) {
+        _Kind.playlist => 1024 * 1024,
+        _Kind.key => 64 * 1024,
+        _ => 64 * 1024 * 1024,
+      };
+      final expectedStatus = bytes == null ? 200 : 206;
+      if (response.statusCode != expectedStatus) {
+        await response.stream.listen((_) {}, onError: (Object _) {}).cancel();
+        if (response.statusCode == 429 ||
+            (response.statusCode >= 500 && response.statusCode <= 599)) {
+          throw const _TransientMediaError('Upstream media unavailable');
+        }
+        throw const FormatException('Invalid media response');
+      }
+      final contentRange = _contentRangePattern.firstMatch(
+        response.headers['content-range'] ?? '',
+      );
+      if ((response.contentLength ?? 0) > limit ||
+          (bytes != null &&
+              (contentRange == null ||
+                  int.tryParse(contentRange[1]!) != bytes.start ||
+                  int.tryParse(contentRange[2]!) !=
+                      bytes.start + bytes.length - 1 ||
+                  (int.tryParse(contentRange[3]!) ?? 0) <
+                      bytes.start + bytes.length))) {
+        await response.stream.listen((_) {}, onError: (Object _) {}).cancel();
+        throw const FormatException('Invalid media response');
+      }
+      final builder = BytesBuilder(copy: false);
+      try {
+        await for (final chunk in response.stream.timeout(
+          const Duration(seconds: 20),
+        )) {
+          if (_closed || builder.length + chunk.length > limit) {
+            throw const FormatException('Media response exceeds limit');
+          }
+          downloadedBytes += chunk.length;
+          builder.add(chunk);
+        }
+      } on TimeoutException {
+        throw const _TransientMediaError(
+          'Media stream timed out',
+          isTimeout: true,
+        );
+      } on SocketException {
+        throw const _TransientMediaError('Media stream failed');
+      } on HttpException {
+        throw const _TransientMediaError('Media stream HTTP failed');
+      } on http.ClientException {
+        throw const _TransientMediaError('Media stream client failed');
+      }
+      final data = builder.takeBytes();
+      if (_closed) throw const FormatException('Media cache is closed');
+      if (data.isEmpty ||
+          (response.contentLength != null &&
+              response.contentLength != data.length) ||
+          (bytes != null && data.length != bytes.length)) {
+        throw const _TransientMediaError('Incomplete media response');
+      }
+      return data;
+    } finally {
+      pool.inFlight--;
+      if (_ownsClient) {
+        pool.closeIfUnused();
+        if (pool.closed) _pools.remove(pool);
+      }
+    }
+  }
+
   Future<Uint8List> _readOrDownload(_Resource resource) async {
     final file = resource.file;
     if (file != null) {
@@ -330,55 +514,7 @@ class NativeHlsCache {
       }
       _forget(resource);
     }
-    final request = http.Request('GET', resource.uri)
-      ..followRedirects = false
-      ..headers.addAll(_headers);
-    final bytes = resource.bytes;
-    if (bytes != null) {
-      request.headers[HttpHeaders.rangeHeader] =
-          'bytes=${bytes.start}-${bytes.start + bytes.length - 1}';
-    }
-    final response = await _client
-        .send(request)
-        .timeout(const Duration(seconds: 20));
-    final limit = switch (resource.kind) {
-      _Kind.playlist => 1024 * 1024,
-      _Kind.key => 64 * 1024,
-      _ => 64 * 1024 * 1024,
-    };
-    final contentRange = _contentRangePattern.firstMatch(
-      response.headers['content-range'] ?? '',
-    );
-    if (response.statusCode != (bytes == null ? 200 : 206) ||
-        (response.contentLength ?? 0) > limit ||
-        (bytes != null &&
-            (contentRange == null ||
-                int.tryParse(contentRange[1]!) != bytes.start ||
-                int.tryParse(contentRange[2]!) !=
-                    bytes.start + bytes.length - 1 ||
-                (int.tryParse(contentRange[3]!) ?? 0) <
-                    bytes.start + bytes.length))) {
-      await response.stream.listen((_) {}).cancel();
-      throw const FormatException('Invalid media response');
-    }
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in response.stream.timeout(
-      const Duration(seconds: 20),
-    )) {
-      if (_closed || builder.length + chunk.length > limit) {
-        throw const FormatException('Media response exceeds limit');
-      }
-      downloadedBytes += chunk.length;
-      builder.add(chunk);
-    }
-    var data = builder.takeBytes();
-    if (_closed ||
-        data.isEmpty ||
-        (response.contentLength != null &&
-            response.contentLength != data.length) ||
-        (bytes != null && data.length != bytes.length)) {
-      throw const FormatException('Incomplete media response');
-    }
+    var data = await _download(resource);
     if (resource.kind == _Kind.playlist) {
       final body = utf8.decode(data, allowMalformed: true);
       data = Uint8List.fromList(
@@ -458,10 +594,7 @@ class NativeHlsCache {
     }
     return {
       'version': RegExp(r'#EXT-X-VERSION:(\d+)').firstMatch(body)?[1] ?? '',
-      'segments': RegExp(
-        r'^#EXTINF:',
-        multiLine: true,
-      ).allMatches(body).length,
+      'segments': RegExp(r'^#EXTINF:', multiLine: true).allMatches(body).length,
       'methods': methods.toList(),
       'keyFormats': formats.toList(),
       'map': body.contains('#EXT-X-MAP:'),
@@ -597,7 +730,16 @@ class NativeHlsCache {
 
   Future<void> _close() async {
     _closed = true;
-    _client.close();
+    for (final wake in _waits.toList()) {
+      if (!wake.isCompleted) wake.complete();
+    }
+    for (final pool in _pools.toList()) {
+      if (!pool.closed) {
+        pool.closed = true;
+        pool.client.close();
+      }
+    }
+    _pools.clear();
     try {
       await _starting;
     } catch (_) {

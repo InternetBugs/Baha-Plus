@@ -109,6 +109,7 @@ void main() {
     WidgetTester tester, {
     Size size = const Size(850, 400),
     PlaybackState? state,
+    AnimeDetail? detail,
     bool fullscreen = true,
   }) async {
     tester.view.physicalSize = size;
@@ -147,6 +148,7 @@ void main() {
           portal.recordPlayerCommand(store.operation.id, action, value),
     );
     store.playback.value = state ?? _playback();
+    if (detail != null) store.playerDetail = detail;
     store.setPlayerFullscreen(fullscreen);
     await tester.pumpWidget(
       LiquidGlassWidgets.wrap(
@@ -528,6 +530,97 @@ void main() {
       },
     );
   }
+
+  testSeekWidgets('portrait video pins while controls and details scroll', (
+    tester,
+  ) async {
+    final portal = await launch(
+      tester,
+      size: const Size(400, 640),
+      fullscreen: false,
+      detail: AnimeDetail.fromJson({
+        'title': 'Test Anime',
+        'description': 'Synopsis',
+        'episodes': [],
+        'metadata': [
+          for (var index = 1; index <= 10; index++)
+            {'label': 'Credit $index', 'value': 'Name $index'},
+        ],
+      }),
+    );
+    final scroll = tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position;
+    final title = find.text('Test Anime');
+    final controlsTop = tester.getTopLeft(controls).dy;
+    final videoTop = tester.getTopLeft(surface).dy;
+    final titleTop = tester.getTopLeft(title).dy;
+    final video = tester.element(surface);
+
+    Future<void> doubleTapVideo() async {
+      await tester.tap(surface);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tap(surface);
+      await tester.pump();
+    }
+
+    await tester.drag(surface, const Offset(0, -140));
+    await tester.pump();
+
+    final offset = scroll.pixels;
+    expect(offset, greaterThan(0));
+    expect(tester.getTopLeft(controls).dy, closeTo(controlsTop - offset, .01));
+    expect(tester.getTopLeft(title).dy, closeTo(titleTop - offset, .01));
+    expect(tester.getTopLeft(surface).dy, videoTop);
+    expect(find.byIcon(CupertinoIcons.pause_fill).hitTestable(), findsNothing);
+    expect(portal.commands, isEmpty);
+
+    final hold = await tester.startGesture(tester.getCenter(surface));
+    await tester.pump(kLongPressTimeout);
+    expect(speedIndicator, findsOneWidget);
+    expect(portal.commands, [('rate', 2.0)]);
+    await hold.up();
+    await tester.pump();
+    expect(speedIndicator, findsNothing);
+    expect(portal.commands, [('rate', 2.0), ('rate', 1.0)]);
+
+    await doubleTapVideo();
+    expect(portal.commands.last, ('pause', null));
+
+    portal.store.playback.value = _playback(paused: true);
+    await tester.pump();
+    expect(scroll.pixels, offset);
+    expect(tester.getTopLeft(surface).dy, closeTo(videoTop - offset, .01));
+    expect(tester.element(surface), same(video));
+
+    scroll.jumpTo(0);
+    await tester.pump();
+    await doubleTapVideo();
+    expect(portal.commands.last, ('play', null));
+
+    scroll.jumpTo(offset);
+    portal.store.playback.value = _playback();
+    await tester.pump();
+    expect(scroll.pixels, offset);
+    expect(tester.getTopLeft(surface).dy, videoTop);
+    expect(tester.element(surface), same(video));
+
+    portal.store.playback.value = _playback(ended: true);
+    await tester.pump();
+    expect(tester.getTopLeft(surface).dy, closeTo(videoTop - offset, .01));
+
+    tester.view.physicalSize = const Size(800, 460);
+    portal.store.playback.value = _playback();
+    scroll.jumpTo(0);
+    await tester.pump();
+    final landscapeVideoTop = tester.getTopLeft(surface).dy;
+    scroll.jumpTo(offset);
+    await tester.pump();
+    expect(
+      tester.getTopLeft(surface).dy,
+      closeTo(landscapeVideoTop - offset, .01),
+    );
+  });
 
   testSeekWidgets('portrait and vertical drags do not seek', (tester) async {
     final portal = await launch(

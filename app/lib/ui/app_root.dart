@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -9,6 +10,7 @@ import 'account_page.dart';
 import 'catalog_pages.dart';
 import 'chrome.dart';
 import 'detail_page.dart';
+import 'layout.dart';
 import 'official_browser.dart';
 import 'native_http_player.dart';
 import 'seasonal_page.dart';
@@ -35,6 +37,7 @@ class _AppRootState extends State<AppRoot>
   late final AnimationController _tabAnimation;
   late int _lastTab;
   late PlaybackEnvironment _playbackEnvironment;
+  bool _foreground = true;
   final _officialSessionKey = GlobalKey(debugLabel: 'official-session');
   OverlayEntry? _favoritePortalEntry;
   Route<void>? _favoritePortalRoute;
@@ -66,12 +69,10 @@ class _AppRootState extends State<AppRoot>
     store.addListener(_favoritePresentationChanged);
     _favoritePresentationChanged();
     _playbackEnvironment = PlaybackEnvironment(store);
+    _playbackEnvironment.pictureInPicture.addListener(_syncPlaybackActivity);
     WidgetsBinding.instance.addObserver(this);
     final state = WidgetsBinding.instance.lifecycleState;
-    if (state != null) {
-      _playbackEnvironment.setForeground(_mediaActive(state));
-      unawaited(store.setApplicationActive(_mediaActive(state)));
-    }
+    if (state != null) didChangeAppLifecycleState(state);
     _scheduleUpdateCheck();
     _scheduleCatalogRefresh();
     _scheduleProfileRefresh();
@@ -307,8 +308,13 @@ class _AppRootState extends State<AppRoot>
       oldWidget.store.setPortalHostActive(false);
       store.setPortalHostActive(widget.mountPortal);
       oldWidget.store.updates.cancelCheck();
+      _playbackEnvironment.pictureInPicture.removeListener(
+        _syncPlaybackActivity,
+      );
       _playbackEnvironment.dispose();
       _playbackEnvironment = PlaybackEnvironment(store);
+      _playbackEnvironment.pictureInPicture.addListener(_syncPlaybackActivity);
+      _syncPlaybackActivity();
       oldWidget.store.removeListener(_tabChanged);
       oldWidget.store.removeListener(_favoritePresentationChanged);
       store.addListener(_tabChanged);
@@ -330,33 +336,35 @@ class _AppRootState extends State<AppRoot>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _playbackEnvironment.setForeground(_mediaActive(state));
-    unawaited(store.setApplicationActive(_mediaActive(state)));
+    _foreground =
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
+    _syncPlaybackActivity();
   }
 
-  // Pulling down iOS Control Center temporarily removes focus. Only a hidden
-  // or paused application has actually entered the background.
-  bool _mediaActive(AppLifecycleState state) =>
-      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+  void _syncPlaybackActivity() {
+    _playbackEnvironment.setForeground(_foreground);
+    unawaited(
+      store.setApplicationActive(
+        _foreground,
+        pictureInPicture: _playbackEnvironment.keepsPlaybackInBackground,
+      ),
+    );
+  }
 
   void _account() {
     if (widget.mountPortal && !store.browserVisible && !store.busy) {
       unawaited(store.syncAccount());
     }
-    GlassModalSheet.show<void>(
+    showAdaptiveGlassSheet<void>(
       context: context,
-      initialState: GlassSheetState.full,
       fullSize: .94,
-      detents: const {GlassSheetDetent.large},
-      fullTopBorderRadius: 36,
       topBorderRadius: 36,
-      horizontalMargin: 0,
-      bottomMargin: 0,
-      showDragIndicator: false,
-      // The full-height account page already paints an opaque background.
-      maintainContentGlass: false,
       expandedColor: const Color(0xfff2f2f7),
       expandedDarkColor: const Color(0xff111113),
+      tabletMaxWidth: 580,
+      tabletMaxHeightFraction: .86,
+      tabletMaxHeight: 760,
       builder: (_) => AccountPage(
         store: store,
         onNotifications: _notifications,
@@ -451,7 +459,10 @@ class _AppRootState extends State<AppRoot>
           ? null
           : Positioned.fill(
               key: const ValueKey('native-http-player-layer'),
-              child: NativeHttpPlayer(store: store),
+              child: NativeHttpPlayer(
+                store: store,
+                environment: _playbackEnvironment,
+              ),
             );
       final portalLayer =
           !widget.mountPortal ||
@@ -484,10 +495,33 @@ class _AppRootState extends State<AppRoot>
   );
 
   Widget _native(BuildContext context) {
+    final layout = AppLayout.of(context);
+    final useRail = layout.useNavigationRail;
+    final railWidth = layout.railReservedWidth(context);
+    final hPad = layout.pageHorizontalPadding(
+      maxWidth: 1280,
+      leadingReserved: railWidth,
+    );
     final keys = ['explore', 'schedule', 'library', 'watchHistory', 'search'];
     final title = store.t(keys[store.tab]);
     final controller = _titles[store.tab];
-    final bottomSpace = MediaQuery.paddingOf(context).bottom + 110;
+    final safe = MediaQuery.paddingOf(context);
+    final bottomSpace = safe.bottom + (useRail ? 36 : 110);
+    final searchField = Semantics(
+      identifier: 'search-query',
+      child: GlassSearchBar(
+        surfaceStyle: GlassSurfaceStyle.solid,
+        controller: _search,
+        placeholder: store.t('searchPlaceholder'),
+        clearButtonSemanticLabel: store.t('clearSearch'),
+        height: 48,
+        onChanged: (value) => store.query = value,
+        onSubmitted: (_) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          store.search();
+        },
+      ),
+    );
     final body = CustomScrollView(
       key: PageStorageKey('catalog-tab-${store.tab}'),
       controller: controller.scrollController,
@@ -505,12 +539,12 @@ class _AppRootState extends State<AppRoot>
           },
         ),
         SliverToBoxAdapter(
-          child: SizedBox(height: MediaQuery.paddingOf(context).top + 44),
+          child: SizedBox(height: safe.top + 44),
         ),
         GlassLargeTitle(
           text: title,
           controller: controller,
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+          padding: EdgeInsets.fromLTRB(hPad.left, 4, hPad.right, 16),
           trailing: _accountActions(),
         ),
         if (store.tab == 0 ||
@@ -518,30 +552,27 @@ class _AppRootState extends State<AppRoot>
             (store.tab == 2 &&
                 store.query.isEmpty &&
                 store.libraryFilter != 'favorites'))
-          CatalogStatus(store: store),
+          CatalogStatus(
+            store: store,
+            padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
+          ),
         if (store.tab == 4 || store.tab == 2)
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: Semantics(
-                identifier: 'search-query',
-                child: GlassSearchBar(
-                  surfaceStyle: GlassSurfaceStyle.solid,
-                  controller: _search,
-                  placeholder: store.t('searchPlaceholder'),
-                  clearButtonSemanticLabel: store.t('clearSearch'),
-                  height: 48,
-                  onChanged: (value) => store.query = value,
-                  onSubmitted: (_) {
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    store.search();
-                  },
-                ),
-              ),
+              padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
+              child: layout.isWide
+                  ? Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: searchField,
+                      ),
+                    )
+                  : searchField,
             ),
           ),
         SliverPadding(
-          padding: EdgeInsets.fromLTRB(20, 0, 20, bottomSpace),
+          padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, bottomSpace),
           sliver: store.tab == 0
               ? HomeContent(
                   store: store,
@@ -568,78 +599,138 @@ class _AppRootState extends State<AppRoot>
         ),
       ],
     );
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final barSettings = dark ? _tabBarSettingsDark : _tabBarSettingsLight;
+    final barIndicator = dark
+        ? const Color(0x30ffffff)
+        : const Color(0x268e8e93);
+    final appBar = GlassAppBar(
+      title: Text(title),
+      largeTitleController: controller,
+      padding: layout.isCompact
+          ? const EdgeInsets.symmetric(horizontal: 8)
+          : EdgeInsets.only(
+              left: math.max(8.0, hPad.left - 8),
+              right: math.max(8.0, hPad.right - 8),
+            ),
+      actions: [
+        AnimatedBuilder(
+          animation: controller,
+          child: _accountActions(),
+          builder: (context, child) {
+            final progress = controller.collapseProgress;
+            if (progress <= 0) return const SizedBox.shrink();
+            return IgnorePointer(
+              ignoring: progress < .5,
+              child: Opacity(opacity: progress, child: child),
+            );
+          },
+        ),
+      ],
+    );
+    final animatedBody = AnimatedBuilder(
+      animation: _tabAnimation,
+      child: body,
+      builder: (context, child) {
+        final progress = Curves.easeOutCubic.transform(_tabAnimation.value);
+        return Transform.translate(
+          key: const ValueKey('tab-page-transition'),
+          offset: Offset(_tabDirection * 24 * (1 - progress), 0),
+          child: Opacity(opacity: .65 + .35 * progress, child: child),
+        );
+      },
+    );
     return GlassScaffold(
       bottomEdgeFade: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       statusBarStyle: GlassStatusBarStyle.auto,
-      appBar: GlassAppBar(
-        title: Text(title),
-        largeTitleController: controller,
-        actions: [
-          AnimatedBuilder(
-            animation: controller,
-            child: _accountActions(),
-            builder: (context, child) {
-              final progress = controller.collapseProgress;
-              if (progress <= 0) return const SizedBox.shrink();
-              return IgnorePointer(
-                ignoring: progress < .5,
-                child: Opacity(opacity: progress, child: child),
-              );
-            },
-          ),
-        ],
-      ),
-      bottomBar: GlassTabBar.bottom(
-        key: const ValueKey('main-tab-bar'),
-        settings: Theme.of(context).brightness == Brightness.dark
-            ? _tabBarSettingsDark
-            : _tabBarSettingsLight,
-        selectedIndex: store.tab,
-        onTabSelected: _selectTab,
-        horizontalPadding: 16,
-        verticalPadding: 12,
-        selectedIconColor: brandBlue,
-        selectedLabelColor: brandBlue,
-        selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
-        indicatorColor: Theme.of(context).brightness == Brightness.dark
-            ? const Color(0x30ffffff)
-            : const Color(0x268e8e93),
-        tabs: [
-          GlassTab(
-            icon: const Icon(CupertinoIcons.square_stack_fill),
-            label: store.t('explore'),
-          ),
-          GlassTab(
-            icon: const Icon(CupertinoIcons.calendar),
-            label: store.t('schedule'),
-          ),
-          GlassTab(
-            icon: const Icon(CupertinoIcons.rectangle_stack_fill),
-            label: store.t('library'),
-          ),
-          GlassTab(
-            icon: const Icon(CupertinoIcons.clock),
-            label: store.t('watchHistory'),
-          ),
-          GlassTab(
-            icon: const Icon(CupertinoIcons.search),
-            label: store.t('search'),
-          ),
-        ],
-      ),
-      body: AnimatedBuilder(
-        animation: _tabAnimation,
-        child: body,
-        builder: (context, child) {
-          final progress = Curves.easeOutCubic.transform(_tabAnimation.value);
-          return Transform.translate(
-            key: const ValueKey('tab-page-transition'),
-            offset: Offset(_tabDirection * 24 * (1 - progress), 0),
-            child: Opacity(opacity: .65 + .35 * progress, child: child),
-          );
-        },
-      ),
+      appBar: useRail
+          ? Padding(padding: EdgeInsets.only(left: railWidth), child: appBar)
+          : appBar,
+      bodyOverlays: useRail
+          ? [
+              Positioned(
+                left: safe.left + 16,
+                top: safe.top + 16,
+                bottom: safe.bottom + 16,
+                child: Center(
+                  child: GlassNavigationRail(
+                    key: const ValueKey('main-navigation-rail'),
+                    width: layout.railCapsuleWidth(context),
+                    settings: barSettings,
+                    selectedIndex: store.tab,
+                    onSelected: _selectTab,
+                    selectedColor: brandBlue,
+                    indicatorColor: barIndicator,
+                    destinations: [
+                      GlassNavigationRailDestination(
+                        icon: CupertinoIcons.square_stack_fill,
+                        label: store.t('explore'),
+                      ),
+                      GlassNavigationRailDestination(
+                        icon: CupertinoIcons.calendar,
+                        label: store.t('schedule'),
+                      ),
+                      GlassNavigationRailDestination(
+                        icon: CupertinoIcons.rectangle_stack_fill,
+                        label: store.t('library'),
+                      ),
+                      GlassNavigationRailDestination(
+                        icon: CupertinoIcons.clock,
+                        label: store.t('watchHistory'),
+                      ),
+                      GlassNavigationRailDestination(
+                        icon: CupertinoIcons.search,
+                        label: store.t('search'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ]
+          : null,
+      bottomBar: useRail
+          ? null
+          : GlassTabBar.bottom(
+              key: const ValueKey('main-tab-bar'),
+              settings: barSettings,
+              selectedIndex: store.tab,
+              onTabSelected: _selectTab,
+              horizontalPadding: layout.bottomTabBarHorizontalPadding(),
+              verticalPadding: 12,
+              selectedIconColor: brandBlue,
+              selectedLabelColor: brandBlue,
+              selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
+              indicatorColor: barIndicator,
+              tabs: [
+                GlassTab(
+                  icon: const Icon(CupertinoIcons.square_stack_fill),
+                  label: store.t('explore'),
+                ),
+                GlassTab(
+                  icon: const Icon(CupertinoIcons.calendar),
+                  label: store.t('schedule'),
+                ),
+                GlassTab(
+                  icon: const Icon(CupertinoIcons.rectangle_stack_fill),
+                  label: store.t('library'),
+                ),
+                GlassTab(
+                  icon: const Icon(CupertinoIcons.clock),
+                  label: store.t('watchHistory'),
+                ),
+                GlassTab(
+                  icon: const Icon(CupertinoIcons.search),
+                  label: store.t('search'),
+                ),
+              ],
+            ),
+      body: useRail
+          ? Padding(
+              padding: EdgeInsets.only(left: railWidth),
+              child: ClipRect(child: animatedBody),
+            )
+          : animatedBody,
     );
   }
 
@@ -647,6 +738,7 @@ class _AppRootState extends State<AppRoot>
   void dispose() {
     store.setPortalHostActive(false);
     store.updates.cancelCheck();
+    _playbackEnvironment.pictureInPicture.removeListener(_syncPlaybackActivity);
     _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);
     store.removeListener(_tabChanged);

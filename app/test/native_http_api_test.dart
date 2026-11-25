@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:baha_plus/data/native_http_api.dart';
 import 'package:baha_plus/data/official_user_agent.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -832,4 +833,115 @@ void main() {
       expect(watch.total, 30.03);
     },
   );
+
+  test(
+    'transient playback HTTP failures rotate clients and retry without persistent keep-alive',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      var createdClients = 0;
+      var closedClients = 0;
+      var sourceAttempts = 0;
+      final persistentFlags = <bool>[];
+      final api = NativeHttpApi(
+        retryDelay: Duration.zero,
+        clientFactory: () {
+          createdClients++;
+          return _ClosingMockClient(
+            onClose: () => closedClients++,
+            handler: (request) async {
+              fixture.requests.add(request);
+              if (request.url.path == '/anime/v1/video_src.php') {
+                persistentFlags.add(request.persistentConnection);
+                sourceAttempts++;
+                if (sourceAttempts == 1) {
+                  throw const SocketException('stale keep-alive');
+                }
+                if (sourceAttempts == 2) {
+                  return http.Response('overloaded', 503);
+                }
+              }
+              return fixture.response(request);
+            },
+          );
+        },
+      );
+      addTearDown(api.dispose);
+      await api.prepare('40190');
+      api.consent();
+      final source = await api.source();
+      expect(source.variants.keys, [360, 1080]);
+      expect(sourceAttempts, 3);
+      expect(persistentFlags, [true, false, false]);
+      expect(createdClients, 3);
+      expect(closedClients, 2);
+    },
+  );
+
+  test('HTTP 403 rejections are never retried in playback HTTP', () async {
+    var attempts = 0;
+    final api = NativeHttpApi(
+      retryDelay: Duration.zero,
+      client: MockClient((_) async {
+        attempts++;
+        return http.Response('forbidden', 403);
+      }),
+    );
+    addTearDown(api.dispose);
+    await expectLater(
+      api.prepare('40190'),
+      throwsA(
+        isA<NativeHttpException>()
+            .having((error) => error.stage, 'stage', 'page')
+            .having((error) => error.code, 'code', 403),
+      ),
+    );
+    expect(attempts, 1);
+  });
+
+  test(
+    'CSRF cookie updates do not invalidate an active playback session',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      var csrf = 'token-a';
+      final api = NativeHttpApi(
+        client: fixture.client,
+        cookieLoader: () async => NativeHttpCookieJar()
+          ..receive(
+            Uri.https('ani.gamer.com.tw', '/'),
+            'account=member; Domain=gamer.com.tw; Path=/; Secure, '
+            'ckBahamutCsrfToken=$csrf; Domain=gamer.com.tw; Path=/; Secure',
+          ),
+      );
+      addTearDown(api.dispose);
+      await api.prepare('40190');
+      api.consent();
+      await api.source();
+      csrf = 'token-b';
+      expect(await api.progress(42, 1200), isTrue);
+    },
+  );
+}
+
+class _ClosingMockClient extends http.BaseClient {
+  _ClosingMockClient({required this.handler, required this.onClose});
+  final Future<http.Response> Function(http.Request) handler;
+  final void Function() onClose;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final copy = http.Request(request.method, request.url)
+      ..headers.addAll(request.headers)
+      ..followRedirects = request.followRedirects
+      ..persistentConnection = request.persistentConnection;
+    final response = await handler(copy);
+    return http.StreamedResponse(
+      Stream.value(response.bodyBytes),
+      response.statusCode,
+      headers: response.headers,
+      contentLength: response.bodyBytes.length,
+    );
+  }
+
+  @override
+  void close() => onClose();
 }

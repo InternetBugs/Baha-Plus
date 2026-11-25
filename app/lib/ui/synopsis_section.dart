@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'layout.dart';
 import 'secondary_page_route.dart';
 
 class SynopsisSection extends StatelessWidget {
@@ -86,43 +87,46 @@ class SynopsisPage extends StatelessWidget {
   final String title, description;
 
   @override
-  Widget build(BuildContext context) => GlassScaffold(
-    key: const ValueKey('full-synopsis-page'),
-    extendBody: false,
-    backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-    appBar: GlassAppBar(
-      title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),
-      leading: GlassIconButton(
-        semanticLabel: store.t('close'),
-        icon: const Icon(CupertinoIcons.xmark),
-        onPressed: () => Navigator.pop(context),
+  Widget build(BuildContext context) {
+    final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 720);
+    return GlassScaffold(
+      key: const ValueKey('full-synopsis-page'),
+      extendBody: false,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      appBar: GlassAppBar(
+        title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),
+        leading: GlassIconButton(
+          semanticLabel: store.t('close'),
+          icon: const Icon(CupertinoIcons.xmark),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
-    ),
-    body: SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(
-        20,
-        20,
-        20,
-        MediaQuery.paddingOf(context).bottom + 32,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 24,
-              height: 1.4,
-              fontWeight: FontWeight.w700,
+      body: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          hPad.left,
+          20,
+          hPad.right,
+          MediaQuery.paddingOf(context).bottom + 32,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 24,
+                height: 1.4,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          const SizedBox(height: 22),
-          SelectableText(
-            description,
-            style: const TextStyle(fontSize: 16, height: 1.8),
-          ),
-        ],
+            const SizedBox(height: 22),
+            SelectableText(
+              description,
+              style: const TextStyle(fontSize: 16, height: 1.8),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

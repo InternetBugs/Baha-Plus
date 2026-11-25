@@ -5,6 +5,7 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import 'catalog_pages.dart' show ShowAnime, CatalogStatus;
 import 'chrome.dart';
+import 'layout.dart';
 
 class SeasonalPage extends StatefulWidget {
   const SeasonalPage({
@@ -54,89 +55,97 @@ class _SeasonalPageState extends State<SeasonalPage> {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
-    builder: (context, child) => GlassScaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      bottomEdgeFade: false,
-      statusBarStyle: GlassStatusBarStyle.auto,
-      appBar: GlassAppBar(
-        title: Text(store.t('seasonal')),
-        largeTitleController: _title,
-        leading: GlassIconButton(
-          semanticLabel: store.t('back'),
-          icon: const Icon(CupertinoIcons.chevron_back),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: CustomScrollView(
-        key: const PageStorageKey('seasonal-timeline'),
-        controller: _title.scrollController,
-        physics: const BouncingScrollPhysics(
-          parent: AlwaysScrollableScrollPhysics(),
-        ),
-        slivers: [
-          CupertinoSliverRefreshControl(onRefresh: store.refreshCatalog),
-          SliverToBoxAdapter(
-            child: SizedBox(height: MediaQuery.paddingOf(context).top + 56),
+  Widget build(BuildContext context) {
+    final layout = AppLayout.of(context);
+    final hPad = layout.pageHorizontalPadding(maxWidth: 1280);
+    final safe = MediaQuery.paddingOf(context);
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, child) => GlassScaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        bottomEdgeFade: false,
+        statusBarStyle: GlassStatusBarStyle.auto,
+        appBar: GlassAppBar(
+          title: Text(store.t('seasonal')),
+          largeTitleController: _title,
+          leading: GlassIconButton(
+            semanticLabel: store.t('back'),
+            icon: const Icon(CupertinoIcons.chevron_back),
+            onPressed: () => Navigator.pop(context),
           ),
-          GlassLargeTitle(
-            text: store.t('seasonal'),
-            controller: _title,
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        ),
+        body: CustomScrollView(
+          key: const PageStorageKey('seasonal-timeline'),
+          controller: _title.scrollController,
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
           ),
-          CatalogStatus(store: store),
-          for (final group in _groups().entries) ...[
+          slivers: [
+            CupertinoSliverRefreshControl(onRefresh: store.refreshCatalog),
             SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
-                child: Text(
-                  _dateLabel(group.key),
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+              child: SizedBox(height: safe.top + 56),
+            ),
+            GlassLargeTitle(
+              text: store.t('seasonal'),
+              controller: _title,
+              padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 16),
+            ),
+            CatalogStatus(
+              store: store,
+              padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
+            ),
+            for (final group in _groups().entries) ...[
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(hPad.left, 20, hPad.right, 14),
+                  child: Text(
+                    _dateLabel(group.key),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              sliver: SliverLayoutBuilder(
-                builder: (context, constraints) {
-                  final columns = (constraints.crossAxisExtent / 190)
-                      .floor()
-                      .clamp(2, 4);
-                  final width =
-                      (constraints.crossAxisExtent - 16 * (columns - 1)) /
-                      columns;
-                  return SliverGrid.builder(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 18,
-                      mainAxisExtent: width / (16 / 9) + 86,
-                    ),
-                    itemCount: group.value.length,
-                    itemBuilder: (context, index) {
-                      final anime = group.value[index];
-                      return AnimeTile(
-                        key: ValueKey('timeline-${anime.id}'),
-                        store: store,
-                        anime: anime,
-                        showUpdateTime: true,
-                        onTap: () => widget.openDetail(anime),
-                      );
-                    },
-                  );
-                },
+              SliverPadding(
+                padding: EdgeInsets.only(left: hPad.left, right: hPad.right),
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = AppLayout.timelineColumns(
+                      constraints.crossAxisExtent,
+                    );
+                    final width =
+                        (constraints.crossAxisExtent - 16 * (columns - 1)) /
+                        columns;
+                    return SliverGrid.builder(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 18,
+                        mainAxisExtent: width / (16 / 9) + 86,
+                      ),
+                      itemCount: group.value.length,
+                      itemBuilder: (context, index) {
+                        final anime = group.value[index];
+                        return AnimeTile(
+                          key: ValueKey('timeline-${anime.id}'),
+                          store: store,
+                          anime: anime,
+                          showUpdateTime: true,
+                          onTap: () => widget.openDetail(anime),
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
-            ),
+            ],
+            SliverToBoxAdapter(child: SizedBox(height: safe.bottom + 40)),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 40)),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   @override
   void dispose() {

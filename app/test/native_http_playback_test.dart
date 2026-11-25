@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/core/community.dart';
 import 'package:baha_plus/core/playback_state.dart';
@@ -6,6 +7,7 @@ import 'package:baha_plus/core/search_folding.dart';
 import 'package:baha_plus/data/app_diagnostics.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/app_updates.dart';
+import 'package:baha_plus/data/native_http_api.dart';
 import 'package:baha_plus/data/native_http_playback.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/ui/native_http_player.dart';
@@ -14,6 +16,7 @@ import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/official_browser.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -263,9 +266,9 @@ void main() {
   );
 
   test(
-    'native EOF flushes a complete ad but rejects a genuinely short ad',
+    'native EOF flushes a complete ad (including 29.999s rounding) and rejects genuinely short ads',
     () async {
-      for (final duration in [15.0, 30.03]) {
+      for (final duration in [15.0, 29.0, 29.999, 30.03]) {
         final fixture = HttpFixture();
         final session = NativeHttpPlayback(
           document: 'eof-$duration',
@@ -290,16 +293,119 @@ void main() {
           isCompleted: true,
         );
         await Future<void>.delayed(const Duration(milliseconds: 40));
-        if (duration < 30) {
+        if (duration < 29.5) {
           expect(session.failureStage, 'short-ad-needs-fallback');
           expect(fixture.count('video_src.php'), 0);
         } else {
           expect(session.state.phase, PlaybackPhase.content);
-          expect(session.adWatch.total, duration);
+          expect(session.adWatch.total, greaterThanOrEqualTo(30));
           expect(fixture.count('video_src.php'), 1);
         }
         await session.close();
       }
+    },
+  );
+
+  test(
+    'late decoder error from a retiring ad does not abort transition to content',
+    () async {
+      final fixture = HttpFixture();
+      final sourceGate = Completer<http.Response>();
+      fixture.handler = (request) async =>
+          request.url.path == '/anime/v1/video_src.php'
+          ? sourceGate.future
+          : fixture.response(request);
+      final session = NativeHttpPlayback(
+        document: 'ad-retire-error',
+        videoId: '40190',
+        preferredQuality: 0,
+        diagnostics: AppDiagnostics.instance,
+        api: fixture.api(),
+        onState: (_) {},
+      );
+      addTearDown(session.close);
+      await session.prepare();
+      await session.consent();
+      final adController = session.player!.video!;
+      adController.value = adController.value.copyWith(
+        position: const Duration(seconds: 30),
+        duration: const Duration(seconds: 30),
+        isPlaying: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(session.canSkipAd, isTrue);
+      final skipping = session.skipAd();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      // Simulate mpv/video_player emitting an EOF seek error on the paused ad.
+      video.streams[adController.playerId]!.addError(
+        PlatformException(code: 'media', message: 'EOF seek error'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(session.failureStage, isNull);
+      sourceGate.complete(
+        fixture.response(
+          http.Request(
+            'GET',
+            Uri.https('api.gamer.com.tw', '/anime/v1/video_src.php'),
+          ),
+        ),
+      );
+      await skipping;
+      expect(session.failureStage, isNull);
+      expect(session.state.phase, PlaybackPhase.content);
+    },
+  );
+
+  test(
+    'transient background reporting failures and buffering flaps do not stop active playback',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      final session = NativeHttpPlayback(
+        document: 'non-fatal-report',
+        videoId: '40190',
+        preferredQuality: 0,
+        diagnostics: AppDiagnostics.instance,
+        api: NativeHttpApi(client: fixture.client, retryDelay: Duration.zero),
+        onState: (_) {},
+      );
+      addTearDown(session.close);
+      await session.prepare();
+      await session.consent();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(session.state.phase, PlaybackPhase.content);
+      final unlockBeforeBuffer = fixture.count('unlock.php');
+      final controller = session.player!.video!;
+      controller.value = controller.value.copyWith(
+        isPlaying: true,
+        isBuffering: true,
+      );
+      controller.value = controller.value.copyWith(
+        isPlaying: true,
+        isBuffering: false,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(fixture.count('unlock.php'), unlockBeforeBuffer);
+
+      // Transient transport error during seek progress report keeps playback alive.
+      fixture.handler = (request) async =>
+          request.url.path == '/ajax/unlock.php' ||
+              request.url.path == '/ajax/elapse.php'
+          ? throw const SocketException('transient hiccup')
+          : fixture.response(request);
+      expect(await session.command('seek', 30), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(session.failureStage, isNull);
+      expect(session.state.phase, PlaybackPhase.content);
+
+      // Hard server denial still stops playback.
+      fixture.handler = (request) async =>
+          request.url.path == '/ajax/elapse.php'
+          ? http.Response('{"state":2}', 200)
+          : fixture.response(request);
+      expect(await session.command('seek', 40), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(session.failureStage, 'progress-denied');
+      expect(session.state.phase, PlaybackPhase.error);
     },
   );
 

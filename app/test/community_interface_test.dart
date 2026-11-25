@@ -60,52 +60,53 @@ void main() {
     Brightness brightness = Brightness.light,
   }) async {
     await tester.pumpWidget(
-      LiquidGlassWidgets.wrap(
-        brightnessResolver: Theme.maybeBrightnessOf,
-        theme: GlassThemeData.simple(quality: GlassQuality.standard),
-        child: MaterialApp(
-          theme: ThemeData(
-            brightness: brightness,
-            useMaterial3: true,
-            fontFamily: 'BahaSans',
-            scaffoldBackgroundColor: brightness == Brightness.dark
-                ? const Color(0xff111113)
-                : const Color(0xfff2f2f7),
-          ),
-          builder: (context, child) => DefaultTextStyle(
-            style: TextStyle(
+      RepaintBoundary(
+        key: const ValueKey('community-preview'),
+        child: LiquidGlassWidgets.wrap(
+          brightnessResolver: Theme.maybeBrightnessOf,
+          theme: GlassThemeData.simple(quality: GlassQuality.standard),
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: ThemeData(
+              brightness: brightness,
+              useMaterial3: true,
               fontFamily: 'BahaSans',
-              fontFamilyFallback: const ['BahaSansSC'],
-              fontSize: 16,
-              color: Theme.of(context).colorScheme.onSurface,
-              decoration: TextDecoration.none,
+              scaffoldBackgroundColor: brightness == Brightness.dark
+                  ? const Color(0xff111113)
+                  : const Color(0xfff2f2f7),
             ),
-            child: CupertinoTheme(
-              data: CupertinoThemeData(
-                brightness: brightness,
-                textTheme: CupertinoTextThemeData(
-                  textStyle: const TextStyle(fontFamily: 'BahaSans'),
-                  actionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
-                  navActionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
-                  navTitleTextStyle: TextStyle(
-                    fontFamily: 'BahaSans',
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    color: Theme.of(context).colorScheme.onSurface,
+            builder: (context, child) => DefaultTextStyle(
+              style: TextStyle(
+                fontFamily: 'BahaSans',
+                fontFamilyFallback: const ['BahaSansSC'],
+                fontSize: 16,
+                color: Theme.of(context).colorScheme.onSurface,
+                decoration: TextDecoration.none,
+              ),
+              child: CupertinoTheme(
+                data: CupertinoThemeData(
+                  brightness: brightness,
+                  textTheme: CupertinoTextThemeData(
+                    textStyle: const TextStyle(fontFamily: 'BahaSans'),
+                    actionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
+                    navActionTextStyle: const TextStyle(fontFamily: 'BahaSans'),
+                    navTitleTextStyle: TextStyle(
+                      fontFamily: 'BahaSans',
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
                   ),
                 ),
-              ),
-              child: MediaQuery(
-                data: MediaQuery.of(
-                  context,
-                ).copyWith(textScaler: TextScaler.linear(scale)),
-                child: child!,
+                child: MediaQuery(
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(scale)),
+                  child: child!,
+                ),
               ),
             ),
-          ),
-          home: RepaintBoundary(
-            key: const ValueKey('community-preview'),
-            child: page,
+            home: page,
           ),
         ),
       ),
@@ -818,7 +819,62 @@ void main() {
       await mount(tester, DanmakuPanel(store: store), brightness: brightness);
       await capture('danmaku-${brightness.name}');
       await tester.pumpWidget(const SizedBox());
+      store
+        ..accountProfile = const AccountProfile(
+          id: 'reader',
+          displayName: '星野',
+        )
+        ..playingAnime = ratingAnime
+        ..playingVideoId = '25'
+        ..playback.value = const PlaybackState(
+          phase: PlaybackPhase.content,
+          surfaceReady: true,
+          duration: 1200,
+        );
+      await mount(
+        tester,
+        Navigator(
+          onGenerateRoute: (_) => PageRouteBuilder<void>(
+            pageBuilder: (context, _, _) => ColoredBox(
+              color: const Color(0xff0b1220),
+              child: Center(
+                child: CupertinoButton(
+                  key: const ValueKey('preview-open-composer'),
+                  onPressed: () => showDanmakuComposer(context, store),
+                  child: const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        ),
+        brightness: brightness,
+      );
+      showDanmakuComposer(
+        tester.element(find.byKey(const ValueKey('preview-open-composer'))),
+        store,
+      );
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('danmaku-color-#FFD166')));
+      await frames(tester);
+      await tester.enterText(
+        find.byKey(const ValueKey('community-input-60')),
+        '這一幕光影太美了！',
+      );
+      await frames(tester);
+      await capture('danmaku-composer-${brightness.name}');
+      Navigator.of(tester.element(find.byType(DanmakuPanel))).pop();
+      await frames(tester);
+      await tester.pumpWidget(const SizedBox());
     }
+    tester.view.physicalSize = const Size(844, 390);
+    await mount(
+      tester,
+      DanmakuPanel(store: store),
+      brightness: Brightness.dark,
+    );
+    await capture('danmaku-landscape-dark');
+    tester.view.physicalSize = const Size(390, 844);
+    await tester.pumpWidget(const SizedBox());
     // Let the artwork cache finish its deferred cleanup after unmounting.
     await tester.pump(const Duration(seconds: 11));
     expect(tester.takeException(), isNull);

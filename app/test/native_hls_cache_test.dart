@@ -84,10 +84,7 @@ void main() {
       expect(await local.read(parts[0]), 'segment-data');
       expect(await local.read(parts[2]), 'segment-data');
       final populated = cache.bufferedRanges(master);
-      expect(populated, [
-        (start: 0.0, end: 10.0),
-        (start: 20.0, end: 30.0),
-      ]);
+      expect(populated, [(start: 0.0, end: 10.0), (start: 20.0, end: 30.0)]);
       expect(identical(cache.bufferedRanges(master), populated), isTrue);
       final downloaded = cache.downloadedBytes;
       final count = requests.length;
@@ -434,4 +431,73 @@ https://other.invalid/private.ts
       await cache.close();
     },
   );
+
+  test(
+    'transient CDN failures rotate clients and retry before failing a segment',
+    () async {
+      await cache.close();
+      directory = await Directory.systemTemp.createTemp('baha-cache-test-');
+      var created = 0;
+      var closed = 0;
+      var segmentAttempts = 0;
+      final persistent = <bool>[];
+      cache = NativeHlsCache(
+        headers: const {},
+        retryDelay: Duration.zero,
+        createDirectory: () async => directory,
+        clientFactory: () {
+          created++;
+          return _TrackedCacheClient(
+            onClose: () => closed++,
+            handler: (request) async {
+              if (request.url.path.endsWith('.m3u8')) {
+                return http.Response(media, 200);
+              }
+              persistent.add(request.persistentConnection);
+              segmentAttempts++;
+              if (segmentAttempts == 1) {
+                throw const SocketException('reset by peer');
+              }
+              if (segmentAttempts == 2) {
+                return http.Response('unavailable', 503);
+              }
+              return http.Response('recovered-segment', 200);
+            },
+          );
+        },
+      );
+      await cache.start();
+      final parts = mediaUris(await local.read(cache.playlist(master)));
+      expect(await local.read(parts.first), 'recovered-segment');
+      expect(segmentAttempts, 3);
+      expect(persistent, [true, false, false]);
+      expect(created, 3);
+      expect(closed, 2);
+      expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
+    },
+  );
+}
+
+class _TrackedCacheClient extends http.BaseClient {
+  _TrackedCacheClient({required this.handler, required this.onClose});
+  final Future<http.Response> Function(http.Request) handler;
+  final void Function() onClose;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final copy = http.Request(request.method, request.url)
+      ..headers.addAll(request.headers)
+      ..followRedirects = request.followRedirects
+      ..persistentConnection = request.persistentConnection;
+    final response = await handler(copy);
+    return http.StreamedResponse(
+      Stream.value(response.bodyBytes),
+      response.statusCode,
+      headers: response.headers,
+      contentLength: response.bodyBytes.length,
+    );
+  }
+
+  @override
+  void close() => onClose();
 }

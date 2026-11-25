@@ -146,13 +146,16 @@ class NativeHttpCookieJar {
       .map((uri) {
         final entries = header(uri).split('; ');
         if (ignoreCsrf) {
-          entries.removeWhere((entry) => entry.startsWith('ckBahamutCsrfToken='));
+          entries.removeWhere(
+            (entry) => entry.startsWith('ckBahamutCsrfToken='),
+          );
         }
         for (var i = 0; i < entries.length; i++) {
           const prefix = 'BAHARUNE=';
           if (entries[i].startsWith(prefix)) {
             final token = entries[i].substring(prefix.length);
-            entries[i] = '$prefix${OfficialCookieRotation.fingerprintValue(token)}';
+            entries[i] =
+                '$prefix${OfficialCookieRotation.fingerprintValue(token)}';
           }
         }
         entries.sort();
@@ -163,9 +166,11 @@ class NativeHttpCookieJar {
   // Revalidation already matched the original device snapshot. Import only
   // its renewed credential, preserving operation-local playback/CSRF cookies.
   void adoptDeviceRotation(NativeHttpCookieJar current) {
-    if (!current._cookies.values.any((entry) =>
-        entry.cookie.name == 'BAHARUNE' &&
-        OfficialCookieRotation.isLatest(entry.cookie.value))) {
+    if (!current._cookies.values.any(
+      (entry) =>
+          entry.cookie.name == 'BAHARUNE' &&
+          OfficialCookieRotation.isLatest(entry.cookie.value),
+    )) {
       return;
     }
     _cookies.removeWhere((_, entry) => entry.cookie.name == 'BAHARUNE');
@@ -179,20 +184,43 @@ class NativeHttpCookieJar {
   void clear() => _cookies.clear();
 }
 
+class _NativeHttpPool {
+  _NativeHttpPool(this.client);
+  final http.Client client;
+  int inFlight = 0;
+  bool retired = false;
+  bool closed = false;
+
+  void closeIfUnused() {
+    if (!closed && retired && inFlight == 0) {
+      closed = true;
+      client.close();
+    }
+  }
+}
+
 /// Official web HTTP playback protocol. Each episode owns its own cookies,
 /// ads and device ID, optionally seeded from the device's native login store.
 class NativeHttpApi {
   NativeHttpApi({
     http.Client? client,
+    http.Client Function()? clientFactory,
     this.timeout = const Duration(seconds: 15),
+    this.retryDelay = const Duration(milliseconds: 250),
     this.onEvent,
     Future<NativeHttpCookieJar> Function()? cookieLoader,
     String? userAgent,
     String? mediaUserAgent,
-  }) : _client = client ?? http.Client(),
+  }) : _ownsClient = client == null,
+       _clientFactory = clientFactory ?? http.Client.new,
+       _pool = _NativeHttpPool(
+         client ?? (clientFactory?.call() ?? http.Client()),
+       ),
        _cookieLoader = cookieLoader,
        userAgent = userAgent ?? OfficialUserAgent.value,
-       mediaUserAgent = mediaUserAgent ?? OfficialUserAgent.media;
+       mediaUserAgent = mediaUserAgent ?? OfficialUserAgent.media {
+    _pools.add(_pool);
+  }
 
   /// Snapshotted so one session never mixes two agents.
   final String userAgent;
@@ -201,8 +229,10 @@ class NativeHttpApi {
   /// their Cloudflare clearance belongs to that agent; the CDN has always been
   /// addressed with the desktop presentation.
   final String mediaUserAgent;
-  final http.Client _client;
+  final bool _ownsClient;
+  final http.Client Function() _clientFactory;
   final Duration timeout;
+  final Duration retryDelay;
   final void Function(String stage, int? code)? onEvent;
   final Future<NativeHttpCookieJar> Function()? _cookieLoader;
   static final cookieURLs = List<Uri>.unmodifiable([
@@ -211,6 +241,8 @@ class NativeHttpApi {
     Uri.https('api.gamer.com.tw', '/anime/v1/video.php'),
     Uri.https('api.gamer.com.tw', '/anime/v1/video_src.php'),
   ]);
+  _NativeHttpPool _pool;
+  final _pools = <_NativeHttpPool>{};
   NativeHttpCookieJar _cookies = NativeHttpCookieJar();
   String? _deviceCookieFingerprint;
   bool get usesDeviceSession => _cookieLoader != null;
@@ -230,7 +262,10 @@ class NativeHttpApi {
       try {
         imported = await _cookieLoader().timeout(timeout);
         if (_disposed) throw const NativeHttpException('disposed');
-        _deviceCookieFingerprint = imported.fingerprint(cookieURLs);
+        _deviceCookieFingerprint = imported.fingerprint(
+          cookieURLs,
+          ignoreCsrf: true,
+        );
         _cookies.clear();
         _cookies = imported;
       } on NativeHttpException {
@@ -587,7 +622,8 @@ class NativeHttpApi {
     final current = await _cookieLoader();
     try {
       if (_disposed) throw const NativeHttpException('disposed');
-      if (current.fingerprint(cookieURLs) != _deviceCookieFingerprint) {
+      if (current.fingerprint(cookieURLs, ignoreCsrf: true) !=
+          _deviceCookieFingerprint) {
         throw const NativeHttpException('session-changed');
       }
       _cookies.adoptDeviceRotation(current);
@@ -644,7 +680,68 @@ class NativeHttpApi {
     }
   }
 
+  static bool _isRetryable(
+    NativeHttpException error,
+    String stage,
+    int attempt,
+  ) {
+    if (error.stage == '$stage-transport') return attempt < 2;
+    if (error.stage == '$stage-timeout') return attempt < 1;
+    final code = error.code;
+    if (error.stage == stage &&
+        code != null &&
+        (code == 429 || (code >= 500 && code <= 599))) {
+      return attempt < 2;
+    }
+    return false;
+  }
+
+  void _rotateClient() {
+    if (!_ownsClient || _disposed) return;
+    final previous = _pool;
+    previous.retired = true;
+    previous.closeIfUnused();
+    if (previous.closed) _pools.remove(previous);
+    _pool = _NativeHttpPool(_clientFactory());
+    _pools.add(_pool);
+  }
+
+  Future<void> _waitRetry(Duration delay) async {
+    final wake = Completer<void>();
+    _requests.add(wake);
+    final timer = Timer(delay, () {
+      if (!wake.isCompleted) wake.complete();
+    });
+    try {
+      await wake.future;
+    } finally {
+      timer.cancel();
+      _requests.remove(wake);
+    }
+  }
+
   Future<String> _text(String stage, Uri uri) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _textOnce(stage, uri, persistentConnection: attempt == 0);
+      } on NativeHttpException catch (error) {
+        if (_disposed || !_isRetryable(error, stage, attempt)) rethrow;
+        _rotateClient();
+        final base = retryDelay <= timeout ? retryDelay : timeout;
+        final delay = base * (attempt == 0 ? 1 : 2);
+        if (delay > Duration.zero) {
+          await _waitRetry(delay);
+          if (_disposed) throw const NativeHttpException('disposed');
+        }
+      }
+    }
+  }
+
+  Future<String> _textOnce(
+    String stage,
+    Uri uri, {
+    required bool persistentConnection,
+  }) async {
     if (_disposed) throw const NativeHttpException('disposed');
     final official = const [
       'ani.gamer.com.tw',
@@ -660,6 +757,8 @@ class NativeHttpApi {
     }
     final abort = Completer<void>();
     _requests.add(abort);
+    final pool = _pool;
+    pool.inFlight++;
     String? responseCookies;
     var sentHeader = '';
     try {
@@ -668,11 +767,10 @@ class NativeHttpApi {
           await _checkDeviceSession();
         }
         if (_disposed) throw const NativeHttpException('disposed');
-        final request = http.AbortableRequest(
-          'GET',
-          uri,
-          abortTrigger: abort.future,
-        )..followRedirects = false;
+        final request =
+            http.AbortableRequest('GET', uri, abortTrigger: abort.future)
+              ..followRedirects = false
+              ..persistentConnection = persistentConnection;
         sentHeader = _cookies.header(uri);
         request.headers.addAll({
           'User-Agent': uri.host == 'bahamut.akamaized.net'
@@ -683,12 +781,20 @@ class NativeHttpApi {
           'Accept': '*/*',
           if (sentHeader.isNotEmpty) 'Cookie': sentHeader,
         });
-        final response = await _client.send(request);
+        final response = await pool.client.send(request);
+        void discard() {
+          unawaited(
+            response.stream.listen((_) {}, onError: (Object _) {}).cancel(),
+          );
+        }
+
         onEvent?.call(stage, response.statusCode);
         if (response.statusCode < 200 || response.statusCode >= 300) {
+          discard();
           throw NativeHttpException(stage, response.statusCode);
         }
         if ((response.contentLength ?? 0) > 2000000) {
+          discard();
           throw const NativeHttpException('response-size');
         }
         final bytes = <int>[];
@@ -707,7 +813,12 @@ class NativeHttpApi {
         return body;
       })().timeout(timeout);
       if (responseCookies != null && !_disposed) {
-        await _cookies.receiveResponse(uri, responseCookies!, sentHeader, () => !_disposed);
+        await _cookies.receiveResponse(
+          uri,
+          responseCookies!,
+          sentHeader,
+          () => !_disposed,
+        );
       }
       return text;
     } on NativeHttpException {
@@ -719,16 +830,27 @@ class NativeHttpApi {
     } finally {
       if (!abort.isCompleted) abort.complete();
       _requests.remove(abort);
+      pool.inFlight--;
+      if (_ownsClient) {
+        pool.closeIfUnused();
+        if (pool.closed) _pools.remove(pool);
+      }
     }
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    for (final abort in _requests) {
+    for (final abort in _requests.toList()) {
       if (!abort.isCompleted) abort.complete();
     }
-    _client.close();
+    for (final pool in _pools.toList()) {
+      if (!pool.closed) {
+        pool.closed = true;
+        pool.client.close();
+      }
+    }
+    _pools.clear();
     _cookies.clear();
     _device = '';
     _deviceCookieFingerprint = null;

@@ -6,18 +6,24 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'layout.dart';
 
 typedef ShowAnime = void Function(Anime anime);
 
 class CatalogStatus extends StatelessWidget {
-  const CatalogStatus({required this.store, super.key});
+  const CatalogStatus({
+    required this.store,
+    this.padding = const EdgeInsets.fromLTRB(20, 0, 20, 20),
+    super.key,
+  });
   final AppStore store;
+  final EdgeInsets padding;
 
   @override
   Widget build(BuildContext context) => SliverToBoxAdapter(
     child: store.catalogFailed
         ? Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            padding: padding,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -58,7 +64,7 @@ class AnimeWaterfall extends StatelessWidget {
   Widget build(BuildContext context) => SliverLayoutBuilder(
     builder: (context, constraints) => SliverMasonryGrid.count(
       key: ValueKey('$itemKeyPrefix-waterfall'),
-      crossAxisCount: (constraints.crossAxisExtent / 190).floor().clamp(2, 4),
+      crossAxisCount: AppLayout.posterColumns(constraints.crossAxisExtent),
       mainAxisSpacing: 24,
       crossAxisSpacing: 16,
       childCount: items.length,
@@ -126,7 +132,7 @@ class HomeContent extends StatelessWidget {
                     itemCount: math.min(store.history.length, 8),
                     separatorBuilder: (_, index) => const SizedBox(width: 12),
                     itemBuilder: (_, index) => SizedBox(
-                      width: 310,
+                      width: AppLayout.of(context).isWide ? 340 : 310,
                       child: ContinueCard(
                         store: store,
                         entry: store.history[index],
@@ -140,7 +146,7 @@ class HomeContent extends StatelessWidget {
                 const SizedBox(height: 28),
                 SectionHeading(store.t('seasonal'), onTap: openSeason),
                 const SizedBox(height: 16),
-                _tiles(store.seasonal.take(8).toList()),
+                _tiles(store.seasonal),
               ],
               if (popular.isNotEmpty) ...[
                 const SizedBox(height: 28),
@@ -165,106 +171,112 @@ class HomeContent extends StatelessWidget {
   }
 
   Widget _hero(BuildContext context, Anime anime) => LayoutBuilder(
-    builder: (context, bounds) => ClipRRect(
-      borderRadius: BorderRadius.circular(27),
-      child: SizedBox(
-        height: math.min(bounds.maxWidth * 1.28, 510),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Artwork(anime.artwork),
-            const ColoredBox(color: Color(0x22000000)),
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.center,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Color(0xdd000000)],
+    builder: (context, bounds) {
+      final wideBanner = bounds.maxWidth > 540;
+      final height = bounds.hasBoundedHeight
+          ? bounds.maxHeight
+          : math.min(bounds.maxWidth * 1.28, 510.0);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(27),
+        child: SizedBox(
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Artwork(wideBanner ? anime.cover : anime.artwork),
+              const ColoredBox(color: Color(0x22000000)),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.center,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Color(0xdd000000)],
+                  ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    store.t(
-                      anime.sections.contains('season')
-                          ? 'featured'
-                          : 'popular',
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Text(
+                      store.t(
+                        anime.sections.contains('season')
+                            ? 'featured'
+                            : 'popular',
+                      ),
+                      style: const TextStyle(
+                        color: Color(0xbbffffff),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                    style: const TextStyle(
-                      color: Color(0xbbffffff),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: () => openDetail(anime),
-                    child: Semantics(
-                      button: true,
-                      child: Text(
-                        anime.title,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          height: 1.3,
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: () => openDetail(anime),
+                      child: Semantics(
+                        button: true,
+                        child: Text(
+                          anime.title,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            height: 1.3,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(11),
-                        child: Artwork(anime.artwork, width: 48, height: 48),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              store.t('latestEpisode'),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              [anime.episodeLabel, anime.updateTime]
-                                  .whereType<String>()
-                                  .where((s) => s.isNotEmpty)
-                                  .join(' · '),
-                              maxLines: 1,
-                              style: const TextStyle(
-                                color: Color(0xbbffffff),
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(11),
+                          child: Artwork(anime.artwork, width: 48, height: 48),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      _watch(anime),
-                    ],
-                  ),
-                ],
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                store.t('latestEpisode'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                [anime.episodeLabel, anime.updateTime]
+                                    .whereType<String>()
+                                    .where((s) => s.isNotEmpty)
+                                    .join(' · '),
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  color: Color(0xbbffffff),
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        _watch(anime),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
 
   Widget _watch(Anime anime) => GlassButton.custom(
@@ -285,34 +297,36 @@ class HomeContent extends StatelessWidget {
     ),
   );
 
-  Widget _tiles(List<Anime> items) => Column(
-    children: [
-      for (var row = 0; row < (items.length + 1) ~/ 2; row++) ...[
-        if (row > 0) const SizedBox(height: 24),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: AnimeTile(
-                store: store,
-                anime: items[row * 2],
-                onTap: () => openDetail(items[row * 2]),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: row * 2 + 1 < items.length
-                  ? AnimeTile(
-                      store: store,
-                      anime: items[row * 2 + 1],
-                      onTap: () => openDetail(items[row * 2 + 1]),
-                    )
-                  : const SizedBox.shrink(),
+  Widget _tiles(List<Anime> allItems) => LayoutBuilder(
+    builder: (context, bounds) {
+      final columns = AppLayout.landscapeTileColumns(bounds.maxWidth);
+      final items = allItems.take(columns == 3 ? 9 : 8).toList();
+      final rows = (items.length + columns - 1) ~/ columns;
+      return Column(
+        children: [
+          for (var row = 0; row < rows; row++) ...[
+            if (row > 0) const SizedBox(height: 24),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var col = 0; col < columns; col++) ...[
+                  if (col > 0) const SizedBox(width: 16),
+                  Expanded(
+                    child: row * columns + col < items.length
+                        ? AnimeTile(
+                            store: store,
+                            anime: items[row * columns + col],
+                            onTap: () => openDetail(items[row * columns + col]),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ],
             ),
           ],
-        ),
-      ],
-    ],
+        ],
+      );
+    },
   );
 }
 
@@ -330,31 +344,71 @@ class FeaturedCarousel extends StatefulWidget {
 }
 
 class _FeaturedCarouselState extends State<FeaturedCarousel> {
-  final _pages = PageController(viewportFraction: .96);
+  PageController? _pages;
+  double _fraction = .96;
+
+  PageController _controllerFor(double fraction) {
+    if (_pages != null && (_fraction - fraction).abs() < .01) {
+      return _pages!;
+    }
+    final initialPage = _pages != null && _pages!.hasClients
+        ? (_pages!.page?.round() ?? _pages!.initialPage)
+        : 0;
+    final previous = _pages;
+    _fraction = fraction;
+    _pages = PageController(
+      initialPage: initialPage.clamp(0, math.max(0, widget.items.length - 1)),
+      viewportFraction: fraction,
+    );
+    if (previous != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
+    }
+    return _pages!;
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, bounds) => SizedBox(
-      height: math.min(bounds.maxWidth * 1.28, 510),
-      child: PageView.builder(
-        key: const PageStorageKey('featured-carousel-pages'),
-        controller: _pages,
-        padEnds: false,
-        allowImplicitScrolling: true,
-        physics: const BouncingScrollPhysics(),
-        itemCount: widget.items.length,
-        itemBuilder: (context, index) => Padding(
-          key: ValueKey('featured-${widget.items[index].id}'),
-          padding: const EdgeInsets.only(right: 12),
-          child: widget.itemBuilder(context, widget.items[index]),
+    builder: (context, bounds) {
+      final wide = bounds.maxWidth >= 560;
+      final singleWide = wide && widget.items.length == 1;
+      final double fraction;
+      final double height;
+      if (!wide) {
+        fraction = .96;
+        height = math.min(bounds.maxWidth * 1.28, 510.0);
+      } else if (singleWide) {
+        fraction = 1.0;
+        height = math.min(bounds.maxWidth * .54, 440.0);
+      } else {
+        final targetCardWidth = bounds.maxWidth >= 900 ? 370.0 : 350.0;
+        fraction = (targetCardWidth / bounds.maxWidth).clamp(.32, .54);
+        height = math.min(targetCardWidth * 1.28, 480.0);
+      }
+      final controller = _controllerFor(fraction);
+      return SizedBox(
+        height: height,
+        child: PageView.builder(
+          key: const PageStorageKey('featured-carousel-pages'),
+          controller: controller,
+          padEnds: false,
+          allowImplicitScrolling: true,
+          physics: const BouncingScrollPhysics(),
+          itemCount: widget.items.length,
+          itemBuilder: (context, index) => Padding(
+            key: ValueKey('featured-${widget.items[index].id}'),
+            padding: EdgeInsets.only(
+              right: singleWide ? 0 : (wide ? 16 : 12),
+            ),
+            child: widget.itemBuilder(context, widget.items[index]),
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
 
   @override
   void dispose() {
-    _pages.dispose();
+    _pages?.dispose();
     super.dispose();
   }
 }
@@ -640,12 +694,28 @@ class HistoryContent extends StatelessWidget {
         ),
       );
     }
-    return SliverList.builder(
-      itemCount: store.history.length,
-      itemBuilder: (context, index) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: ContinueCard(store: store, entry: store.history[index]),
-      ),
+    return SliverLayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.crossAxisExtent < 680) {
+          return SliverList.builder(
+            itemCount: store.history.length,
+            itemBuilder: (context, index) => Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: ContinueCard(store: store, entry: store.history[index]),
+            ),
+          );
+        }
+        final columns = constraints.crossAxisExtent >= 1100 ? 3 : 2;
+        return SliverMasonryGrid.count(
+          key: const ValueKey('history-grid'),
+          crossAxisCount: columns,
+          mainAxisSpacing: 16,
+          crossAxisSpacing: 16,
+          childCount: store.history.length,
+          itemBuilder: (context, index) =>
+              ContinueCard(store: store, entry: store.history[index]),
+        );
+      },
     );
   }
 }
@@ -665,122 +735,198 @@ class SearchContent extends StatelessWidget {
       if (store.searching || store.searchFailed || items.isEmpty) {
         return SliverToBoxAdapter(child: SearchStatus(store: store));
       }
-      return SliverList.builder(
-        itemCount: items.length,
-        itemBuilder: (context, index) => AnimeRow(
-          store: store,
-          anime: items[index],
-          onTap: () => openDetail(items[index]),
-        ),
+      return SliverLayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.crossAxisExtent < 680) {
+            return SliverList.builder(
+              itemCount: items.length,
+              itemBuilder: (context, index) => AnimeRow(
+                store: store,
+                anime: items[index],
+                onTap: () => openDetail(items[index]),
+              ),
+            );
+          }
+          final columns = constraints.crossAxisExtent >= 1100 ? 3 : 2;
+          return SliverMasonryGrid.count(
+            key: const ValueKey('search-results-grid'),
+            crossAxisCount: columns,
+            crossAxisSpacing: 24,
+            mainAxisSpacing: 4,
+            childCount: items.length,
+            itemBuilder: (context, index) => AnimeRow(
+              store: store,
+              anime: items[index],
+              onTap: () => openDetail(items[index]),
+            ),
+          );
+        },
       );
     }
     return SliverToBoxAdapter(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SectionHeading(
-            store.t('recommended'),
-            onTap: () => store.selectTab(2, filter: 'hot'),
-          ),
-          for (final anime in store.popular.take(3))
-            AnimeRow(
-              store: store,
-              anime: anime,
-              onTap: () => openDetail(anime),
+      child: LayoutBuilder(
+        builder: (context, bounds) {
+          final wide = bounds.maxWidth >= 680;
+          final recColumns = bounds.maxWidth >= 1100
+              ? 3
+              : wide
+              ? 2
+              : 1;
+          final recommended = store.popular
+              .take(recColumns == 1 ? 3 : recColumns * 2)
+              .toList();
+          final categories = [
+            _category(
+              store.t('seasonal'),
+              'season',
+              store.seasonal.firstOrNull,
+              Colors.blue,
+              height: wide ? 132 : 116,
             ),
-          const SizedBox(height: 26),
-          SectionHeading(
-            store.t('browse'),
-            onTap: () => store.selectTab(2, filter: 'all'),
-          ),
-          const SizedBox(height: 16),
-          Row(
+            _category(
+              store.t('popular'),
+              'hot',
+              store.popular.firstOrNull,
+              Colors.orange,
+              height: wide ? 132 : 116,
+            ),
+            _category(
+              store.t('allAnime'),
+              'all',
+              store.catalog.items.lastOrNull,
+              Colors.deepPurple,
+              height: wide ? 132 : 116,
+            ),
+            _category(
+              store.t('favorites'),
+              'favorites',
+              store.favorites.firstOrNull,
+              Colors.green,
+              height: wide ? 132 : 116,
+            ),
+          ];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: _category(
-                  store.t('seasonal'),
-                  'season',
-                  store.seasonal.firstOrNull,
-                  Colors.blue,
-                ),
+              SectionHeading(
+                store.t('recommended'),
+                onTap: () => store.selectTab(2, filter: 'hot'),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _category(
-                  store.t('popular'),
-                  'hot',
-                  store.popular.firstOrNull,
-                  Colors.orange,
-                ),
+              if (recColumns == 1)
+                for (final anime in recommended)
+                  AnimeRow(
+                    store: store,
+                    anime: anime,
+                    onTap: () => openDetail(anime),
+                  )
+              else
+                for (
+                  var row = 0;
+                  row < (recommended.length + recColumns - 1) ~/ recColumns;
+                  row++
+                )
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var col = 0; col < recColumns; col++) ...[
+                        if (col > 0) const SizedBox(width: 24),
+                        Expanded(
+                          child: row * recColumns + col < recommended.length
+                              ? AnimeRow(
+                                  store: store,
+                                  anime: recommended[row * recColumns + col],
+                                  onTap: () => openDetail(
+                                    recommended[row * recColumns + col],
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
+                    ],
+                  ),
+              const SizedBox(height: 26),
+              SectionHeading(
+                store.t('browse'),
+                onTap: () => store.selectTab(2, filter: 'all'),
               ),
+              const SizedBox(height: 16),
+              if (wide)
+                Row(
+                  children: [
+                    for (var index = 0; index < categories.length; index++) ...[
+                      if (index > 0) const SizedBox(width: 14),
+                      Expanded(child: categories[index]),
+                    ],
+                  ],
+                )
+              else ...[
+                Row(
+                  children: [
+                    Expanded(child: categories[0]),
+                    const SizedBox(width: 12),
+                    Expanded(child: categories[1]),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(child: categories[2]),
+                    const SizedBox(width: 12),
+                    Expanded(child: categories[3]),
+                  ],
+                ),
+              ],
             ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _category(
-                  store.t('allAnime'),
-                  'all',
-                  store.catalog.items.lastOrNull,
-                  Colors.deepPurple,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _category(
-                  store.t('favorites'),
-                  'favorites',
-                  store.favorites.firstOrNull,
-                  Colors.green,
-                ),
-              ),
-            ],
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 
-  Widget _category(String title, String filter, Anime? anime, Color color) =>
-      GestureDetector(
-        onTap: () => store.selectTab(2, filter: filter),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: SizedBox(
-            height: 116,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                ColoredBox(color: color),
-                if (anime != null) Artwork(anime.cover),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, color.withValues(alpha: .9)],
-                    ),
-                  ),
+  Widget _category(
+    String title,
+    String filter,
+    Anime? anime,
+    Color color, {
+    double height = 116,
+  }) => GestureDetector(
+    onTap: () => store.selectTab(2, filter: filter),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: SizedBox(
+        height: height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ColoredBox(color: color),
+            if (anime != null) Artwork(anime.cover),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, color.withValues(alpha: .9)],
                 ),
-                Align(
-                  alignment: Alignment.bottomLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }
 
 class SearchStatus extends StatelessWidget {
@@ -816,32 +962,37 @@ class LibraryContent extends StatelessWidget {
     final items = store.libraryItems;
     final needsSync =
         store.libraryFilter == 'favorites' && !store.accountSynced;
+    final filterBar = GlassSegmentedControl(
+      selectedIndex: const [
+        'all',
+        'season',
+        'hot',
+        'favorites',
+      ].indexOf(store.libraryFilter).clamp(0, 3),
+      segments: [
+        for (final key in ['all', 'seasonFilter', 'hotFilter', 'favorites'])
+          GlassSegment(label: store.t(key)),
+      ],
+      onSegmentSelected: (index) => store.selectTab(
+        2,
+        filter: const ['all', 'season', 'hot', 'favorites'][index],
+      ),
+    );
     return SliverMainAxisGroup(
       slivers: [
         SliverToBoxAdapter(
           child: Column(
             children: [
-              GlassSegmentedControl(
-                selectedIndex: const [
-                  'all',
-                  'season',
-                  'hot',
-                  'favorites',
-                ].indexOf(store.libraryFilter).clamp(0, 3),
-                segments: [
-                  for (final key in [
-                    'all',
-                    'seasonFilter',
-                    'hotFilter',
-                    'favorites',
-                  ])
-                    GlassSegment(label: store.t(key)),
-                ],
-                onSegmentSelected: (index) => store.selectTab(
-                  2,
-                  filter: const ['all', 'season', 'hot', 'favorites'][index],
-                ),
-              ),
+              if (AppLayout.of(context).isWide)
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: filterBar,
+                  ),
+                )
+              else
+                filterBar,
               const SizedBox(height: 22),
               if (needsSync)
                 Padding(
@@ -921,80 +1072,170 @@ class _ScheduleContentState extends State<ScheduleContent> {
         : ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
     final items = store.seasonal.where((e) => e.updateDay == day).toList()
       ..sort((a, b) => (a.updateTime ?? '').compareTo(b.updateTime ?? ''));
-    return Column(
-      children: [
-        SizedBox(
-          width: double.infinity,
-          child: CupertinoSlidingSegmentedControl<int>(
-            groupValue: day,
-            children: {
-              for (final index in [1, 2, 3, 4, 5, 6, 0])
-                index: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 7),
-                  child: Text(
-                    days[index],
-                    style: const TextStyle(fontSize: 12),
-                  ),
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final wide = bounds.maxWidth >= 640;
+        final columns = bounds.maxWidth >= 1020
+            ? 3
+            : wide
+            ? 2
+            : 1;
+        final weekdayControl = CupertinoSlidingSegmentedControl<int>(
+          groupValue: day,
+          children: {
+            for (final index in [1, 2, 3, 4, 5, 6, 0])
+              index: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Text(days[index], style: const TextStyle(fontSize: 12)),
+              ),
+          },
+          onValueChanged: (value) {
+            if (value != null) setState(() => day = value);
+          },
+        );
+        return Column(
+          children: [
+            Align(
+              alignment: wide ? Alignment.center : Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: wide ? 560 : double.infinity,
                 ),
-            },
-            onValueChanged: (value) {
-              if (value != null) setState(() => day = value);
-            },
-          ),
-        ),
-        const SizedBox(height: 20),
-        if (items.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 50),
-            child: Text(store.t('noUpdates')),
-          ),
-        for (final anime in items)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => widget.openDetail(anime),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 44,
-                    child: Text(
-                      anime.updateTime ?? '',
-                      style: TextStyle(fontSize: 12, color: secondary(context)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Artwork(anime.cover, width: 88, height: 58),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(anime.title, maxLines: 2),
-                        const SizedBox(height: 4),
-                        Text(
-                          anime.episodeLabel ?? '',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: secondary(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                child: SizedBox(width: double.infinity, child: weekdayControl),
               ),
             ),
-          ),
-        const SizedBox(height: 24),
-        Text(
-          store.t('scheduleNote'),
-          style: TextStyle(fontSize: 11, color: secondary(context)),
-        ),
-      ],
+            const SizedBox(height: 20),
+            if (items.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 50),
+                child: Text(store.t('noUpdates')),
+              )
+            else if (columns == 1)
+              for (final anime in items) _compactRow(context, anime)
+            else
+              for (
+                var row = 0;
+                row < (items.length + columns - 1) ~/ columns;
+                row++
+              ) ...[
+                if (row > 0) const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var col = 0; col < columns; col++) ...[
+                      if (col > 0) const SizedBox(width: 14),
+                      Expanded(
+                        child: row * columns + col < items.length
+                            ? _tabletCard(context, items[row * columns + col])
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            const SizedBox(height: 24),
+            Text(
+              store.t('scheduleNote'),
+              style: TextStyle(fontSize: 11, color: secondary(context)),
+            ),
+          ],
+        );
+      },
     );
   }
+
+  Widget _compactRow(BuildContext context, Anime anime) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () => widget.openDetail(anime),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 44,
+            child: Text(
+              anime.updateTime ?? '',
+              style: TextStyle(fontSize: 12, color: secondary(context)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Artwork(anime.cover, width: 88, height: 58),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(anime.title, maxLines: 2),
+                const SizedBox(height: 4),
+                Text(
+                  anime.episodeLabel ?? '',
+                  style: TextStyle(fontSize: 11, color: secondary(context)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _tabletCard(BuildContext context, Anime anime) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: () => widget.openDetail(anime),
+    child: Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: secondary(context).withValues(alpha: .06),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Artwork(anime.cover, width: 104, height: 64),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (anime.updateTime != null && anime.updateTime!.isNotEmpty)
+                  Text(
+                    anime.updateTime!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: brandBlue,
+                    ),
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  anime.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (anime.episodeLabel != null &&
+                    anime.episodeLabel!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    anime.episodeLabel!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: secondary(context)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

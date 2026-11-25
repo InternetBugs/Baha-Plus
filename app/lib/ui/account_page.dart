@@ -5,6 +5,7 @@ import '../data/app_store.dart';
 import 'chrome.dart';
 import 'diagnostics_page.dart';
 import 'glass_settings_menu.dart';
+import 'layout.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({
@@ -80,9 +81,19 @@ class AccountPage extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 40),
-        children: [
+      body: Builder(
+        builder: (context) {
+          final hPad = AppLayout.of(
+            context,
+          ).pageHorizontalPadding(maxWidth: 640);
+          return ListView(
+            padding: EdgeInsets.fromLTRB(
+              hPad.left,
+              18,
+              hPad.right,
+              MediaQuery.paddingOf(context).bottom + 40,
+            ),
+            children: [
           GlassSettingsGroup(
             children: [
               GlassSettingsHighlight(
@@ -314,6 +325,8 @@ class AccountPage extends StatelessWidget {
             ),
           ),
         ],
+      );
+        },
       ),
     ),
   );

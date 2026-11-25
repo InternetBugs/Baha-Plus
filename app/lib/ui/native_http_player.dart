@@ -1,20 +1,38 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import '../data/app_store.dart';
 import '../data/native_http_playback.dart';
+import '../data/playback_environment.dart';
 import 'native_http_rating.dart';
 import 'native_video_surface.dart';
 import 'player_page.dart';
 
 class NativeHttpPlayer extends StatelessWidget {
-  const NativeHttpPlayer({required this.store, super.key});
+  const NativeHttpPlayer({required this.store, this.environment, super.key});
   final AppStore store;
+  final PlaybackEnvironment? environment;
 
   @override
-  Widget build(BuildContext context) => PlayerPage(
+  Widget build(BuildContext context) {
+    final mode = environment?.pictureInPicture;
+    if (mode == null) return _page(PictureInPictureMode.unavailable);
+    return ValueListenableBuilder(
+      valueListenable: mode,
+      builder: (context, value, child) => _page(value),
+    );
+  }
+
+  Widget _page(PictureInPictureMode mode) => PlayerPage(
     key: const ValueKey('app-playback-page'),
     store: store,
+    videoOnly:
+        mode == PictureInPictureMode.active &&
+        defaultTargetPlatform == TargetPlatform.android,
+    onEnterPictureInPicture: mode == PictureInPictureMode.available
+        ? environment?.enterPictureInPicture
+        : null,
     video: ListenableBuilder(
       listenable: store,
       builder: (context, _) {
@@ -22,13 +40,14 @@ class NativeHttpPlayer extends StatelessWidget {
         if (session == null) return const ColoredBox(color: Colors.black);
         return ListenableBuilder(
           listenable: session,
-          builder: (context, _) => _surface(session),
+          builder: (context, _) =>
+              _surface(session, mode == PictureInPictureMode.active),
         );
       },
     ),
   );
 
-  Widget _surface(NativeHttpPlayback session) {
+  Widget _surface(NativeHttpPlayback session, bool pictureInPicture) {
     final player = session.player;
     return ColoredBox(
       color: Colors.black,
@@ -40,7 +59,9 @@ class NativeHttpPlayer extends StatelessWidget {
               key: ObjectKey(player),
               playback: player,
               danmaku: session.danmaku,
-              settings: store.danmakuSettings,
+              settings: pictureInPicture
+                  ? store.danmakuSettings.copyWith(enabled: false)
+                  : store.danmakuSettings,
               errorLabel: store.t('playerPlaybackError'),
               retryLabel: store.t('retry'),
               onRetry: store.retryPlayback,

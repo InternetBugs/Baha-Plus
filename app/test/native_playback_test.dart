@@ -4,6 +4,7 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/native_playback.dart';
 import 'package:baha_plus/ui/native_video_surface.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
@@ -24,6 +25,7 @@ class FakeVideo extends VideoPlayerPlatform {
   Completer<void>? holdCreation;
   Completer<void>? holdSeek;
   Completer<Duration>? nextPositionResult;
+  int failInitializations = 0;
   int positionQueries = 0;
   final sources = <DataSource>[];
   final options = <VideoCreationOptions>[];
@@ -42,14 +44,22 @@ class FakeVideo extends VideoPlayerPlatform {
     this.options.add(options);
     sources.add(options.dataSource);
     positions[id] = Duration.zero;
-    streams[id] = StreamController<VideoEvent>(onCancel: () async {})
-      ..add(
+    final controller = StreamController<VideoEvent>(onCancel: () async {});
+    streams[id] = controller;
+    if (failInitializations > 0) {
+      failInitializations--;
+      controller.addError(
+        PlatformException(code: 'VideoError', message: 'Transient init error'),
+      );
+    } else {
+      controller.add(
         VideoEvent(
           eventType: VideoEventType.initialized,
           duration: const Duration(seconds: 1200),
           size: const Size(1920, 1080),
         ),
       );
+    }
     return id;
   }
 
@@ -577,6 +587,26 @@ void main() {
       expect(state.cachedRasterBytes, 0);
       await tester.pumpWidget(const SizedBox());
       native.dispose();
+    },
+  );
+
+  test(
+    'initial decoder load retries once after a transient initialize failure',
+    () async {
+      platform.failInitializations = 1;
+      final native = NativePlayback(
+        document: 'retry-init',
+        source: NativePlaybackSource.fromJson(sourceJson()),
+        userAgent: 'device agent',
+        retryDelay: Duration.zero,
+        onState: (_) {},
+      );
+      addTearDown(native.dispose);
+      await native.initialize(0);
+      expect(platform.sources, hasLength(2));
+      expect(platform.released, [0]);
+      expect(native.video?.value.isInitialized, isTrue);
+      expect(native.failureStage, isNull);
     },
   );
 }

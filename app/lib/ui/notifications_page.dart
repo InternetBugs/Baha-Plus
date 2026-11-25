@@ -5,6 +5,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_widgets.dart';
+import 'layout.dart';
 
 class NotificationBell extends StatelessWidget {
   const NotificationBell({required this.store, required this.onTap, super.key});
@@ -85,101 +86,107 @@ class _NotificationsPageState extends State<NotificationsPage>
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
-    builder: (context, _) {
-      final items = store.notifications
-          .where((item) => !_unreadOnly || !store.notificationRead(item))
-          .toList();
-      return GlassScaffold(
-        key: const ValueKey('notifications-page'),
-        extendBody: false,
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        appBar: GlassAppBar(
-          leading: GlassIconButton(
-            semanticLabel: store.t('close'),
-            icon: const Icon(CupertinoIcons.xmark),
-            onPressed: () => Navigator.pop(context),
+  Widget build(BuildContext context) {
+    final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 780);
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) {
+        final items = store.notifications
+            .where((item) => !_unreadOnly || !store.notificationRead(item))
+            .toList();
+        return GlassScaffold(
+          key: const ValueKey('notifications-page'),
+          extendBody: false,
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          appBar: GlassAppBar(
+            leading: GlassIconButton(
+              semanticLabel: store.t('close'),
+              icon: const Icon(CupertinoIcons.xmark),
+              onPressed: () => Navigator.pop(context),
+            ),
+            actions: [
+              GlassIconButton(
+                semanticLabel: store.t('markAllRead'),
+                icon: const Icon(CupertinoIcons.checkmark_alt_circle),
+                onPressed: store.unreadNotifications == 0
+                    ? null
+                    : store.markNotificationsRead,
+              ),
+              GlassIconButton(
+                semanticLabel: store.t('refresh'),
+                icon: const Icon(CupertinoIcons.arrow_clockwise),
+                onPressed: store.notificationsLoading
+                    ? null
+                    : store.refreshNotifications,
+              ),
+            ],
           ),
-          actions: [
-            GlassIconButton(
-              semanticLabel: store.t('markAllRead'),
-              icon: const Icon(CupertinoIcons.checkmark_alt_circle),
-              onPressed: store.unreadNotifications == 0
-                  ? null
-                  : store.markNotificationsRead,
-            ),
-            GlassIconButton(
-              semanticLabel: store.t('refresh'),
-              icon: const Icon(CupertinoIcons.arrow_clockwise),
-              onPressed: store.notificationsLoading
-                  ? null
-                  : store.refreshNotifications,
-            ),
-          ],
-        ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    store.t('notifications'),
-                    style: const TextStyle(
-                      fontSize: 27,
-                      fontWeight: FontWeight.w700,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(hPad.left, 14, hPad.right, 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      store.t('notifications'),
+                      style: const TextStyle(
+                        fontSize: 27,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 8,
-                    children: [
-                      for (final unread in [false, true])
-                        GlassButton.custom(
-                          shape: const LiquidRoundedRectangle(borderRadius: 20),
-                          height: 38,
-                          width: 110,
-                          onTap: () => setState(() => _unreadOnly = unread),
-                          child: Text(
-                            unread
-                                ? '${store.t('unread')} ${store.unreadNotifications}'
-                                : store.t('all'),
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _unreadOnly == unread
-                                  ? brandBlue
-                                  : secondary(context),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        for (final unread in [false, true])
+                          GlassButton.custom(
+                            shape: const LiquidRoundedRectangle(
+                              borderRadius: 20,
+                            ),
+                            height: 38,
+                            width: 110,
+                            onTap: () => setState(() => _unreadOnly = unread),
+                            child: Text(
+                              unread
+                                  ? '${store.t('unread')} ${store.unreadNotifications}'
+                                  : store.t('all'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _unreadOnly == unread
+                                    ? brandBlue
+                                    : secondary(context),
+                              ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Expanded(
-              child: store.notificationsLoading && store.notifications.isEmpty
-                  ? const Center(child: CupertinoActivityIndicator())
-                  : RefreshIndicator(
-                      onRefresh: store.refreshNotifications,
-                      child: Builder(
-                        builder: (context) {
-                          final hasError = store.notificationsError != null;
-                          final isEmpty =
-                              items.isEmpty && store.notificationsError == null;
-                          final prefix = (hasError ? 1 : 0) + (isEmpty ? 1 : 0);
-                          return ListView.builder(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: EdgeInsets.fromLTRB(
-                              20,
-                              0,
-                              20,
-                              MediaQuery.paddingOf(context).bottom + 24,
-                            ),
+              Expanded(
+                child: store.notificationsLoading && store.notifications.isEmpty
+                    ? const Center(child: CupertinoActivityIndicator())
+                    : RefreshIndicator(
+                        onRefresh: store.refreshNotifications,
+                        child: Builder(
+                          builder: (context) {
+                            final hasError = store.notificationsError != null;
+                            final isEmpty =
+                                items.isEmpty &&
+                                store.notificationsError == null;
+                            final prefix =
+                                (hasError ? 1 : 0) + (isEmpty ? 1 : 0);
+                            return ListView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: EdgeInsets.fromLTRB(
+                                hPad.left,
+                                0,
+                                hPad.right,
+                                MediaQuery.paddingOf(context).bottom + 24,
+                              ),
                             itemCount: prefix + items.length,
                             itemBuilder: (context, index) {
                               var cursor = index;
@@ -307,12 +314,13 @@ class _NotificationsPageState extends State<NotificationsPage>
                         },
                       ),
                     ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   @override
   void dispose() {

@@ -285,6 +285,7 @@ class AppStore extends ChangeNotifier {
   String? playingVideoId;
   bool get usesNativePlayback => usesNativeHttpPlayback;
   bool get applicationActive => _applicationActive;
+  bool get playbackActive => _applicationActive || _pictureInPicturePlayback;
   bool playerFullscreen = false;
   bool playerLocked = false;
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
@@ -313,6 +314,7 @@ class AppStore extends ChangeNotifier {
   Anime? _pendingAnime;
   bool _disposed = false;
   bool _applicationActive = true;
+  bool _pictureInPicturePlayback = false;
   Timer? _deadline;
   Timer? _searchDebounce;
   int _searchGeneration = 0;
@@ -652,16 +654,29 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  Future<void> setApplicationActive(bool active) async {
-    diagnostics.record('app.lifecycle', {'foreground': active});
-    if (_applicationActive == active) return;
+  Future<void> setApplicationActive(
+    bool active, {
+    bool pictureInPicture = false,
+  }) async {
+    final foregroundChanged = _applicationActive != active;
+    if (!foregroundChanged && _pictureInPicturePlayback == pictureInPicture) {
+      return;
+    }
+    final wasPlaybackActive = playbackActive;
+    if (foregroundChanged) {
+      diagnostics.record('app.lifecycle', {'foreground': active});
+    }
     _applicationActive = active;
-    await nativeHttpPlayback?.setApplicationActive(active);
-    final profileRefresh = active ? refreshAccountProfile() : null;
-    if (active && !browserVisible && !busy && _portal != null) {
+    _pictureInPicturePlayback = pictureInPicture;
+    if (playbackActive != wasPlaybackActive) {
+      await nativeHttpPlayback?.setApplicationActive(playbackActive);
+    }
+    final returning = foregroundChanged && active && _applicationActive;
+    final profileRefresh = returning ? refreshAccountProfile() : null;
+    if (returning && !browserVisible && !busy && _portal != null) {
       await syncAccount();
     }
-    if (active &&
+    if (returning &&
         (_catalogNeedsRetryOnResume || catalogFailed) &&
         !browserVisible &&
         !catalogLoading) {
@@ -674,7 +689,7 @@ class AppStore extends ChangeNotifier {
 
   Future<void> controlPlayer(String action, [double? value]) async {
     diagnostics.record('player.command', {'action': action, 'value': value});
-    if (!_applicationActive ||
+    if (!playbackActive ||
         !browserVisible ||
         !showsPlayer ||
         (!playback.value.canOperate &&

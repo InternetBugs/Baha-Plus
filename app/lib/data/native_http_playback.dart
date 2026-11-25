@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:video_player/video_player.dart' show VideoViewType;
 
 import '../core/models.dart';
 import '../core/native_danmaku.dart';
@@ -61,7 +62,8 @@ class NativeHttpPlayback extends ChangeNotifier {
   bool _disposed = false, _foreground = true, _ad = false;
   bool _loading = false, _finishingAd = false, _adStartPending = false;
   bool _adAcknowledged = false, _progressPending = false;
-  bool _contentStarted = false, _wasPlaying = false, _endedReported = false;
+  bool _contentStarted = false, _wasPlaying = false, _wasActive = false;
+  bool _endedReported = false;
   int _revision = 0;
   int _lastAdSeconds = -1;
   bool _lastCanSkipAd = false;
@@ -176,15 +178,10 @@ class NativeHttpPlayback extends ChangeNotifier {
     );
     if (!_live(revision)) return;
     _ad = false;
-    await _install(
-      source,
-      revision,
-      beforePlay: () async {
-        await api.started();
-        _contentStarted = true;
-      },
-    );
+    await _install(source, revision, beforePlay: api.started);
     if (!_live(revision)) return;
+    _contentStarted = true;
+    _wasActive = _foreground && !(player?.state.paused ?? true);
     unawaited(loadDanmaku());
     _report(progress: true);
   }
@@ -255,11 +252,18 @@ class NativeHttpPlayback extends ChangeNotifier {
       mediaUserAgent: api.mediaUserAgent,
       diagnostics: diagnostics,
       onState: _mediaChanged,
+      viewType: !_ad && !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+          ? VideoViewType.platformView
+          : VideoViewType.textureView,
     );
     player = next;
     notifyListeners();
     await next.setApplicationActive(_foreground);
-    await next.initialize(_ad ? 0 : preferredQuality);
+    try {
+      await next.initialize(_ad ? 0 : preferredQuality);
+    } on StateError {
+      throw const NativeHttpException('media-init');
+    }
     if (!_live(revision)) return;
     await beforePlay?.call();
     if (!_live(revision)) return;
@@ -307,6 +311,9 @@ class NativeHttpPlayback extends ChangeNotifier {
 
   void _mediaChanged(PlaybackState value) {
     if (_disposed || failureStage != null) return;
+    // Once skipAd() is transitioning out of a completed ad, ignore late EOF or
+    // seek errors emitted by the retiring ad decoder.
+    if (_ad && _finishingAd) return;
     _publish(_project(value), notify: false);
     if (value.phase == PlaybackPhase.error) {
       _fail(const NativeHttpException('media'), _revision);
@@ -319,13 +326,20 @@ class NativeHttpPlayback extends ChangeNotifier {
     if (_disposed || failureStage != null || player == null) return;
     final value = player!.state;
     final running = _foreground && !value.paused && !value.buffering;
+    final active = _foreground && !value.paused;
     if (_ad) {
       // Ads always start at zero. The command guard below rejects seeks,
       // speed/quality changes and replay. Only the decoder advances this
       // clock, including its final position when a 30-second ad completes.
       // EOF is the native decoder's completion receipt. The last sampled
-      // position can precede it by one frame, so flush the completed duration.
-      adWatch.sampleUnseekable(value.ended ? value.duration : value.position);
+      // position can precede it by one frame, and nominal 30-second HLS ads
+      // whose #EXTINF segments sum to 29.999999 truncate to 29.999s in ms.
+      final completed = value.ended
+          ? (value.duration >= 29.5 && value.duration < 30
+                ? 30.0
+                : value.duration)
+          : value.position;
+      adWatch.sampleUnseekable(completed);
     } else {
       watch.sample(
         position: value.position,
@@ -335,8 +349,9 @@ class NativeHttpPlayback extends ChangeNotifier {
         completed: value.ended && _foreground,
       );
     }
-    final changedPlaying = _wasPlaying != running;
+    final changedActive = _wasActive != active;
     _wasPlaying = running;
+    _wasActive = active;
     if (_ad) {
       if (adWatch.total > 0 && !_adAcknowledged && !_adStartPending) {
         _adStartPending = true;
@@ -349,6 +364,7 @@ class NativeHttpPlayback extends ChangeNotifier {
               _lastAdSeconds = adSecondsRemaining;
               _lastCanSkipAd = canSkipAd;
               notifyListeners();
+              _tick();
             }
           } catch (error) {
             _fail(error, revision);
@@ -379,10 +395,22 @@ class NativeHttpPlayback extends ChangeNotifier {
       } else if (value.ended && !_endedReported) {
         _endedReported = true;
         _report(progress: true);
-      } else if (changedPlaying) {
+      } else if (changedActive) {
         _report();
       }
     }
+  }
+
+  static bool _isTransientReportError(Object error) {
+    if (error is! NativeHttpException) return false;
+    if (error.stage.endsWith('-transport') ||
+        error.stage.endsWith('-timeout')) {
+      return true;
+    }
+    final code = error.code;
+    return (error.stage == 'playback-state' || error.stage == 'progress') &&
+        code != null &&
+        (code == 429 || (code >= 500 && code <= 599));
   }
 
   void _report({bool progress = false, bool periodic = false}) {
@@ -409,7 +437,15 @@ class NativeHttpPlayback extends ChangeNotifier {
           });
         }
       } catch (error) {
-        _fail(error, revision);
+        if (_isTransientReportError(error)) {
+          final failure = error as NativeHttpException;
+          diagnostics.record('player.http-report-failed', {
+            'stage': failure.stage,
+            'code': failure.code,
+          });
+        } else {
+          _fail(error, revision);
+        }
       } finally {
         if (_live(revision) && progress) _progressPending = false;
       }
