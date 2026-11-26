@@ -5,6 +5,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 import 'diagnostics_page.dart';
+import 'glass_alert.dart';
 import 'glass_settings_menu.dart';
 
 class AccountPage extends StatelessWidget {
@@ -26,37 +27,37 @@ class AccountPage extends StatelessWidget {
   Future<void> _refreshProfile(BuildContext context) async {
     final success = await store.refreshAccountProfile(force: true);
     if (success || !context.mounted || !store.hasAccount) return;
-    await showCupertinoDialog<void>(
+    await showGlassMessageDialog(
       context: context,
-      builder: (dialog) => CupertinoAlertDialog(
-        title: Text(store.t('refreshProfile')),
-        content: Text(store.t('accountSyncError')),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.pop(dialog),
-            child: Text(store.t('close')),
-          ),
-        ],
-      ),
+      title: store.t('refreshProfile'),
+      message: store.t('accountSyncError'),
+      closeLabel: store.t('close'),
     );
   }
 
   Future<void> _logout(BuildContext context) async {
     final success = await store.logoutAccount();
     if (success || !context.mounted) return;
-    await showCupertinoDialog<void>(
+    await showGlassMessageDialog(
       context: context,
-      builder: (dialog) => CupertinoAlertDialog(
-        title: Text(store.t('logout')),
-        content: Text(store.t('logoutFailed')),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.pop(dialog),
-            child: Text(store.t('close')),
-          ),
-        ],
-      ),
+      title: store.t('logout'),
+      message: store.t('logoutFailed'),
+      closeLabel: store.t('close'),
     );
+  }
+
+  Future<void> _setSkipAgeConfirmation(BuildContext context, bool value) async {
+    if (value) {
+      final confirmed = await showGlassConfirmDialog(
+        context: context,
+        title: store.t('skipAgeConfirmationTitle'),
+        message: store.t('skipAgeConfirmationWarning'),
+        cancelLabel: store.t('cancel'),
+        confirmLabel: store.t('skipAgeConfirmationEnable'),
+      );
+      if (confirmed != true || !context.mounted) return;
+    }
+    await store.setSkipAgeConfirmation(value);
   }
 
   @override
@@ -83,13 +84,17 @@ class AccountPage extends StatelessWidget {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
+          final safe = MediaQuery.paddingOf(context);
           final side = 20.0 + math.max(0.0, (constraints.maxWidth - 640.0) / 2);
           return ListView(
+            physics: const BouncingScrollPhysics(
+              parent: AlwaysScrollableScrollPhysics(),
+            ),
             padding: EdgeInsets.fromLTRB(
               side,
-              18,
+              12,
               side,
-              MediaQuery.paddingOf(context).bottom + 40,
+              safe.bottom + 40,
             ),
             children: [
           GlassSettingsGroup(
@@ -270,16 +275,31 @@ class AccountPage extends StatelessWidget {
                 ],
                 onSelected: store.setGlassStyle,
               ),
+            ],
+          ),
+          const SizedBox(height: 28),
+          _sectionLabel(context, store.t('playback')),
+          const SizedBox(height: 8),
+          GlassSettingsGroup(
+            children: [
+              GlassSettingsSwitchRow(
+                key: const ValueKey('account-skip-age-confirmation-switch'),
+                title: store.t('skipAgeConfirmation'),
+                icon: CupertinoIcons.exclamationmark_shield,
+                value: store.skipAgeConfirmation,
+                onChanged: (value) => _setSkipAgeConfirmation(context, value),
+              ),
               GlassSettingsSwitchRow(
                 key: const ValueKey('account-skip-op-switch'),
                 title: store.t('skipOpLongPress'),
-                description: store.t('skipOpLongPressHint'),
-                icon: CupertinoIcons.goforward,
+                icon: CupertinoIcons.forward_end,
                 value: store.skipOpLongPress,
                 onChanged: store.setSkipOpLongPress,
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          _sectionFooter(context, store.t('skipOpLongPressHint')),
           const SizedBox(height: 28),
           _sectionLabel(context, store.t('about')),
           const SizedBox(height: 8),
@@ -334,6 +354,14 @@ class AccountPage extends StatelessWidget {
     child: Text(
       title,
       style: TextStyle(color: secondary(context), fontSize: 12),
+    ),
+  );
+
+  Widget _sectionFooter(BuildContext context, String text) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: Text(
+      text,
+      style: TextStyle(color: secondary(context), fontSize: 12, height: 1.6),
     ),
   );
 }

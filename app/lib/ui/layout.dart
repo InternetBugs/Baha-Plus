@@ -138,17 +138,27 @@ class GlassNavigationRail extends StatelessWidget {
   final Color indicatorColor;
   final double width;
 
+  static const _itemHeight = 60.0;
+  static const _itemGap = 4.0;
+
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    final themeQuality = GlassThemeData.of(context).qualityFor(context);
     final unselectedColor = Theme.of(
       context,
     ).colorScheme.onSurface.withValues(alpha: dark ? .82 : .76);
+    final safeIndex = selectedIndex.clamp(
+      0,
+      math.max(0, destinations.length - 1),
+    );
     return GlassIsolationScope(
       isolated: true,
-      defaultQuality: GlassQuality.premium,
+      defaultQuality: themeQuality,
       child: GlassContainer(
         useOwnLayer: true,
+        quality: themeQuality,
         width: width,
         shape: const LiquidRoundedSuperellipse(borderRadius: 30),
         settings: settings,
@@ -156,21 +166,49 @@ class GlassNavigationRail extends StatelessWidget {
         child: SingleChildScrollView(
           primary: false,
           physics: const BouncingScrollPhysics(),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Stack(
             children: [
-              for (var index = 0; index < destinations.length; index++) ...[
-                if (index > 0) const SizedBox(height: 4),
-                _GlassRailItem(
-                  key: ValueKey('rail-tab-$index'),
-                  destination: destinations[index],
-                  selected: index == selectedIndex,
-                  selectedColor: selectedColor,
-                  unselectedColor: unselectedColor,
-                  indicatorColor: indicatorColor,
-                  onTap: () => onSelected(index),
+              if (destinations.isNotEmpty)
+                AnimatedPositioned(
+                  key: const ValueKey('rail-sliding-indicator'),
+                  duration: reducedMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  left: 0,
+                  right: 0,
+                  top: safeIndex * (_itemHeight + _itemGap),
+                  height: _itemHeight,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: ShapeDecoration(
+                        color: indicatorColor,
+                        shape: const LiquidRoundedSuperellipse(
+                          borderRadius: 22,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ],
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var index = 0; index < destinations.length; index++) ...[
+                    if (index > 0) const SizedBox(height: _itemGap),
+                    SizedBox(
+                      height: _itemHeight,
+                      child: _GlassRailItem(
+                        key: ValueKey('rail-tab-$index'),
+                        destination: destinations[index],
+                        selected: index == safeIndex,
+                        selectedColor: selectedColor,
+                        unselectedColor: unselectedColor,
+                        onTap: () => onSelected(index),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ],
           ),
         ),
@@ -185,7 +223,6 @@ class _GlassRailItem extends StatefulWidget {
     required this.selected,
     required this.selectedColor,
     required this.unselectedColor,
-    required this.indicatorColor,
     required this.onTap,
     super.key,
   });
@@ -194,7 +231,6 @@ class _GlassRailItem extends StatefulWidget {
   final bool selected;
   final Color selectedColor;
   final Color unselectedColor;
-  final Color indicatorColor;
   final VoidCallback onTap;
 
   @override
@@ -213,7 +249,7 @@ class _GlassRailItemState extends State<_GlassRailItem> {
         ? widget.selectedColor
         : widget.unselectedColor;
     final fill = widget.selected
-        ? widget.indicatorColor
+        ? Colors.transparent
         : _pressed
         ? (dark ? const Color(0x1effffff) : const Color(0x14000000))
         : _hovered
@@ -239,11 +275,10 @@ class _GlassRailItemState extends State<_GlassRailItem> {
                 : const Duration(milliseconds: 180),
             curve: Curves.easeOutCubic,
             width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 58),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-            decoration: BoxDecoration(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            decoration: ShapeDecoration(
               color: fill,
-              borderRadius: BorderRadius.circular(22),
+              shape: const LiquidRoundedSuperellipse(borderRadius: 22),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -298,7 +333,7 @@ Future<T?> showAdaptiveGlassSheet<T>({
       topBorderRadius: topBorderRadius,
       horizontalMargin: 0,
       bottomMargin: 0,
-      showDragIndicator: false,
+      showDragIndicator: true,
       maintainContentGlass: false,
       expandedColor: expandedColor,
       expandedDarkColor: expandedDarkColor,

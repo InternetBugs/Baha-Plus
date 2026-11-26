@@ -40,7 +40,7 @@ class SynopsisSection extends StatelessWidget {
           const SizedBox(height: 12),
           GlassButton.custom(
             key: const ValueKey('open-full-synopsis'),
-            shape: const LiquidRoundedRectangle(borderRadius: 22),
+            shape: const LiquidRoundedSuperellipse(borderRadius: 21),
             width: 180,
             height: 42,
             onTap: () => Navigator.push<void>(
@@ -89,10 +89,11 @@ class SynopsisPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 720);
+    final safe = MediaQuery.paddingOf(context);
     return GlassScaffold(
       key: const ValueKey('full-synopsis-page'),
-      extendBody: false,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      topEdgeFadeExtent: 44,
       appBar: GlassAppBar(
         title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),
         leading: GlassIconButton(
@@ -102,11 +103,14 @@ class SynopsisPage extends StatelessWidget {
         ),
       ),
       body: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         padding: EdgeInsets.fromLTRB(
           hPad.left,
-          20,
+          safe.top + 64,
           hPad.right,
-          MediaQuery.paddingOf(context).bottom + 32,
+          safe.bottom + 32,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

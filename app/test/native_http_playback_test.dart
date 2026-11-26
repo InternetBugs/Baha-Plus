@@ -228,6 +228,54 @@ void main() {
     },
   );
 
+  for (final startInForeground in [true, false]) {
+    test(
+      'automatic consent preserves ads with foreground=$startInForeground',
+      () async {
+        final fixture = HttpFixture();
+        final phases = <PlaybackPhase>[];
+        final session = NativeHttpPlayback(
+          document: 'automatic-consent',
+          videoId: '40190',
+          preferredQuality: 0,
+          skipAgeConfirmation: true,
+          diagnostics: AppDiagnostics.instance,
+          api: fixture.api(),
+          onState: (state) => phases.add(state.phase),
+        );
+        addTearDown(session.close);
+        await session.prepare(applicationActive: startInForeground);
+        expect(session.needsConsent, isFalse);
+        if (!startInForeground) {
+          expect(session.player, isNull);
+          expect(fixture.count('videoCastcishu.php'), 0);
+          await session.setApplicationActive(true);
+        }
+        expect(session.state.phase, PlaybackPhase.advertisement);
+        expect(phases, isNot(contains(PlaybackPhase.age)));
+        expect(fixture.count('video_src.php'), 0);
+      },
+    );
+  }
+
+  test('automatic consent preserves official parental verification', () async {
+    final fixture = HttpFixture()..parent = true;
+    final session = NativeHttpPlayback(
+      document: 'parent-verification',
+      videoId: '40190',
+      preferredQuality: 0,
+      skipAgeConfirmation: true,
+      diagnostics: AppDiagnostics.instance,
+      api: fixture.api(),
+      onState: (_) {},
+    );
+    addTearDown(session.close);
+    await session.prepare();
+    expect(session.failureStage, 'parent-verification-required');
+    expect(session.needsConsent, isFalse);
+    expect(fixture.count('video_src.php'), 0);
+  });
+
   test(
     'periodic progress is acknowledged after 60 real media seconds',
     () async {

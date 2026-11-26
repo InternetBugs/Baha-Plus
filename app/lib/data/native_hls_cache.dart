@@ -15,16 +15,19 @@ typedef _Bytes = ({int start, int length});
 typedef _Segment = ({
   PlaybackBufferRange time,
   _Resource media,
-  List<_Resource> dependencies,
+  _Resource? key,
+  _Resource? initialization,
 });
 
 class _Resource {
-  _Resource(this.id, this.uri, this.kind, this.bytes);
+  _Resource(this.id, this.uri, this.kind, this.bytes)
+    : extension = kind == _Kind.playlist ? '.m3u8' : _extractExtension(uri.path);
 
   final int id;
   final Uri uri;
   final _Kind kind;
   final _Bytes? bytes;
+  final String extension;
   final children = <_Resource>[];
   List<_Segment> segments = [];
   Uint8List? memory;
@@ -32,6 +35,23 @@ class _Resource {
   int size = 0, requested = 0;
   Future<Uint8List>? pending;
   bool get cached => memory != null || file != null;
+
+  static String _extractExtension(String path) {
+    final slash = path.lastIndexOf('/');
+    final dot = path.lastIndexOf('.');
+    if (dot <= slash || dot < 0) return '.bin';
+    final extLen = path.length - dot - 1;
+    if (extLen < 1 || extLen > 6) return '.bin';
+    for (var i = dot + 1; i < path.length; i++) {
+      final c = path.codeUnitAt(i);
+      final alphaNum =
+          (c >= 0x30 && c <= 0x39) ||
+          (c >= 0x41 && c <= 0x5A) ||
+          (c >= 0x61 && c <= 0x7A);
+      if (!alphaNum) return '.bin';
+    }
+    return path.substring(dot);
+  }
 }
 
 class _HlsCachePool {
@@ -111,7 +131,12 @@ class NativeHlsCache {
   final _bufferedRangesCache = <Uri, List<PlaybackBufferRange>>{};
   Future<void> _writes = Future.value();
   static Future<void>? _cleanup;
-  static final _extensionPattern = RegExp(r'\.[a-zA-Z0-9]{1,6}$');
+  static final _hlsContentType = ContentType(
+    'application',
+    'vnd.apple.mpegurl',
+  );
+  static final _mp2tContentType = ContentType('video', 'mp2t');
+  static final _mp4ContentType = ContentType('video', 'mp4');
   static final _rangeHeaderPattern = RegExp(r'^bytes=(\d*)-(\d*)$');
   static final _contentRangePattern = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$');
   static final _byteRangeAttrPattern = RegExp(r'BYTERANGE="([^"]+)"');
@@ -119,6 +144,10 @@ class NativeHlsCache {
   static final _stripByteRangeAttrPattern = RegExp(r'BYTERANGE="[^"]+",?');
   static final _trailingCommaPattern = RegExp(r',$');
   static final _byteRangeValuePattern = RegExp(r'^(\d+)(?:@(\d+))?$');
+  static final _keyMethodPattern = RegExp(r'METHOD=([A-Za-z0-9-]+)');
+  static final _keyFormatPattern = RegExp(r'KEYFORMAT="([^"]{1,48})"');
+  static final _hlsVersionPattern = RegExp(r'#EXT-X-VERSION:(\d+)');
+  static final _extinfLinePattern = RegExp(r'^#EXTINF:', multiLine: true);
 
   void _invalidateBufferedRanges() {
     _version++;
@@ -192,16 +221,11 @@ class NativeHlsCache {
   Uri _local(_Resource resource) {
     final server = _server;
     if (_closed || server == null) throw StateError('Media cache is not ready');
-    final original = resource.uri.path.split('/').last;
-    final suffix = _extensionPattern.firstMatch(original)?[0];
-    final extension = resource.kind == _Kind.playlist
-        ? '.m3u8'
-        : suffix ?? '.bin';
     return Uri(
       scheme: 'http',
       host: '127.0.0.1',
       port: server.port,
-      path: '/$_token/${resource.id}$extension',
+      path: '/$_token/${resource.id}${resource.extension}',
     );
   }
 
@@ -229,7 +253,8 @@ class NativeHlsCache {
     final ranges = <PlaybackBufferRange>[];
     for (final segment in selected?.segments ?? const <_Segment>[]) {
       if (!segment.media.cached ||
-          segment.dependencies.any((resource) => !resource.cached)) {
+          (segment.key != null && !segment.key!.cached) ||
+          (segment.initialization != null && !segment.initialization!.cached)) {
         continue;
       }
       if (ranges.isNotEmpty && segment.time.start <= ranges.last.end + .001) {
@@ -241,7 +266,9 @@ class NativeHlsCache {
         ranges.add(segment.time);
       }
     }
-    final result = List<PlaybackBufferRange>.unmodifiable(ranges);
+    final result = ranges.isEmpty
+        ? const <PlaybackBufferRange>[]
+        : List<PlaybackBufferRange>.unmodifiable(ranges);
     _bufferedRangesCache[source] = result;
     return result;
   }
@@ -276,12 +303,11 @@ class NativeHlsCache {
         ..set(HttpHeaders.acceptRangesHeader, 'bytes')
         ..set(HttpHeaders.cacheControlHeader, 'no-store')
         ..contentType = resource.kind == _Kind.playlist
-            ? ContentType('application', 'vnd.apple.mpegurl')
-            : resource.uri.path.endsWith('.ts')
-            ? ContentType('video', 'mp2t')
-            : resource.uri.path.endsWith('.mp4') ||
-                  resource.uri.path.endsWith('.m4s')
-            ? ContentType('video', 'mp4')
+            ? _hlsContentType
+            : resource.extension == '.ts'
+            ? _mp2tContentType
+            : resource.extension == '.mp4' || resource.extension == '.m4s'
+            ? _mp4ContentType
             : ContentType.binary;
       final range = request.headers.value(HttpHeaders.rangeHeader);
       var start = 0, end = data.length - 1;
@@ -587,14 +613,14 @@ class NativeHlsCache {
           !line.startsWith('#EXT-X-SESSION-KEY:')) {
         continue;
       }
-      final method = RegExp(r'METHOD=([A-Za-z0-9-]+)').firstMatch(line);
-      final format = RegExp(r'KEYFORMAT="([^"]{1,48})"').firstMatch(line);
+      final method = _keyMethodPattern.firstMatch(line);
+      final format = _keyFormatPattern.firstMatch(line);
       if (method != null) methods.add(method[1]!);
       if (format != null) formats.add(format[1]!);
     }
     return {
-      'version': RegExp(r'#EXT-X-VERSION:(\d+)').firstMatch(body)?[1] ?? '',
-      'segments': RegExp(r'^#EXTINF:', multiLine: true).allMatches(body).length,
+      'version': _hlsVersionPattern.firstMatch(body)?[1] ?? '',
+      'segments': _extinfLinePattern.allMatches(body).length,
       'methods': methods.toList(),
       'keyFormats': formats.toList(),
       'map': body.contains('#EXT-X-MAP:'),
@@ -608,12 +634,6 @@ class NativeHlsCache {
       throw const FormatException('Invalid HLS playlist');
     }
     final lines = const LineSplitter().convert(body);
-    // Cache only immutable, complete VOD playlists. Live playlists must be
-    // refreshed and cannot safely reuse this session's static time mapping.
-    if (lines.any((line) => line.startsWith('#EXTINF:')) &&
-        !lines.any((line) => line.trim() == '#EXT-X-ENDLIST')) {
-      throw const FormatException('Expected complete media playlist');
-    }
     final output = <String>[];
     final segments = <_Segment>[];
     _Resource? key, initialization;
@@ -623,16 +643,24 @@ class NativeHlsCache {
     var time = 0.0;
     double? duration;
     var variant = false;
+    var hasExtinf = false;
+    var hasEndlist = false;
     for (final raw in lines) {
       var line = raw.trim();
       if (line.startsWith('#EXTINF:')) {
-        duration = double.tryParse(line.substring(8).split(',').first);
+        hasExtinf = true;
+        final comma = line.indexOf(',', 8);
+        duration = double.tryParse(
+          comma < 0 ? line.substring(8) : line.substring(8, comma),
+        );
         if (duration == null ||
             !duration.isFinite ||
             duration <= 0 ||
             time + duration > 172800) {
           throw const FormatException('Invalid HLS duration');
         }
+      } else if (line == '#EXT-X-ENDLIST') {
+        hasEndlist = true;
       } else if (line.startsWith('#EXT-X-BYTERANGE:')) {
         range = line.substring(17);
         continue;
@@ -696,7 +724,8 @@ class NativeHlsCache {
           segments.add((
             time: (start: time, end: time + duration),
             media: media,
-            dependencies: [?key, ?initialization],
+            key: key,
+            initialization: initialization,
           ));
           time += duration;
           duration = null;
@@ -707,6 +736,11 @@ class NativeHlsCache {
         }
       }
       output.add(line);
+    }
+    // Cache only immutable, complete VOD playlists. Live playlists must be
+    // refreshed and cannot safely reuse this session's static time mapping.
+    if (hasExtinf && !hasEndlist) {
+      throw const FormatException('Expected complete media playlist');
     }
     playlist.segments = segments;
     return '${output.join('\n')}\n';

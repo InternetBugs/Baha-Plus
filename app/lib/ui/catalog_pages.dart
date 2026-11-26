@@ -31,9 +31,10 @@ class CatalogStatus extends StatelessWidget {
                   store.t('catalogUnavailable'),
                   style: TextStyle(color: secondary(context), height: 1.6),
                 ),
-                CupertinoButton(
-                  onPressed: store.refreshCatalog,
-                  child: Text(store.t('retry')),
+                const SizedBox(height: 12),
+                GlassActionPill(
+                  label: store.t('retry'),
+                  onTap: store.refreshCatalog,
                 ),
               ],
             ),
@@ -176,7 +177,7 @@ class HomeContent extends StatelessWidget {
       final height = bounds.hasBoundedHeight
           ? bounds.maxHeight
           : math.min(bounds.maxWidth * 1.28, 510.0);
-      return ClipRRect(
+      return ClipRSuperellipse(
         borderRadius: BorderRadius.circular(27),
         child: SizedBox(
           height: height,
@@ -233,7 +234,7 @@ class HomeContent extends StatelessWidget {
                     const SizedBox(height: 24),
                     Row(
                       children: [
-                        ClipRRect(
+                        ClipRSuperellipse(
                           borderRadius: BorderRadius.circular(11),
                           child: Artwork(anime.artwork, width: 48, height: 48),
                         ),
@@ -280,7 +281,7 @@ class HomeContent extends StatelessWidget {
   );
 
   Widget _watch(Anime anime) => GlassButton.custom(
-    shape: const LiquidRoundedRectangle(borderRadius: 19),
+    shape: const LiquidRoundedSuperellipse(borderRadius: 19),
     useOwnLayer: true,
     settings: mediaGlass,
     label: store.t('watch'),
@@ -496,21 +497,23 @@ class ContinueCard extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: () => store.continueWatching(entry),
       child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: secondary(context).withValues(alpha: .06),
+        padding: const EdgeInsets.all(14),
+        decoration: ShapeDecoration(
+          color: secondary(context).withValues(alpha: .06),
+          shape: RoundedSuperellipseBorder(
             borderRadius: BorderRadius.circular(22),
           ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Artwork(
-                  entry.anime.artwork,
-                  width: compact ? 60 : 80,
-                  height: compact ? 80 : 112,
-                ),
+        ),
+        child: Row(
+          children: [
+            ClipRSuperellipse(
+              borderRadius: BorderRadius.circular(12),
+              child: Artwork(
+                entry.anime.artwork,
+                width: compact ? 60 : 80,
+                height: compact ? 80 : 112,
               ),
+            ),
               const SizedBox(width: 13),
               Expanded(
                 child: Column(
@@ -601,7 +604,7 @@ class ContinueCard extends StatelessWidget {
                           if (nextVideoId != null) ...[
                             GlassButton.custom(
                               key: ValueKey('history-next-${entry.anime.id}'),
-                              shape: const LiquidRoundedRectangle(
+                              shape: const LiquidRoundedSuperellipse(
                                 borderRadius: 22,
                               ),
                               width: 88,
@@ -685,7 +688,7 @@ class HistoryContent extends StatelessWidget {
               if (needsSync && !loading) ...[
                 const SizedBox(height: 24),
                 GlassButton.custom(
-                  shape: const LiquidRoundedRectangle(borderRadius: 22),
+                  shape: const LiquidRoundedSuperellipse(borderRadius: 23),
                   width: 225,
                   height: 46,
                   onTap: store.hasAccount
@@ -787,28 +790,28 @@ class SearchContent extends StatelessWidget {
               store.t('seasonal'),
               'season',
               store.seasonal.firstOrNull,
-              Colors.blue,
+              CupertinoColors.systemBlue,
               height: wide ? 132 : 116,
             ),
             _category(
               store.t('popular'),
               'hot',
               store.popular.firstOrNull,
-              Colors.orange,
+              CupertinoColors.systemOrange,
               height: wide ? 132 : 116,
             ),
             _category(
               store.t('allAnime'),
               'all',
               store.catalog.items.lastOrNull,
-              Colors.deepPurple,
+              CupertinoColors.systemIndigo,
               height: wide ? 132 : 116,
             ),
             _category(
               store.t('favorites'),
               'favorites',
               store.favorites.firstOrNull,
-              Colors.green,
+              CupertinoColors.systemGreen,
               height: wide ? 132 : 116,
             ),
           ];
@@ -898,7 +901,7 @@ class SearchContent extends StatelessWidget {
     double height = 116,
   }) => GestureDetector(
     onTap: () => store.selectTab(2, filter: filter),
-    child: ClipRRect(
+    child: ClipRSuperellipse(
       borderRadius: BorderRadius.circular(18),
       child: SizedBox(
         height: height,
@@ -912,7 +915,10 @@ class SearchContent extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, color.withValues(alpha: .9)],
+                  colors: [
+                    Colors.transparent,
+                    color.withValues(alpha: .78),
+                  ],
                 ),
               ),
             ),
@@ -1017,7 +1023,9 @@ class LibraryContent extends StatelessWidget {
                           const SizedBox(height: 20),
                         ],
                         GlassButton.custom(
-                          shape: const LiquidRoundedRectangle(borderRadius: 22),
+                          shape: const LiquidRoundedSuperellipse(
+                            borderRadius: 23,
+                          ),
                           onTap: store.hasAccount
                               ? () => store.syncAccount()
                               : connectAccount,
@@ -1087,28 +1095,47 @@ class _ScheduleContentState extends State<ScheduleContent> {
             : wide
             ? 2
             : 1;
-        final weekdayControl = CupertinoSlidingSegmentedControl<int>(
-          groupValue: day,
-          children: {
-            for (final index in [1, 2, 3, 4, 5, 6, 0])
-              index: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 7),
-                child: Text(days[index], style: const TextStyle(fontSize: 12)),
-              ),
-          },
-          onValueChanged: (value) {
-            if (value != null) setState(() => day = value);
-          },
+        const order = [1, 2, 3, 4, 5, 6, 0];
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        final textScaler = MediaQuery.textScalerOf(context);
+        final controlHeight = (textScaler.scale(13) + 22).clamp(36.0, 56.0);
+        final weekdayControl = GlassSegmentedControl.scrollable(
+          key: const ValueKey('schedule-weekday-control'),
+          height: controlHeight,
+          borderRadius: controlHeight / 2,
+          maskingQuality: MaskingQuality.off,
+          labelPadding: EdgeInsets.symmetric(horizontal: wide ? 18 : 11),
+          backgroundColor: dark
+              ? const Color(0x1affffff)
+              : const Color(0x14000000),
+          indicatorColor: dark ? const Color(0x30ffffff) : Colors.white,
+          selectedTextStyle: TextStyle(
+            fontFamily: 'BahaSans',
+            fontFamilyFallback: const ['BahaSansSC'],
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: dark ? Colors.white : brandBlue,
+          ),
+          unselectedTextStyle: TextStyle(
+            fontFamily: 'BahaSans',
+            fontFamilyFallback: const ['BahaSansSC'],
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: secondary(context),
+          ),
+          selectedIndex: order.indexOf(day).clamp(0, order.length - 1),
+          segments: [for (final index in order) GlassSegment(label: days[index])],
+          onSegmentSelected: (index) => setState(() => day = order[index]),
         );
         return Column(
           children: [
             Align(
-              alignment: wide ? Alignment.center : Alignment.centerLeft,
+              alignment: Alignment.center,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: wide ? 560 : double.infinity,
+                  maxWidth: wide ? 560 : bounds.maxWidth,
                 ),
-                child: SizedBox(width: double.infinity, child: weekdayControl),
+                child: weekdayControl,
               ),
             ),
             const SizedBox(height: 20),
@@ -1166,7 +1193,7 @@ class _ScheduleContentState extends State<ScheduleContent> {
             ),
           ),
           const SizedBox(width: 12),
-          ClipRRect(
+          ClipRSuperellipse(
             borderRadius: BorderRadius.circular(12),
             child: Artwork(anime.cover, width: 88, height: 58),
           ),
@@ -1194,13 +1221,15 @@ class _ScheduleContentState extends State<ScheduleContent> {
     onTap: () => widget.openDetail(anime),
     child: Container(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
+      decoration: ShapeDecoration(
         color: secondary(context).withValues(alpha: .06),
-        borderRadius: BorderRadius.circular(18),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
       ),
       child: Row(
         children: [
-          ClipRRect(
+          ClipRSuperellipse(
             borderRadius: BorderRadius.circular(12),
             child: Artwork(anime.cover, width: 104, height: 64),
           ),

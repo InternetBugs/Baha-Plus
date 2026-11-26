@@ -5,6 +5,7 @@ import 'package:baha_plus/data/app_diagnostics.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/diagnostics_page.dart';
+import 'package:baha_plus/ui/glass_alert.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -255,9 +256,11 @@ void main() {
       await drain(tester);
       await tap(tester, store, 'diagnosticsClear');
       expect(store.diagnostics.hasLogs, isTrue);
+      expect(find.byType(CupertinoAlertDialog), findsNothing);
+      expect(find.byType(GlassAlert), findsOneWidget);
       await tester.tap(
         find.descendant(
-          of: find.byType(CupertinoDialogAction),
+          of: find.byType(GlassAlertActionButton),
           matching: find.text(store.t('diagnosticsClear')),
         ),
       );

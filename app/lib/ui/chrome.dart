@@ -17,6 +17,69 @@ const mediaGlass = LiquidGlassSettings(
 Color secondary(BuildContext context) =>
     Theme.of(context).colorScheme.onSurface.withValues(alpha: .55);
 
+/// Apple SF Symbols-style Picture-in-Picture glyph matching CupertinoIcons
+/// stroke weight and rounded corners without relying on Material Icons.
+class PipIcon extends StatelessWidget {
+  const PipIcon({this.size, this.color, super.key});
+
+  final double? size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = IconTheme.of(context);
+    final effectiveSize = size ?? theme.size ?? 18.0;
+    final effectiveColor = color ?? theme.color ?? CupertinoColors.white;
+    return SizedBox.square(
+      dimension: effectiveSize,
+      child: CustomPaint(painter: _PipIconPainter(effectiveColor)),
+    );
+  }
+}
+
+class _PipIconPainter extends CustomPainter {
+  const _PipIconPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.shortestSide;
+    final stroke = (s * 0.095).clamp(1.2, 2.2);
+    final frameWidth = s * 0.90;
+    final frameHeight = s * 0.72;
+    final frameRect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2),
+      width: frameWidth,
+      height: frameHeight,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(frameRect, Radius.circular(s * 0.16)),
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke,
+    );
+    final inset = stroke * 1.35;
+    final pipWidth = frameWidth * 0.44;
+    final pipHeight = frameHeight * 0.42;
+    final pipRect = Rect.fromLTWH(
+      frameRect.right - inset - pipWidth,
+      frameRect.bottom - inset - pipHeight,
+      pipWidth,
+      pipHeight,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(pipRect, Radius.circular(s * 0.09)),
+      Paint()..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _PipIconPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 class Artwork extends StatelessWidget {
   const Artwork(this.url, {this.width, this.height, super.key});
   final String? url;
@@ -60,36 +123,28 @@ class AccountAvatar extends StatelessWidget {
   final AppStore store;
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => Semantics(
-    identifier: 'account-button',
-    child: Stack(
-      clipBehavior: Clip.none,
-      children: [
-        GlassIconButton(
-          semanticLabel: store.t('me'),
-          onPressed: onTap,
-          size: 44,
-          icon: AccountPortrait(
-            profile: store.accountProfile,
-            cacheVersion: store.accountPortraitVersion,
-            size: 32,
-          ),
-        ),
-        if (store.verificationRequired)
-          const Positioned(
-            top: 2,
-            right: 2,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: brandBlue,
-                shape: BoxShape.circle,
-              ),
-              child: SizedBox(width: 8, height: 8),
-            ),
-          ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final button = GlassIconButton(
+      semanticLabel: store.t('me'),
+      onPressed: onTap,
+      size: 44,
+      icon: AccountPortrait(
+        profile: store.accountProfile,
+        cacheVersion: store.accountPortraitVersion,
+        size: 32,
+      ),
+    );
+    return Semantics(
+      identifier: 'account-button',
+      child: store.verificationRequired
+          ? GlassBadge.dot(
+              dotColor: brandBlue,
+              semanticLabel: store.t('officialVerification'),
+              child: button,
+            )
+          : button,
+    );
+  }
 }
 
 class AccountPortrait extends StatelessWidget {
@@ -181,7 +236,7 @@ class AnimeTile extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: poster ? .72 : 16 / 9,
-            child: ClipRRect(
+            child: ClipRSuperellipse(
               borderRadius: BorderRadius.circular(18),
               child: Artwork(poster ? anime.poster : anime.cover),
             ),
@@ -242,7 +297,7 @@ class AnimeRow extends StatelessWidget {
             onTap: onTap,
             child: Row(
               children: [
-                ClipRRect(
+                ClipRSuperellipse(
                   borderRadius: BorderRadius.circular(14),
                   child: Artwork(anime.artwork, width: 62, height: 62),
                 ),
@@ -274,7 +329,7 @@ class AnimeRow extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         GlassButton.custom(
-          shape: const LiquidRoundedRectangle(borderRadius: 18),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 18),
           label: store.t('watch'),
           onTap: () => store.play(anime),
           width: 70,
@@ -291,4 +346,146 @@ class AnimeRow extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Standard iOS 26 Liquid Glass capsule pill button for retries, sign-in
+/// prompts, and inline actions.
+class GlassActionPill extends StatelessWidget {
+  const GlassActionPill({
+    required this.label,
+    required this.onTap,
+    this.width,
+    this.height = 42,
+    this.useOwnLayer = false,
+    this.platformViewBackdrop = false,
+    this.settings,
+    this.foregroundColor,
+    super.key,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final double? width;
+  final double height;
+  final bool useOwnLayer;
+  final bool platformViewBackdrop;
+  final LiquidGlassSettings? settings;
+  final Color? foregroundColor;
+
+  @override
+  Widget build(BuildContext context) => GlassButton.custom(
+    shape: LiquidRoundedSuperellipse(borderRadius: height / 2),
+    useOwnLayer: useOwnLayer,
+    platformViewBackdrop: platformViewBackdrop,
+    settings: settings,
+    label: label,
+    onTap: onTap,
+    width: width,
+    height: height,
+    child: Padding(
+      padding: EdgeInsets.symmetric(horizontal: width == null ? 20 : 12),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: foregroundColor ?? brandBlue,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ),
+  );
+}
+
+/// Shared continuous-superellipse episode chip used across Detail and Player.
+class EpisodeChipButton extends StatefulWidget {
+  const EpisodeChipButton({
+    required this.label,
+    required this.onTap,
+    this.selected = false,
+    super.key,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool selected;
+
+  @override
+  State<EpisodeChipButton> createState() => _EpisodeChipButtonState();
+}
+
+class _EpisodeChipButtonState extends State<EpisodeChipButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final enabled = !widget.selected && widget.onTap != null;
+    final fill = widget.selected
+        ? brandBlue
+        : _pressed
+        ? (dark ? const Color(0x28ffffff) : const Color(0x1a000000))
+        : secondary(context).withValues(alpha: .08);
+    final shape = RoundedSuperellipseBorder(
+      borderRadius: BorderRadius.circular(15),
+      side: widget.selected
+          ? const BorderSide(color: Color(0x33ffffff), width: 0.5)
+          : BorderSide.none,
+    );
+    return Semantics(
+      button: true,
+      selected: widget.selected,
+      enabled: enabled,
+      label: widget.label,
+      onTap: enabled ? widget.onTap : null,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        excludeFromSemantics: true,
+        onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
+        onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
+        onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
+        onTap: enabled ? widget.onTap : null,
+        child: AnimatedScale(
+          scale: !reduceMotion && _pressed ? 0.96 : 1.0,
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: reduceMotion || _pressed
+                ? Duration.zero
+                : const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+            decoration: ShapeDecoration(
+              color: fill,
+              shape: shape,
+              shadows: widget.selected
+                  ? [
+                      BoxShadow(
+                        color: brandBlue.withValues(alpha: dark ? .32 : .22),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              widget.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13.5,
+                color: widget.selected ? Colors.white : brandBlue,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

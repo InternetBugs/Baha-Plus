@@ -56,7 +56,7 @@ class CommentsPage extends StatefulWidget {
 class _CommentsPageState extends State<CommentsPage> {
   final _draft = TextEditingController();
   final _focus = FocusNode();
-  final _list = ScrollController();
+  final _title = GlassLargeTitleController();
   final _drafts = <String, (String, OfficialComment?)>{};
   late String _videoId;
   final _comments = <OfficialComment>[];
@@ -92,7 +92,7 @@ class _CommentsPageState extends State<CommentsPage> {
     _drafts[_videoId] = (_draft.text, _replyTo);
     final draft = _drafts[videoId];
     _focus.unfocus();
-    if (_list.hasClients) _list.jumpTo(0);
+    if (_title.scrollController.hasClients) _title.scrollController.jumpTo(0);
     setState(() {
       _generation++;
       _videoId = videoId;
@@ -234,15 +234,19 @@ class _CommentsPageState extends State<CommentsPage> {
   @override
   Widget build(BuildContext context) {
     final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 780);
+    final safe = MediaQuery.paddingOf(context);
     final composerExtraLeft = math.max(0.0, hPad.left - 20);
     final composerExtraRight = math.max(0.0, hPad.right - 20);
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) => GlassScaffold(
         key: const ValueKey('comments-page'),
-        extendBody: false,
+        bottomEdgeFade: false,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        statusBarStyle: GlassStatusBarStyle.auto,
         appBar: GlassAppBar(
+          title: Text(store.t('messageBoard')),
+          largeTitleController: _title,
           leading: GlassIconButton(
             semanticLabel: store.t('close'),
             icon: const Icon(CupertinoIcons.xmark),
@@ -259,96 +263,118 @@ class _CommentsPageState extends State<CommentsPage> {
         body: Column(
           children: [
             Expanded(
-              child: RefreshIndicator(
-                onRefresh: () => _load(),
-                child: Builder(
-                  builder: (context) {
-                    final showError = _error != null;
-                    final showEmpty =
-                        !_loading && _comments.isEmpty && _error == null;
-                    final commentCount = _loading ? 0 : _comments.length;
-                    final showMore = !_loading && _nextPage != 0;
-                    final prefixCount =
-                        1 +
-                        (_loading ? 1 : 0) +
-                        (showError ? 1 : 0) +
-                        (showEmpty ? 1 : 0);
-                    final totalCount =
-                        prefixCount + commentCount + (showMore ? 1 : 0) + 1;
-                    return ListView.builder(
-                      key: const ValueKey('comment-list'),
-                      controller: _list,
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.only(
-                        left: hPad.left,
-                        right: hPad.right,
+              child: Builder(
+                builder: (context) {
+                  final showError = _error != null;
+                  final showEmpty =
+                      !_loading && _comments.isEmpty && _error == null;
+                  final commentCount = _loading ? 0 : _comments.length;
+                  final showMore = !_loading && _nextPage != 0;
+                  final prefixCount =
+                      1 +
+                      (_loading ? 1 : 0) +
+                      (showError ? 1 : 0) +
+                      (showEmpty ? 1 : 0);
+                  final totalCount =
+                      prefixCount + commentCount + (showMore ? 1 : 0) + 1;
+                  return CustomScrollView(
+                    key: const ValueKey('comment-list'),
+                    controller: _title.scrollController,
+                    physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics(),
+                    ),
+                    slivers: [
+                      CupertinoSliverRefreshControl(onRefresh: () => _load()),
+                      SliverToBoxAdapter(child: SizedBox(height: safe.top + 44)),
+                      GlassLargeTitle(
+                        text: store.t('messageBoard'),
+                        controller: _title,
+                        padding: EdgeInsets.fromLTRB(
+                          hPad.left,
+                          4,
+                          hPad.right,
+                          6,
+                        ),
                       ),
-                      itemCount: totalCount,
-                      itemBuilder: (context, index) {
-                        var cursor = index;
-                        if (cursor == 0) return _header();
-                        cursor--;
-                        if (_loading) {
-                          if (cursor == 0) {
-                            return const Padding(
-                              padding: EdgeInsets.all(30),
-                              child: Center(child: CupertinoActivityIndicator()),
-                            );
-                          }
-                          cursor--;
-                        }
-                        if (showError) {
-                          if (cursor == 0) {
-                            return CommunityEmpty(
-                              icon: CupertinoIcons.wifi_exclamationmark,
-                              title: communityError(store, _error),
-                              action: CupertinoButton(
-                                onPressed: () =>
-                                    _load(more: _comments.isNotEmpty),
-                                child: Text(store.t('retry')),
-                              ),
-                            );
-                          }
-                          cursor--;
-                        }
-                        if (showEmpty) {
-                          if (cursor == 0) {
-                            return CommunityEmpty(
-                              icon: CupertinoIcons.chat_bubble_2,
-                              title: store.t('noComments'),
-                              message: store.t('commentHint'),
-                            );
-                          }
-                          cursor--;
-                        }
-                        if (cursor < commentCount) {
-                          return _thread(_comments[cursor]);
-                        }
-                        cursor -= commentCount;
-                        if (showMore && cursor == 0) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            child: Center(
-                              child: _more
-                                  ? const CupertinoActivityIndicator()
-                                  : GlassButton.custom(
-                                      key: const ValueKey('comments-more'),
-                                      shape: const LiquidRoundedRectangle(
-                                        borderRadius: 22,
-                                      ),
-                                      width: 160,
-                                      height: 44,
-                                      onTap: () => _load(more: true),
-                                      child: Text(store.t('loadMore')),
-                                    ),
-                            ),
-                          );
-                        }
-                        return const SizedBox(height: 12);
-                      },
-                    );
-                  },
-                ),
+                      SliverPadding(
+                        padding: EdgeInsets.only(
+                          left: hPad.left,
+                          right: hPad.right,
+                        ),
+                        sliver: SliverList.builder(
+                          itemCount: totalCount,
+                          itemBuilder: (context, index) {
+                            var cursor = index;
+                            if (cursor == 0) return _header();
+                            cursor--;
+                            if (_loading) {
+                              if (cursor == 0) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(30),
+                                  child: Center(
+                                    child: CupertinoActivityIndicator(),
+                                  ),
+                                );
+                              }
+                              cursor--;
+                            }
+                            if (showError) {
+                              if (cursor == 0) {
+                                return CommunityEmpty(
+                                  icon: CupertinoIcons.wifi_exclamationmark,
+                                  title: communityError(store, _error),
+                                  action: GlassActionPill(
+                                    label: store.t('retry'),
+                                    onTap: () =>
+                                        _load(more: _comments.isNotEmpty),
+                                  ),
+                                );
+                              }
+                              cursor--;
+                            }
+                            if (showEmpty) {
+                              if (cursor == 0) {
+                                return CommunityEmpty(
+                                  icon: CupertinoIcons.chat_bubble_2,
+                                  title: store.t('noComments'),
+                                  message: store.t('commentHint'),
+                                );
+                              }
+                              cursor--;
+                            }
+                            if (cursor < commentCount) {
+                              return _thread(_comments[cursor]);
+                            }
+                            cursor -= commentCount;
+                            if (showMore && cursor == 0) {
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                child: Center(
+                                  child: _more
+                                      ? const CupertinoActivityIndicator()
+                                      : GlassButton.custom(
+                                          key: const ValueKey('comments-more'),
+                                          shape:
+                                              const LiquidRoundedSuperellipse(
+                                                borderRadius: 22,
+                                              ),
+                                          width: 160,
+                                          height: 44,
+                                          onTap: () => _load(more: true),
+                                          child: Text(store.t('loadMore')),
+                                        ),
+                                ),
+                              );
+                            }
+                            return const SizedBox(height: 12);
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
             Padding(
@@ -380,15 +406,10 @@ class _CommentsPageState extends State<CommentsPage> {
   }
 
   Widget _header() => Padding(
-    padding: const EdgeInsets.only(top: 12, bottom: 22),
+    padding: const EdgeInsets.only(bottom: 22),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          store.t('messageBoard'),
-          style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 10),
         Text(
           widget.title,
           maxLines: 2,
@@ -415,7 +436,7 @@ class _CommentsPageState extends State<CommentsPage> {
         ),
         const SizedBox(height: 16),
         Wrap(
-          spacing: 10,
+          spacing: 12,
           runSpacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
@@ -424,28 +445,55 @@ class _CommentsPageState extends State<CommentsPage> {
                 store.t('commentCount').replaceAll('{n}', '${_page!.total}'),
                 style: TextStyle(fontSize: 12, color: secondary(context)),
               ),
-            for (final order in [1, 0])
-              GlassButton.custom(
-                key: ValueKey('comment-order-$order'),
-                shape: const LiquidRoundedRectangle(borderRadius: 20),
-                width: 108,
-                height: 38,
-                onTap: () {
-                  if (_sending || _order == order) return;
-                  setState(() => _order = order);
-                  _load();
-                },
-                child: Text(
-                  store.t(order == 1 ? 'recommendedOrder' : 'timeOrder'),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _order == order ? brandBlue : secondary(context),
-                    fontWeight: _order == order
-                        ? FontWeight.w600
-                        : FontWeight.w400,
+            Builder(
+              builder: (context) {
+                final dark = Theme.of(context).brightness == Brightness.dark;
+                final controlHeight =
+                    (MediaQuery.textScalerOf(context).scale(13) + 22).clamp(
+                      38.0,
+                      56.0,
+                    );
+                return ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 236),
+                  child: GlassSegmentedControl(
+                    key: const ValueKey('comment-order-control'),
+                    height: controlHeight,
+                    borderRadius: controlHeight / 2,
+                    backgroundColor: dark
+                        ? const Color(0x1affffff)
+                        : const Color(0x14000000),
+                    indicatorColor: dark
+                        ? const Color(0x30ffffff)
+                        : Colors.white,
+                    selectedTextStyle: TextStyle(
+                      fontFamily: 'BahaSans',
+                      fontFamilyFallback: const ['BahaSansSC'],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: dark ? Colors.white : brandBlue,
+                    ),
+                    unselectedTextStyle: TextStyle(
+                      fontFamily: 'BahaSans',
+                      fontFamilyFallback: const ['BahaSansSC'],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: secondary(context),
+                    ),
+                    selectedIndex: _order == 1 ? 0 : 1,
+                    segments: [
+                      GlassSegment(label: store.t('recommendedOrder')),
+                      GlassSegment(label: store.t('timeOrder')),
+                    ],
+                    onSegmentSelected: (index) {
+                      final order = index == 0 ? 1 : 0;
+                      if (_sending || _order == order) return;
+                      setState(() => _order = order);
+                      _load();
+                    },
                   ),
-                ),
-              ),
+                );
+              },
+            ),
           ],
         ),
       ],
@@ -698,7 +746,7 @@ class _CommentsPageState extends State<CommentsPage> {
     _generation++;
     _draft.dispose();
     _focus.dispose();
-    _list.dispose();
+    _title.dispose();
     super.dispose();
   }
 }

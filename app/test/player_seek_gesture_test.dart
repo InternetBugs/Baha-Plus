@@ -169,6 +169,11 @@ void main() {
   double position(WidgetTester tester) =>
       tester.widget<GlassSlider>(slider).value;
 
+  Offset gestureOrigin(WidgetTester tester) {
+    final rect = tester.getRect(surface);
+    return Offset(rect.left + rect.width * .22, rect.center.dy);
+  }
+
   for (final fullscreen in [false, true]) {
     for (final rate in [1.0, 1.5, 2.0]) {
       testSeekWidgets(
@@ -180,7 +185,7 @@ void main() {
             fullscreen: fullscreen,
             state: _playback(rate: rate),
           );
-          final gesture = await tester.startGesture(tester.getCenter(surface));
+          final gesture = await tester.startGesture(gestureOrigin(tester));
           await tester.pump(
             kLongPressTimeout - const Duration(milliseconds: 1),
           );
@@ -217,7 +222,7 @@ void main() {
       tester,
     ) async {
       final portal = await launch(tester);
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await gesture.moveBy(movement);
       await tester.pump(kLongPressTimeout);
       expect(speedIndicator, findsNothing);
@@ -232,7 +237,7 @@ void main() {
       tester,
     ) async {
       final portal = await launch(tester, state: _playback(rate: 1.25));
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await tester.pump(kLongPressTimeout);
       expect(speedIndicator, findsOneWidget);
       await gesture.moveBy(movement);
@@ -251,7 +256,7 @@ void main() {
 
   testSeekWidgets('canceling an accepted hold restores speed', (tester) async {
     final portal = await launch(tester, state: _playback(rate: .75));
-    final gesture = await tester.startGesture(tester.getCenter(surface));
+    final gesture = await tester.startGesture(gestureOrigin(tester));
     await tester.pump(kLongPressTimeout);
     expect(speedIndicator, findsOneWidget);
     await gesture.cancel();
@@ -266,7 +271,7 @@ void main() {
     (tester) async {
       final portal = await launch(tester, state: _playback(rate: 1.75));
       portal.pendingRate = Completer<void>();
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await tester.pump(kLongPressTimeout);
       expect(portal.commands, [('rate', 2.0)]);
       await gesture.up();
@@ -285,7 +290,7 @@ void main() {
     'paused, ended, locked and unavailable playback cannot hold',
     (tester) async {
       final portal = await launch(tester);
-      final origin = tester.getCenter(surface);
+      final origin = gestureOrigin(tester);
       for (final state in [
         _playback(paused: true),
         _playback(ended: true),
@@ -332,7 +337,7 @@ void main() {
       (tester) async {
         final portal = await launch(tester, state: _playback(rate: 1.5));
         final store = portal.store;
-        final gesture = await tester.startGesture(tester.getCenter(surface));
+        final gesture = await tester.startGesture(gestureOrigin(tester));
         await tester.pump(kLongPressTimeout);
         expect(portal.commands, [('rate', 2.0)]);
         expect(speedIndicator, findsOneWidget);
@@ -419,16 +424,24 @@ void main() {
     (tester) async {
       final portal = await launch(tester);
       final store = portal.store;
-      final origin = tester.getCenter(surface);
+      final origin = gestureOrigin(tester);
       final gesture = await tester.startGesture(origin);
       await gesture.moveBy(const Offset(85, 0));
       await tester.pump();
       expect(preview, findsOneWidget);
+      expect(find.byKey(const ValueKey('player-center-controls')), findsNothing);
       expect(position(tester), closeTo(612, .001));
       expect(
-        find.text('10:12 / 20:00'),
-        findsNWidgets(2),
-        reason: 'The center preview and controls share the same target.',
+        find.descendant(of: preview, matching: find.text('10:12 / 20:00')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: controls, matching: find.text('10:12')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: controls, matching: find.text('20:00')),
+        findsOneWidget,
       );
       expect(find.text('+00:12'), findsOneWidget);
       expect(portal.commands, isEmpty);
@@ -497,7 +510,7 @@ void main() {
           state: _playback(position: 1, duration: duration),
         );
         final secondsPerPixel = duration.clamp(0, 120) / 850;
-        final gesture = await tester.startGesture(tester.getCenter(surface));
+        final gesture = await tester.startGesture(gestureOrigin(tester));
         await gesture.moveBy(const Offset(-100, 0));
         await tester.pump();
         expect(position(tester), 0);
@@ -513,7 +526,7 @@ void main() {
           duration: duration,
         );
         await tester.pump();
-        final next = await tester.startGesture(tester.getCenter(surface));
+        final next = await tester.startGesture(gestureOrigin(tester));
         await next.moveBy(const Offset(100, 0));
         await tester.pump();
         expect(position(tester), duration);
@@ -642,7 +655,7 @@ void main() {
       const Offset(5, 100),
       const Offset(-5, -100),
     ]) {
-      await tester.drag(surface, movement);
+      await tester.dragFrom(gestureOrigin(tester), movement);
       await tester.pump();
       expect(preview, findsNothing, reason: 'Movement: $movement');
       expect(portal.commands, isEmpty, reason: 'Movement: $movement');
@@ -704,14 +717,14 @@ void main() {
       )) {
         portal.store.playback.value = _playback(phase: phase);
         await tester.pump();
-        await tester.dragFrom(const Offset(400, 180), const Offset(100, 0));
+        await tester.dragFrom(const Offset(180, 180), const Offset(100, 0));
         await tester.pump();
         expect(preview, findsNothing, reason: phase.name);
         expect(portal.commands, isEmpty, reason: phase.name);
       }
       portal.store.playback.value = _playback(position: 0, duration: 0);
       await tester.pump();
-      await tester.dragFrom(const Offset(400, 180), const Offset(100, 0));
+      await tester.dragFrom(const Offset(180, 180), const Offset(100, 0));
       await tester.pump();
       expect(preview, findsNothing);
       expect(portal.commands, isEmpty);
@@ -735,9 +748,13 @@ void main() {
       expect(portal.commands, [('seek', target)]);
       expect(position(tester), target);
 
-      await tester.tap(surface);
+      await tester.tapAt(gestureOrigin(tester));
       await tester.pump(const Duration(milliseconds: 400));
       expect(controls.hitTestable(), findsNothing);
+      expect(
+        find.byKey(const ValueKey('player-center-controls')).hitTestable(),
+        findsNothing,
+      );
       expect(portal.commands, hasLength(1));
       await tester.tap(surface);
       await tester.pump(const Duration(milliseconds: 100));
@@ -752,7 +769,7 @@ void main() {
     'canceled and failed seeks restore the actual playback position',
     (tester) async {
       final portal = await launch(tester);
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await gesture.moveBy(const Offset(85, 0));
       await tester.pump();
       await gesture.cancel();
@@ -771,7 +788,7 @@ void main() {
       expect(portal.commands, isEmpty);
 
       portal.failSeek = true;
-      await tester.drag(surface, const Offset(85, 0));
+      await tester.dragFrom(gestureOrigin(tester), const Offset(85, 0));
       await tester.pump();
       expect(portal.commands, [('seek', 612.0)]);
       expect(preview, findsNothing);
@@ -791,7 +808,7 @@ void main() {
       tester,
     ) async {
       final portal = await launch(tester);
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await gesture.moveBy(const Offset(85, 0));
       await tester.pump();
       expect(preview, findsOneWidget);
@@ -827,13 +844,13 @@ void main() {
   ) async {
     final portal = await launch(tester);
     portal.pendingSeek = Completer<void>();
-    await tester.drag(surface, const Offset(85, 0));
+    await tester.dragFrom(gestureOrigin(tester), const Offset(85, 0));
     await tester.pump();
     expect(portal.commands, [('seek', 612.0)]);
     portal.store.setPlayerLocked(true);
     portal.store.setPlayerLocked(false);
     await tester.pump();
-    final gesture = await tester.startGesture(tester.getCenter(surface));
+    final gesture = await tester.startGesture(gestureOrigin(tester));
     await gesture.moveBy(const Offset(-85, 0));
     await tester.pump();
     expect(position(tester), closeTo(588, .001));
@@ -875,7 +892,7 @@ void main() {
         portal.commandHandler = native.command;
         await tester.pump();
         final playCalls = platform.playCalls.length;
-        final gesture = await tester.startGesture(tester.getCenter(surface));
+        final gesture = await tester.startGesture(gestureOrigin(tester));
         await tester.pump(kLongPressTimeout);
         expect(speedIndicator, findsOneWidget);
         expect(native.state.rate, 2);
@@ -925,7 +942,7 @@ void main() {
       );
       portal.commandHandler = native.command;
       await tester.pump();
-      final gesture = await tester.startGesture(tester.getCenter(surface));
+      final gesture = await tester.startGesture(gestureOrigin(tester));
       await gesture.moveBy(const Offset(85, 0));
       await tester.pump();
       expect(position(tester), closeTo(612, .001));
@@ -992,6 +1009,83 @@ void main() {
       await tester.longPress(forward);
       await tester.pump();
       expect(portal.commands, [('seek', 115.0), ('seek', 125.0)]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'fullscreen separates center transport controls from the slim bottom scrubber and adapts phone vs tablet sizing',
+    (tester) async {
+      final portal = await launch(
+        tester,
+        size: const Size(844, 390),
+        state: _playback(position: 125, duration: 1440),
+      );
+      final centerControls = find.byKey(
+        const ValueKey('player-center-controls'),
+      );
+      final topCapsule = find.byKey(
+        const ValueKey('player-top-actions-capsule'),
+      );
+      final closeBtn = find.byKey(const ValueKey('player-fullscreen-close'));
+      final lockBtn = find.byKey(const ValueKey('player-lock'));
+
+      // Phone landscape: slim single-row bottom bar + unified 36pt top/lock controls.
+      final phoneBar = tester.getRect(controls);
+      final phoneCenter = tester.getRect(centerControls);
+      final phoneTopCapsule = tester.getRect(topCapsule);
+      expect(phoneBar.height, closeTo(44, 1));
+      expect(phoneCenter.bottom, lessThan(phoneBar.top));
+      expect(tester.getSize(closeBtn), const Size(36, 36));
+      expect(tester.getSize(lockBtn), const Size(36, 36));
+      expect(phoneTopCapsule.height, closeTo(36, 1));
+      expect(
+        find.descendant(of: controls, matching: find.text('02:05')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: controls, matching: find.text('24:00')),
+        findsOneWidget,
+      );
+
+      // Center transport actions trigger play/pause and relative seeks.
+      await tester.tap(find.byIcon(CupertinoIcons.gobackward_10));
+      await tester.pump();
+      await tester.tap(find.byIcon(CupertinoIcons.pause_fill));
+      await tester.pump();
+      expect(portal.commands, [('seek', 115.0), ('pause', null)]);
+
+      // Buffering hides the center transport buttons to avoid overlapping the spinner.
+      portal.store.playback.value = const PlaybackState(
+        phase: PlaybackPhase.content,
+        surfaceReady: true,
+        paused: false,
+        buffering: true,
+        duration: 1440,
+        position: 115,
+      );
+      await tester.pump();
+      expect(centerControls, findsNothing);
+      expect(
+        find.byKey(const ValueKey('player-loading-indicator')),
+        findsOneWidget,
+      );
+      portal.store.playback.value = _playback(position: 115, duration: 1440);
+      await tester.pump();
+      expect(centerControls, findsOneWidget);
+
+      // Tablet fullscreen scales up to 40pt top/lock controls and 48pt bottom pill.
+      tester.view.physicalSize = const Size(1180, 820);
+      await tester.pump();
+      expect(tester.getRect(controls).height, closeTo(48, 1));
+      expect(tester.getSize(closeBtn), const Size(40, 40));
+      expect(tester.getSize(lockBtn), const Size(40, 40));
+      expect(tester.getRect(topCapsule).height, closeTo(40, 1));
+
+      // Narrow Split View fullscreen stays overflow-free.
+      tester.view.physicalSize = const Size(320, 640);
+      await tester.pump();
+      expect(tester.getRect(controls).width, lessThanOrEqualTo(320));
       expect(tester.takeException(), isNull);
     },
   );

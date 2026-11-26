@@ -19,6 +19,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     required this.preferredQuality,
     required this.onState,
     required this.diagnostics,
+    this.skipAgeConfirmation = false,
     this.checkpoint,
     Duration Function()? now,
     NativeHttpApi? api,
@@ -41,6 +42,7 @@ class NativeHttpPlayback extends ChangeNotifier {
 
   final String document, videoId;
   final int preferredQuality;
+  final bool skipAgeConfirmation;
   final void Function(PlaybackState) onState;
   final AppDiagnostics diagnostics;
   final Json? checkpoint;
@@ -74,7 +76,9 @@ class NativeHttpPlayback extends ChangeNotifier {
   Future<void> _reports = Future.value();
   Future<void> released = Future.value();
 
-  bool get needsConsent =>
+  bool get needsConsent => !skipAgeConfirmation && _awaitingConsent;
+  bool get _awaitingConsent =>
+      !_disposed &&
       preparation != null &&
       player == null &&
       failureStage == null &&
@@ -103,7 +107,11 @@ class NativeHttpPlayback extends ChangeNotifier {
       final result = await api.prepare(videoId);
       if (!_live(revision)) return;
       preparation = result;
-      _publish(const PlaybackState(phase: PlaybackPhase.age));
+      if (skipAgeConfirmation) {
+        await consent();
+      } else {
+        _publish(const PlaybackState(phase: PlaybackPhase.age));
+      }
     } catch (error) {
       _fail(error, revision);
     }
@@ -112,7 +120,7 @@ class NativeHttpPlayback extends ChangeNotifier {
   bool _live(int revision) => !_disposed && revision == _revision;
 
   Future<void> consent() async {
-    if (!needsConsent || !_foreground) return;
+    if (!_awaitingConsent || !_foreground) return;
     final revision = _revision;
     _loading = true;
     _publish(const PlaybackState());
@@ -220,18 +228,37 @@ class NativeHttpPlayback extends ChangeNotifier {
     }
   }
 
-  List<NativeDanmaku> _mergeDanmaku(List<NativeDanmaku> items) =>
-      List.unmodifiable(
-        ({
-          for (final item in items) item.id: item,
-          ..._sentDanmaku,
-        }.values.toList()..sort((a, b) => a.time.compareTo(b.time))),
-      );
+  List<NativeDanmaku> _mergeDanmaku(List<NativeDanmaku> items) {
+    if (_sentDanmaku.isEmpty) return items;
+    return List.unmodifiable(
+      ({
+        for (final item in items) item.id: item,
+        ..._sentDanmaku,
+      }.values.toList()..sort((a, b) => a.time.compareTo(b.time))),
+    );
+  }
 
   void addSentDanmaku(NativeDanmaku item) {
     if (_disposed || !_contentStarted) return;
+    final replacing =
+        _sentDanmaku.containsKey(item.id) ||
+        _danmaku.any((existing) => existing.id == item.id);
     _sentDanmaku[item.id] = item;
-    _danmaku = _mergeDanmaku(_danmaku);
+    if (replacing) {
+      _danmaku = _mergeDanmaku(_danmaku);
+    } else {
+      var low = 0, high = _danmaku.length;
+      while (low < high) {
+        final middle = (low + high) ~/ 2;
+        if (_danmaku[middle].time <= item.time) {
+          low = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      final updated = List<NativeDanmaku>.of(_danmaku)..insert(low, item);
+      _danmaku = List.unmodifiable(updated);
+    }
     notifyListeners();
   }
 
@@ -288,26 +315,29 @@ class NativeHttpPlayback extends ChangeNotifier {
     _timer = Timer.periodic(const Duration(milliseconds: 250), (_) => _tick());
   }
 
-  PlaybackState _project(PlaybackState value) => PlaybackState(
-    phase: value.phase == PlaybackPhase.content && _ad
-        ? PlaybackPhase.advertisement
-        : value.phase,
-    surfaceReady: value.surfaceReady,
-    paused: value.paused,
-    buffering: value.buffering,
-    ended: value.ended,
-    muted: value.muted,
-    position: value.position,
-    duration: value.duration,
-    buffered: value.buffered,
-    bufferedRanges: value.bufferedRanges,
-    downloadBytesPerSecond: value.downloadBytesPerSecond,
-    rate: value.rate,
-    qualities: _ad ? const [] : value.qualities,
-    quality: _ad ? 0 : value.quality,
-    hasDanmaku: !_ad && value.hasDanmaku,
-    danmaku: !_ad && value.danmaku,
-  );
+  PlaybackState _project(PlaybackState value) {
+    if (!_ad) return value;
+    return PlaybackState(
+      phase: value.phase == PlaybackPhase.content
+          ? PlaybackPhase.advertisement
+          : value.phase,
+      surfaceReady: value.surfaceReady,
+      paused: value.paused,
+      buffering: value.buffering,
+      ended: value.ended,
+      muted: value.muted,
+      position: value.position,
+      duration: value.duration,
+      buffered: value.buffered,
+      bufferedRanges: value.bufferedRanges,
+      downloadBytesPerSecond: value.downloadBytesPerSecond,
+      rate: value.rate,
+      qualities: const [],
+      quality: 0,
+      hasDanmaku: false,
+      danmaku: false,
+    );
+  }
 
   void _mediaChanged(PlaybackState value) {
     if (_disposed || failureStage != null) return;
@@ -483,6 +513,7 @@ class NativeHttpPlayback extends ChangeNotifier {
       _lastCanSkipAd = canSkipAd;
       notifyListeners();
     }
+    if (active && skipAgeConfirmation) await consent();
   }
 
   void _publish(PlaybackState value, {bool notify = true}) {

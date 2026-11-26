@@ -92,6 +92,7 @@ void main() {
         onState: (_) {},
       )..video = video;
 
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       store.playback.value = const PlaybackState(
         phase: PlaybackPhase.advertisement,
@@ -148,6 +149,9 @@ void main() {
         await tester.pump();
         expect(commands, isEmpty);
       } else {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
         await tester.pump();
         expect(store.applicationActive, isFalse);
@@ -170,6 +174,7 @@ void main() {
       expect(store.playback.value.position, content.position);
       expect(commands.last, 'pause');
 
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
       expect(store.playback.value.paused, isTrue);

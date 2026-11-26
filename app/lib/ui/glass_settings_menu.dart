@@ -712,9 +712,12 @@ class GlassSettingsSwitchRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          CupertinoSwitch(
+          GlassSwitch(
             value: value,
-            activeTrackColor: brandBlue,
+            activeColor: brandBlue,
+            width: 58,
+            height: 28,
+            semanticLabel: title,
             onChanged: onChanged,
           ),
         ],

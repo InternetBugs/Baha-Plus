@@ -17,6 +17,7 @@ import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/app_root.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
+import 'package:baha_plus/ui/glass_alert.dart';
 import 'package:baha_plus/ui/player_page.dart';
 import 'package:baha_plus/ui/detail_page.dart';
 import 'package:baha_plus/ui/seasonal_page.dart';
@@ -286,7 +287,9 @@ void main() {
         ],
       );
       final tabs = find.byType(GlassTabBar);
-      expect(tester.widget<GlassTabBar>(tabs).tabs.length, 5);
+      final tabBar = tester.widget<GlassTabBar>(tabs);
+      expect(tabBar.tabs.length, 4);
+      expect(tabBar.searchConfig, isNotNull);
       await tester.tap(
         find.descendant(of: tabs, matching: find.text(store.t('watchHistory'))),
       );
@@ -467,13 +470,7 @@ void main() {
           }),
       ];
       store.accountSynced = true;
-      final labels = [
-        'explore',
-        'schedule',
-        'library',
-        'watchHistory',
-        'search',
-      ];
+      final labels = ['explore', 'schedule', 'library', 'watchHistory'];
       for (var index = 0; index < labels.length; index++) {
         store.selectTab(index);
         await frames(tester);
@@ -494,6 +491,10 @@ void main() {
         await frames(tester);
         expect(controller.offset, closeTo(0, .1), reason: labels[index]);
       }
+      // The separate iOS 26 search orb morphs into the search tab.
+      await tester.tap(find.byKey(const ValueKey('pill-collapsed')));
+      await frames(tester);
+      expect(store.tab, 4);
       expect(tester.takeException(), isNull);
     },
   );
@@ -728,8 +729,13 @@ void main() {
       expect(find.text(store.t('logoutFailed')), findsOneWidget);
       expect(store.accountProfile, isNull);
       expect(store.hasAccount, isFalse);
+      expect(find.byType(CupertinoAlertDialog), findsNothing);
+      expect(find.byType(GlassAlert), findsOneWidget);
       await tester.tap(
-        find.widgetWithText(CupertinoDialogAction, store.t('close')),
+        find.descendant(
+          of: find.byType(GlassAlert),
+          matching: find.text(store.t('close')),
+        ),
       );
       await frames(tester);
       expect(find.text(store.t('connectAccount')), findsOneWidget);
@@ -877,6 +883,8 @@ void main() {
       expect(store.applicationActive, isFalse);
       expect(portal.scripts.last, contains('"pause"'));
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await frames(tester);
       expect(store.applicationActive, isTrue);
@@ -911,9 +919,20 @@ void main() {
       final fullControlBar = tester.getRect(
         find.byKey(const ValueKey('video-glass-controls')),
       );
+      final centerControls = tester.getRect(
+        find.byKey(const ValueKey('player-center-controls')),
+      );
+      final topActionsCapsule = tester.getRect(
+        find.byKey(const ValueKey('player-top-actions-capsule')),
+      );
       expect(fullVideo.contains(fullControlBar.topLeft), isTrue);
       expect(fullVideo.contains(fullControlBar.bottomRight), isTrue);
-      expect(fullControlBar.height, greaterThan(controlBar.height));
+      expect(fullVideo.contains(centerControls.topLeft), isTrue);
+      expect(fullVideo.contains(centerControls.bottomRight), isTrue);
+      expect(fullVideo.contains(topActionsCapsule.topLeft), isTrue);
+      expect(fullVideo.contains(topActionsCapsule.bottomRight), isTrue);
+      expect(fullControlBar.height, lessThan(controlBar.height));
+      expect(fullControlBar.height, lessThanOrEqualTo(52));
       expect(
         tester.getSize(find.bySemanticsLabel(store.t('pausePlayback'))).height,
         greaterThanOrEqualTo(52),
@@ -1172,12 +1191,13 @@ void main() {
       }
 
       Future<void> doubleTapVideo() async {
-        final center = tester.getCenter(
+        final rect = tester.getRect(
           find.byKey(const ValueKey('test-video-surface')),
         );
-        await tester.tapAt(center);
+        final target = Offset(rect.left + rect.width * .22, rect.center.dy);
+        await tester.tapAt(target);
         await tester.pump(const Duration(milliseconds: 80));
-        await tester.tapAt(center);
+        await tester.tapAt(target);
         await frames(tester);
       }
 
@@ -1340,20 +1360,30 @@ void main() {
       final exitFullscreen = find.byKey(
         const ValueKey('player-fullscreen-close'),
       );
+      final centerControls = find.byKey(
+        const ValueKey('player-center-controls'),
+      );
       final danmaku = find.byKey(const ValueKey('player-danmaku-button'));
       final settings = find.bySemanticsLabel(store.t('playbackSettings'));
+      final fullscreenBg = Offset(
+        video.left + video.width * .22,
+        video.center.dy,
+      );
       expect(exitFullscreen.hitTestable(), findsOneWidget);
+      expect(centerControls.hitTestable(), findsOneWidget);
       expect(danmaku.hitTestable(), findsOneWidget);
       expect(settings.hitTestable(), findsOneWidget);
-      await tester.tapAt(video.center);
+      await tester.tapAt(fullscreenBg);
       await frames(tester);
       expect(controls.hitTestable(), findsNothing);
+      expect(centerControls.hitTestable(), findsNothing);
       expect(exitFullscreen.hitTestable(), findsNothing);
       expect(danmaku.hitTestable(), findsNothing);
       expect(settings.hitTestable(), findsNothing);
       await tester.tapAt(video.center);
       await frames(tester);
       expect(controls.hitTestable(), findsOneWidget);
+      expect(centerControls.hitTestable(), findsOneWidget);
       expect(exitFullscreen.hitTestable(), findsOneWidget);
       expect(danmaku.hitTestable(), findsOneWidget);
       expect(settings.hitTestable(), findsOneWidget);
@@ -1362,12 +1392,14 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       await frames(tester);
       expect(controls.hitTestable(), findsNothing);
+      expect(centerControls.hitTestable(), findsNothing);
       expect(exitFullscreen.hitTestable(), findsNothing);
       expect(danmaku.hitTestable(), findsNothing);
       expect(settings.hitTestable(), findsNothing);
       await tester.tapAt(video.center);
       await frames(tester);
       expect(controls.hitTestable(), findsOneWidget);
+      expect(centerControls.hitTestable(), findsOneWidget);
       expect(exitFullscreen.hitTestable(), findsOneWidget);
       expect(danmaku.hitTestable(), findsOneWidget);
       expect(settings.hitTestable(), findsOneWidget);

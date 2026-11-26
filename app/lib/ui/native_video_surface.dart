@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:ui' as ui;
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:video_player/video_player.dart';
@@ -11,6 +10,7 @@ import '../core/danmaku_animation.dart';
 import '../core/native_danmaku.dart';
 import '../core/playback_state.dart';
 import '../data/native_playback.dart';
+import 'chrome.dart';
 
 export '../core/native_danmaku.dart';
 
@@ -41,6 +41,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   late final Ticker _ticker;
   final _position = ValueNotifier<double>(0);
   final _text = <String, TextPainter>{};
+  final _retained = <String>{};
   final _sprites = _DanmakuRasterCache();
   final _lanes = StableDanmakuLanes();
   double _pixelRatio = 1;
@@ -111,8 +112,10 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
       widget.playback.addListener(_changed);
       _seekRevision = null;
     }
-    if (oldWidget.settings != widget.settings ||
-        oldWidget.playback != widget.playback) {
+    if (oldWidget.playback != widget.playback ||
+        !widget.settings.enabled ||
+        oldWidget.settings.opacity != widget.settings.opacity ||
+        oldWidget.settings.scale != widget.settings.scale) {
       _clearText();
     }
     if (visualChange) _updateEnabledItems();
@@ -222,11 +225,11 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
         nextBoundary = math.min(nextBoundary ?? item.time, item.time);
         break;
       }
-      final end = item.time + (item.mode == 'rolling' ? 10 : 5);
+      final end = item.time + item.duration;
       if (end <= position) continue;
       visible = true;
-      rolling |= item.mode == 'rolling';
-      if (item.mode == 'rolling') {
+      if (item.isRolling) {
+        rolling = true;
         rollingEnd = math.max(rollingEnd ?? end, end);
       }
       nextBoundary = math.min(nextBoundary ?? end, end);
@@ -268,6 +271,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
 
   void _clearText() {
     _lanes.clear();
+    _retained.clear();
     _sprites.clear();
     for (final painter in _text.values) {
       painter.dispose();
@@ -328,11 +332,12 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
               key: const ValueKey('native-danmaku-canvas'),
               painter: _DanmakuPainter(
                 position: _position,
-                items: widget.danmaku,
+                items: _enabledItems,
                 settings: widget.settings,
                 text: _text,
                 lanes: _lanes,
                 sprites: _sprites,
+                retained: _retained,
                 pixelRatio: _pixelRatio,
               ),
             ),
@@ -349,9 +354,17 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
                     widget.errorLabel,
                     style: const TextStyle(color: Colors.white),
                   ),
-                  CupertinoButton(
-                    onPressed: widget.onRetry,
-                    child: Text(widget.retryLabel),
+                  const SizedBox(height: 14),
+                  GlassActionPill(
+                    useOwnLayer: true,
+                    platformViewBackdrop: true,
+                    settings: mediaGlass.copyWith(
+                      backerColor: const Color(0x66000000),
+                      saturation: 1.0,
+                    ),
+                    foregroundColor: Colors.white,
+                    label: widget.retryLabel,
+                    onTap: widget.onRetry,
                   ),
                 ],
               ),
@@ -433,21 +446,13 @@ class _DanmakuRasterCache {
     }
   }
 
-  void retain(Set<String> ids) {
-    List<String>? expired;
-    for (final id in _images.keys) {
-      if (!ids.contains(id)) (expired ??= <String>[]).add(id);
+  void remove(String id) {
+    final sprite = _images.remove(id);
+    if (sprite != null) {
+      bytes -= sprite.bytes;
+      sprite.image.dispose();
     }
-    if (expired != null) {
-      for (final id in expired) {
-        final sprite = _images.remove(id)!;
-        bytes -= sprite.bytes;
-        sprite.image.dispose();
-      }
-    }
-    if (_unavailable.isNotEmpty) {
-      _unavailable.removeWhere((id) => !ids.contains(id));
-    }
+    _unavailable.remove(id);
   }
 
   void clear() {
@@ -468,6 +473,7 @@ class _DanmakuPainter extends CustomPainter {
     required this.text,
     required this.lanes,
     required this.sprites,
+    required this.retained,
     required this.pixelRatio,
   }) : super(repaint: position);
   final ValueNotifier<double> position;
@@ -476,13 +482,14 @@ class _DanmakuPainter extends CustomPainter {
   final Map<String, TextPainter> text;
   final StableDanmakuLanes lanes;
   final _DanmakuRasterCache sprites;
+  final Set<String> retained;
   final double pixelRatio;
   static final _spritePaint = Paint()..filterQuality = FilterQuality.low;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final retained = <String>{};
-    if (settings.enabled && size.width > 0 && size.height > 0) {
+    retained.clear();
+    if (settings.enabled && items.isNotEmpty && size.width > 0 && size.height > 0) {
       final now = position.value;
       var low = 0, high = items.length;
       while (low < high) {
@@ -509,18 +516,14 @@ class _DanmakuPainter extends CustomPainter {
       ) {
         considered++;
         final item = items[index];
-        final duration = item.mode == 'rolling' ? 10.0 : 5.0;
-        if (now >= item.time + duration ||
-            (item.mode == 'rolling' && !settings.rolling) ||
-            (item.mode == 'top' && !settings.top) ||
-            (item.mode == 'bottom' && !settings.bottom)) {
-          continue;
-        }
+        final duration = item.duration;
+        final end = item.time + duration;
+        if (now >= end) continue;
         final lane = lanes.assign(
           id: item.id,
           mode: item.mode,
           start: item.time,
-          end: item.time + duration,
+          end: end,
         );
         if (lane == null) continue;
         final painter = text.putIfAbsent(
@@ -541,10 +544,10 @@ class _DanmakuPainter extends CustomPainter {
         );
         retained.add(item.id);
         final progress = (now - item.time) / duration;
-        final x = item.mode == 'rolling'
+        final x = item.isRolling
             ? size.width - progress * (size.width + painter.width)
             : (size.width - painter.width) / 2;
-        final y = item.mode == 'bottom'
+        final y = identical(item.mode, 'bottom') || item.mode == 'bottom'
             ? size.height - (lane + 1) * lineHeight - 5
             : lane * lineHeight + 5;
         final sprite = sprites.obtain(item.id, painter, pixelRatio);
@@ -569,15 +572,24 @@ class _DanmakuPainter extends CustomPainter {
       lanes.clear();
     }
     if (text.length > retained.length) {
-      final expired = <String>[
-        for (final id in text.keys)
-          if (!retained.contains(id)) id,
-      ];
-      for (final id in expired) {
-        text.remove(id)!.dispose();
+      if (retained.isEmpty) {
+        for (final painter in text.values) {
+          painter.dispose();
+        }
+        text.clear();
+        sprites.clear();
+      } else {
+        final expired = <String>[
+          for (final id in text.keys)
+            if (!retained.contains(id)) id,
+        ];
+        for (var i = 0; i < expired.length; i++) {
+          final id = expired[i];
+          text.remove(id)!.dispose();
+          sprites.remove(id);
+        }
       }
     }
-    sprites.retain(retained);
   }
 
   @override

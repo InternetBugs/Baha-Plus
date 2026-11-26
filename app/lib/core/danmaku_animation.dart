@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 /// Interpolates the presentation clock between native media samples.
 ///
 /// A buffer/volume notification carrying the same media position must not
@@ -69,18 +71,51 @@ class _DanmakuLaneDecision {
 /// all lanes every frame makes surviving messages jump when an older one exits.
 class StableDanmakuLanes {
   final _decisions = <String, _DanmakuLaneDecision>{};
+  Float64List _rollingEnds = Float64List(0);
+  Float64List _topEnds = Float64List(0);
+  Float64List _bottomEnds = Float64List(0);
+  double _nextExpiry = double.infinity;
   int _laneCount = 0;
   double? _lastPosition;
   int get decisionCount => _decisions.length;
+
+  Float64List _endsForMode(String mode) => switch (mode) {
+    'rolling' => _rollingEnds,
+    'top' => _topEnds,
+    'bottom' => _bottomEnds,
+    _ => _rollingEnds,
+  };
 
   void prepare({required double position, required int laneCount}) {
     if (_laneCount != laneCount ||
         (_lastPosition != null && position < _lastPosition! - .25)) {
       clear();
+      _laneCount = laneCount;
+      _rollingEnds = Float64List(laneCount)
+        ..fillRange(0, laneCount, double.negativeInfinity);
+      _topEnds = Float64List(laneCount)
+        ..fillRange(0, laneCount, double.negativeInfinity);
+      _bottomEnds = Float64List(laneCount)
+        ..fillRange(0, laneCount, double.negativeInfinity);
     }
-    _laneCount = laneCount;
     _lastPosition = position;
-    _decisions.removeWhere((_, decision) => decision.end <= position);
+    if (position >= _nextExpiry) {
+      var next = double.infinity;
+      List<String>? expired;
+      _decisions.forEach((id, decision) {
+        if (decision.end <= position) {
+          (expired ??= <String>[]).add(id);
+        } else if (decision.end < next) {
+          next = decision.end;
+        }
+      });
+      if (expired != null) {
+        for (var i = 0; i < expired!.length; i++) {
+          _decisions.remove(expired![i]);
+        }
+      }
+      _nextExpiry = next;
+    }
   }
 
   int? assign({
@@ -92,28 +127,30 @@ class StableDanmakuLanes {
     final previous = _decisions[id];
     if (previous != null) return previous.lane;
     if (_decisions.length >= 512) return null;
-    final occupied = <int>{
-      for (final decision in _decisions.values)
-        if (decision.mode == mode &&
-            decision.lane != null &&
-            decision.end > start)
-          decision.lane!,
-    };
+    final laneEnds = _endsForMode(mode);
+    final currentPos = _lastPosition ?? start;
     int? selected;
     for (var lane = 0; lane < _laneCount; lane++) {
-      if (!occupied.contains(lane)) {
+      final occupiedUntil = laneEnds[lane];
+      if (occupiedUntil <= currentPos || occupiedUntil <= start) {
         selected = lane;
+        laneEnds[lane] = end;
         break;
       }
     }
     // Remember a skipped message too, so it does not suddenly appear halfway
     // across the screen when a lane becomes free in a later frame.
     _decisions[id] = _DanmakuLaneDecision(mode, selected, end);
+    if (end < _nextExpiry) _nextExpiry = end;
     return selected;
   }
 
   void clear() {
     _decisions.clear();
+    _rollingEnds.fillRange(0, _rollingEnds.length, double.negativeInfinity);
+    _topEnds.fillRange(0, _topEnds.length, double.negativeInfinity);
+    _bottomEnds.fillRange(0, _bottomEnds.length, double.negativeInfinity);
+    _nextExpiry = double.infinity;
     _lastPosition = null;
   }
 }

@@ -61,7 +61,7 @@ class CommentAttachment extends StatelessWidget {
           builder: (_) => _AttachmentViewer(store: store, url: url),
         ),
       ),
-      child: ClipRRect(
+      child: ClipRSuperellipse(
         borderRadius: BorderRadius.circular(16),
         child: ConstrainedBox(
           constraints: compact
@@ -98,7 +98,7 @@ class _AttachmentViewer extends StatelessWidget {
   @override
   Widget build(BuildContext context) => GlassScaffold(
     key: const ValueKey('comment-image-viewer'),
-    extendBody: false,
+    edgeFade: false,
     backgroundColor: Colors.black,
     appBar: GlassAppBar(
       title: Text(

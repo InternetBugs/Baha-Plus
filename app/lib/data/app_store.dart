@@ -114,6 +114,7 @@ class AppStore extends ChangeNotifier {
       scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
     }
     String? language, appearance, danmaku, quality, glass, skipOpLongPress;
+    String? skipAgeConfirmation;
     try {
       language = await disk.read('baha.device.language');
       appearance = await disk.read('baha.device.appearance');
@@ -121,6 +122,7 @@ class AppStore extends ChangeNotifier {
       quality = await disk.read('baha.device.quality');
       skipOpLongPress = await disk.read('baha.device.skipOpLongPress');
       glass = await disk.read('baha.device.glass');
+      skipAgeConfirmation = await disk.read('baha.device.skipAgeConfirmation');
     } catch (_) {
       // Missing device preferences must not prevent startup.
     }
@@ -161,6 +163,7 @@ class AppStore extends ChangeNotifier {
     }
     store._skipOpLongPress =
         skipOpLongPress != '0' && skipOpLongPress != 'false';
+    store._skipAgeConfirmation = skipAgeConfirmation == '1';
     try {
       if (danmaku != null) {
         store.danmakuSettings = DanmakuSettings.fromJson(
@@ -326,11 +329,16 @@ class AppStore extends ChangeNotifier {
   Future<void>? _accountCacheWrite;
   int _preferredQuality = 0;
   bool _skipOpLongPress = true;
+  bool _skipAgeConfirmation = false;
   Future<void> _qualityPreferenceWrite = Future<void>.value();
+  Future<void>? _skipAgeConfirmationPreferenceWrite;
   PlaybackState? _lastGoodPlayback;
   Future<void> retryPlayback() => reloadBrowser();
 
   DanmakuSettings danmakuSettings = const DanmakuSettings();
+  int _danmakuWriteRevision = 0;
+  int _danmakuWrittenRevision = 0;
+  Future<void>? _danmakuPreferenceWrite;
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
   int _readRevision = 0;
@@ -504,10 +512,22 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  Future<void> setDanmakuSettings(DanmakuSettings value) async {
+  Future<void> setDanmakuSettings(DanmakuSettings value) {
     danmakuSettings = value;
     _emit();
-    await _savePreference('baha.device.danmaku', jsonEncode(value.toJson()));
+    ++_danmakuWriteRevision;
+    return _danmakuPreferenceWrite ??= () async {
+      try {
+        while (!_disposed && _danmakuWrittenRevision < _danmakuWriteRevision) {
+          final revision = _danmakuWriteRevision;
+          final encoded = jsonEncode(danmakuSettings.toJson());
+          await _savePreference('baha.device.danmaku', encoded);
+          _danmakuWrittenRevision = revision;
+        }
+      } finally {
+        _danmakuPreferenceWrite = null;
+      }
+    }();
   }
 
   Future<void> refreshNotifications() async {
@@ -622,6 +642,7 @@ class AppStore extends ChangeNotifier {
   String t(String key) => dictionaries[language]?[key] ?? key;
   int get preferredQuality => _preferredQuality;
   bool get skipOpLongPress => _skipOpLongPress;
+  bool get skipAgeConfirmation => _skipAgeConfirmation;
   bool get simplified => language == 'zh-Hans';
   bool get showsPlayer =>
       operation.intent == BrowserIntent.play && playingAnime != null;
@@ -892,6 +913,17 @@ class AppStore extends ChangeNotifier {
     _skipOpLongPress = value;
     _emit();
     await _savePreference('baha.device.skipOpLongPress', value ? '1' : '0');
+  }
+
+  Future<void> setSkipAgeConfirmation(bool value) async {
+    if (_skipAgeConfirmation == value) return;
+    _skipAgeConfirmation = value;
+    Future<void> save() =>
+        _savePreference('baha.device.skipAgeConfirmation', value ? '1' : '0');
+    final write = _skipAgeConfirmationPreferenceWrite =
+        _skipAgeConfirmationPreferenceWrite?.then((_) => save()) ?? save();
+    _emit();
+    await write;
   }
 
   Future<void> _savePreference(String key, String value) async {
@@ -1342,6 +1374,7 @@ class AppStore extends ChangeNotifier {
       document: document,
       videoId: videoId,
       preferredQuality: _preferredQuality,
+      skipAgeConfirmation: skipAgeConfirmation,
       checkpoint: checkpoint,
       diagnostics: diagnostics,
       api: nativeHttpApiFactory?.call(),

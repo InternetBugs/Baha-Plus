@@ -15,6 +15,7 @@ import 'official_browser.dart';
 import 'native_http_player.dart';
 import 'seasonal_page.dart';
 import 'notifications_page.dart';
+import 'update_dialog.dart';
 
 class AppRoot extends StatefulWidget {
   const AppRoot({
@@ -36,6 +37,7 @@ class _AppRootState extends State<AppRoot>
   final _search = TextEditingController();
   late final AnimationController _tabAnimation;
   late int _lastTab;
+  int _lastBrowseTab = 0;
   late PlaybackEnvironment _playbackEnvironment;
   bool _foreground = true;
   final _officialSessionKey = GlobalKey(debugLabel: 'official-session');
@@ -60,6 +62,7 @@ class _AppRootState extends State<AppRoot>
     super.initState();
     store.setPortalHostActive(widget.mountPortal);
     _lastTab = store.tab;
+    _lastBrowseTab = store.tab < 4 ? store.tab : 0;
     _tabAnimation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 280),
@@ -129,52 +132,19 @@ class _AppRootState extends State<AppRoot>
         if (!automatic) await _updateMessage('noAvailableUpdates');
         return;
       }
-      final download = await showCupertinoDialog<bool>(
+      final notes = release.changelog;
+      final download = await showUpdateAvailableDialog(
         context: context,
-        builder: (dialog) => CupertinoAlertDialog(
-          title: Text(store.t('updateAvailable')),
-          content: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(dialog).height * .45,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    store
-                        .t('updateVersionDetails')
-                        .replaceAll('{current}', updates.currentVersion!)
-                        .replaceAll('{latest}', '${release.version}'),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    store.t('updateNotes'),
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    release.notes.trim().isEmpty
-                        ? store.t('noUpdateNotes')
-                        : release.notes.trim(),
-                    textAlign: TextAlign.left,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            CupertinoDialogAction(
-              onPressed: () => Navigator.pop(dialog, false),
-              child: Text(store.t('updateLater')),
-            ),
-            CupertinoDialogAction(
-              isDefaultAction: true,
-              onPressed: () => Navigator.pop(dialog, true),
-              child: Text(store.t('downloadUpdate')),
-            ),
-          ],
-        ),
+        title: store.t('updateAvailable'),
+        versionDetails: store
+            .t('updateVersionDetails')
+            .replaceAll('{current}', updates.currentVersion!)
+            .replaceAll('{latest}', '${release.version}'),
+        notesTitle: store.t('updateNotes'),
+        notesBody: notes.isEmpty ? store.t('noUpdateNotes') : notes,
+        hasNotes: notes.isNotEmpty,
+        laterLabel: store.t('updateLater'),
+        downloadLabel: store.t('downloadUpdate'),
       );
       if (download != true || !mounted) return;
       try {
@@ -191,21 +161,15 @@ class _AppRootState extends State<AppRoot>
     }
   }
 
-  Future<void> _updateMessage(String message) => showCupertinoDialog<void>(
+  Future<void> _updateMessage(String message) => showUpdateMessageDialog(
     context: context,
-    builder: (dialog) => CupertinoAlertDialog(
-      title: Text(store.t('checkUpdates')),
-      content: Text(store.t(message)),
-      actions: [
-        CupertinoDialogAction(
-          onPressed: () => Navigator.pop(dialog),
-          child: Text(store.t('close')),
-        ),
-      ],
-    ),
+    title: store.t('checkUpdates'),
+    message: store.t(message),
+    closeLabel: store.t('close'),
   );
 
   void _tabChanged() {
+    if (store.tab < 4) _lastBrowseTab = store.tab;
     if (_lastTab == store.tab) return;
     _tabDirection = store.tab > _lastTab ? 1 : -1;
     _lastTab = store.tab;
@@ -320,6 +284,7 @@ class _AppRootState extends State<AppRoot>
       store.addListener(_tabChanged);
       store.addListener(_favoritePresentationChanged);
       _lastTab = store.tab;
+      _lastBrowseTab = store.tab < 4 ? store.tab : 0;
       _tabAnimation.value = 1;
       _scheduleUpdateCheck();
       _scheduleCatalogRefresh();
@@ -556,7 +521,7 @@ class _AppRootState extends State<AppRoot>
             store: store,
             padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
           ),
-        if (store.tab == 4 || store.tab == 2)
+        if (store.tab == 2 || (store.tab == 4 && useRail))
           SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
@@ -641,7 +606,8 @@ class _AppRootState extends State<AppRoot>
       },
     );
     return GlassScaffold(
-      bottomEdgeFade: false,
+      bottomEdgeFade: !useRail,
+      bottomEdgeFadeExtent: -14.0,
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: useRail
@@ -691,10 +657,11 @@ class _AppRootState extends State<AppRoot>
           : null,
       bottomBar: useRail
           ? null
-          : GlassTabBar.bottom(
+          : GlassTabBar.searchable(
               key: const ValueKey('main-tab-bar'),
               settings: barSettings,
-              selectedIndex: store.tab,
+              selectedIndex: _lastBrowseTab.clamp(0, 3),
+              isSearchActive: store.tab == 4,
               onTabSelected: _selectTab,
               horizontalPadding: layout.bottomTabBarHorizontalPadding(),
               verticalPadding: 12,
@@ -702,6 +669,34 @@ class _AppRootState extends State<AppRoot>
               selectedLabelColor: brandBlue,
               selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
               indicatorColor: barIndicator,
+              searchConfig: GlassSearchBarConfig(
+                controller: _search,
+                hintText: store.t('searchPlaceholder'),
+                hintStyle: TextStyle(color: secondary(context), fontSize: 16),
+                textColor: Theme.of(context).colorScheme.onSurface,
+                clearButtonSemanticLabel: store.t('clearSearch'),
+                cancelButtonSemanticLabel: store.t('cancel'),
+                textInputAction: TextInputAction.search,
+                showsCancelButton: true,
+                onSearchToggle: (active) {
+                  if (active) {
+                    store.selectTab(4);
+                  } else {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    store.selectTab(_lastBrowseTab);
+                  }
+                },
+                onChanged: (value) => store.query = value,
+                onSubmitted: (_) {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  store.search();
+                },
+                onCancelTap: () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  store.query = '';
+                  store.selectTab(_lastBrowseTab);
+                },
+              ),
               tabs: [
                 GlassTab(
                   icon: const Icon(CupertinoIcons.square_stack_fill),
@@ -718,10 +713,6 @@ class _AppRootState extends State<AppRoot>
                 GlassTab(
                   icon: const Icon(CupertinoIcons.clock),
                   label: store.t('watchHistory'),
-                ),
-                GlassTab(
-                  icon: const Icon(CupertinoIcons.search),
-                  label: store.t('search'),
                 ),
               ],
             ),

@@ -273,8 +273,12 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('rail-tab-1')));
         await frames(tester);
         expect(store.tab, 1);
-        final weekdayControl = tester.getRect(
+        expect(
           find.byType(CupertinoSlidingSegmentedControl<int>),
+          findsNothing,
+        );
+        final weekdayControl = tester.getRect(
+          find.byKey(const ValueKey('schedule-weekday-control')),
         );
         expect(weekdayControl.width, lessThanOrEqualTo(560.5));
 
@@ -532,7 +536,12 @@ void main() {
       expect(find.byKey(const ValueKey('timeline-1')), findsOneWidget);
 
       await mountPage(NotificationsPage(store: store));
-      final notifHeader = tester.getRect(find.text(store.t('notifications')));
+      final notifHeader = tester.getRect(
+        find.descendant(
+          of: find.byType(GlassLargeTitle),
+          matching: find.text(store.t('notifications')),
+        ),
+      );
       expect(notifHeader.left, greaterThan(150));
 
       portal.accountApi.communityResponse = commentPageJson(id: '1');

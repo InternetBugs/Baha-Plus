@@ -9,6 +9,7 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import '../data/official_user_agent.dart';
 import '../data/windows_official_bridge.dart';
+import 'chrome.dart';
 
 /// Hosts official login, browsing and details without a video ID.
 /// Playback and account data use native HTTP independently of this view.
@@ -240,25 +241,51 @@ class _OfficialBrowserState extends State<OfficialBrowser>
         ),
         actions: [
           if (store.browserCanGoBack)
+            GlassButtonGroup.icons(
+              iconSize: 20,
+              itemPadding: const EdgeInsets.symmetric(
+                horizontal: 11,
+                vertical: 9,
+              ),
+              items: [
+                GlassButtonGroupItem(
+                  icon: const Icon(CupertinoIcons.chevron_back),
+                  label: store.t('back'),
+                  onTap: store.goBack,
+                ),
+                GlassButtonGroupItem(
+                  icon: const Icon(CupertinoIcons.arrow_clockwise),
+                  label: store.t('refresh'),
+                  onTap: store.reloadBrowser,
+                ),
+              ],
+            )
+          else
             GlassIconButton(
-              semanticLabel: store.t('back'),
-              icon: const Icon(CupertinoIcons.chevron_back),
-              onPressed: store.goBack,
+              semanticLabel: store.t('refresh'),
+              icon: const Icon(CupertinoIcons.arrow_clockwise),
+              onPressed: store.reloadBrowser,
             ),
-          GlassIconButton(
-            semanticLabel: store.t('refresh'),
-            icon: const Icon(CupertinoIcons.arrow_clockwise),
-            onPressed: store.reloadBrowser,
-          ),
         ],
       ),
       body: Column(
         children: [
           ValueListenableBuilder(
             valueListenable: _progress,
-            builder: (context, value, child) => value < 100 && value > 0
-                ? LinearProgressIndicator(value: value / 100, minHeight: 2)
-                : const SizedBox(height: 2),
+            builder: (context, value, child) => SizedBox(
+              width: double.infinity,
+              height: 2.5,
+              child: value < 100 && value > 0
+                  ? GlassProgressIndicator.linear(
+                      value: value / 100,
+                      height: 2.5,
+                      minWidth: 0,
+                      color: brandBlue,
+                      backgroundColor: secondary(context).withValues(alpha: .12),
+                      semanticLabel: store.t('loading'),
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ),
           if (store.notice != null && store.browserVisible)
             Padding(
@@ -363,12 +390,11 @@ class _OfficialBrowserState extends State<OfficialBrowser>
                 const SizedBox(height: 16),
                 Text(store.t('playerError')),
                 const SizedBox(height: 20),
-                GlassButton.custom(
-                  shape: const LiquidRoundedRectangle(borderRadius: 22),
-                  onTap: store.reloadBrowser,
-                  width: 116,
+                GlassActionPill(
+                  label: store.t('retry'),
+                  width: 120,
                   height: 44,
-                  child: Text(store.t('retry')),
+                  onTap: store.reloadBrowser,
                 ),
               ],
             ),

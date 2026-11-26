@@ -216,4 +216,76 @@ void main() {
     expect(updates.currentVersion, '0.5.0');
     expect(requests, 1);
   });
+
+  group('AppRelease.extractChangelog', () {
+    test('strips release_notes.py download section and outer heading', () {
+      const body =
+          '## 下载说明\r\n'
+          '\r\n'
+          '- Android：已签名的正式版 APK，按设备架构选择 `arm64-v8a`。\r\n'
+          '- iOS：未签名的 IPA，安装前需签名。\r\n'
+          '- SHA256SUMS.txt 包含校验值。\r\n'
+          '\r\n'
+          '## 更新内容\r\n'
+          '\r\n'
+          '### 播放改进\r\n'
+          '\r\n'
+          '- 修复暂停与播放恢复。\r\n';
+      expect(
+        AppRelease.extractChangelog(body),
+        '### 播放改进\n\n- 修复暂停与播放恢复。',
+      );
+    });
+
+    test('preserves sibling level-2 headings written inside update notes', () {
+      const body =
+          '## 下载说明\n'
+          '- Android APK\n'
+          '\n'
+          '## 更新内容\n'
+          '\n'
+          '## 新功能\n'
+          '- 画中画\n'
+          '\n'
+          '## 问题修复\n'
+          '- 修复卡顿\n';
+      expect(
+        AppRelease.extractChangelog(body),
+        '## 新功能\n- 画中画\n\n## 问题修复\n- 修复卡顿',
+      );
+    });
+
+    test('strips trailing install section and its subsections', () {
+      const body =
+          '## 更新內容\n'
+          '- 新增 iOS 26 液態玻璃更新彈窗\n'
+          '\n'
+          '## 安裝說明\n'
+          '### Android\n'
+          '下載對應架構的 APK。\n'
+          '### iOS\n'
+          '透過 AltStore 簽名安裝。\n';
+      expect(AppRelease.extractChangelog(body), '- 新增 iOS 26 液態玻璃更新彈窗');
+    });
+
+    test('returns empty string when only download instructions exist', () {
+      const body =
+          '## 下载说明\n'
+          '- Android：APK\n'
+          '- iOS：IPA\n'
+          '\n'
+          '## 更新内容\n'
+          '   \n';
+      expect(AppRelease.extractChangelog(body), isEmpty);
+    });
+
+    test('preserves plain text notes and fenced code blocks untouched', () {
+      expect(
+        AppRelease.extractChangelog('新增检查更新功能。\n修复播放器卡顿。'),
+        '新增检查更新功能。\n修复播放器卡顿。',
+      );
+      const fenced = '```sh\n## 下载说明\necho ok\n```';
+      expect(AppRelease.extractChangelog(fenced), fenced);
+    });
+  });
 }

@@ -13,6 +13,140 @@ class AppRelease {
   final Version version;
   final String notes;
 
+  static final _atxHeading = RegExp(r'^\s*(#{1,6})\s+(.+?)\s*#*\s*$');
+  static final _fenceLine = RegExp(r'^\s*(`{3,}|~{3,})');
+  static final _headingDecoration = RegExp(r'^[*_\s]+|[*_\s:：]+$');
+
+  static const _installHeadings = {
+    '下载说明',
+    '下載說明',
+    '安装说明',
+    '安裝說明',
+    '下载与安装',
+    '下載與安裝',
+    '下载与安装说明',
+    '下載與安裝說明',
+    '下载和安装',
+    '下載和安裝',
+    '下载和安装说明',
+    '下載和安裝說明',
+    '安装与下载',
+    '安裝與下載',
+    '下载方式',
+    '下載方式',
+    '安装方式',
+    '安裝方式',
+    '安装包说明',
+    '安裝包說明',
+    'download',
+    'downloads',
+    'download instructions',
+    'install',
+    'installation',
+    'install instructions',
+  };
+
+  static const _changelogHeadings = {
+    '更新内容',
+    '更新內容',
+    '更新日志',
+    '更新日誌',
+    '更新说明',
+    '更新說明',
+    'changelog',
+    'release notes',
+    "what's changed",
+  };
+
+  /// Release notes formatted for the in-app update dialog: omits download and
+  /// installation instruction sections plus the redundant outer changelog
+  /// heading so only the actual update content is shown.
+  String get changelog => extractChangelog(notes);
+
+  static String extractChangelog(String raw) {
+    final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    if (normalized.trim().isEmpty) return '';
+
+    final kept = <String>[];
+    String? fenceChar;
+    var fenceLength = 0;
+    int? skipLevel;
+
+    for (final line in normalized.split('\n')) {
+      final fence = _fenceLine.firstMatch(line);
+      if (fence != null) {
+        final marker = fence.group(1)!;
+        if (fenceChar == null) {
+          fenceChar = marker[0];
+          fenceLength = marker.length;
+        } else if (marker[0] == fenceChar && marker.length >= fenceLength) {
+          fenceChar = null;
+          fenceLength = 0;
+        }
+        if (skipLevel == null) kept.add(line);
+        continue;
+      }
+
+      if (fenceChar != null) {
+        if (skipLevel == null) kept.add(line);
+        continue;
+      }
+
+      final heading = _atxHeading.firstMatch(line);
+      if (heading != null) {
+        final level = heading.group(1)!.length;
+        final title = heading
+            .group(2)!
+            .replaceAll(_headingDecoration, '')
+            .toLowerCase();
+
+        if (skipLevel != null && level <= skipLevel) {
+          skipLevel = null;
+        }
+
+        if (skipLevel == null) {
+          if (_installHeadings.contains(title)) {
+            skipLevel = level;
+            continue;
+          }
+          if (level <= 2 && _changelogHeadings.contains(title)) {
+            continue;
+          }
+          kept.add(line);
+        }
+        continue;
+      }
+
+      if (skipLevel == null) {
+        kept.add(line);
+      }
+    }
+
+    var start = 0;
+    while (start < kept.length && kept[start].trim().isEmpty) {
+      start++;
+    }
+    var end = kept.length;
+    while (end > start && kept[end - 1].trim().isEmpty) {
+      end--;
+    }
+    if (start >= end) return '';
+
+    final compact = <String>[];
+    var consecutiveBlanks = 0;
+    for (var i = start; i < end; i++) {
+      final line = kept[i];
+      if (line.trim().isEmpty) {
+        consecutiveBlanks++;
+        if (consecutiveBlanks <= 1) compact.add('');
+      } else {
+        consecutiveBlanks = 0;
+        compact.add(line);
+      }
+    }
+    return compact.join('\n').trim();
+  }
+
   static AppRelease? fromJson(Map<String, dynamic> json) {
     if (json['draft'] != false || json['prerelease'] != false) return null;
     final tag = json['tag_name'];

@@ -6,6 +6,8 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'glass_alert.dart';
+import 'glass_settings_menu.dart';
 import 'layout.dart';
 
 class DiagnosticsPage extends StatefulWidget {
@@ -36,18 +38,11 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     }
   }
 
-  Future<void> _message(String key) => showCupertinoDialog<void>(
+  Future<void> _message(String key) => showGlassMessageDialog(
     context: context,
-    builder: (dialog) => CupertinoAlertDialog(
-      title: Text(store.t('diagnosticsTitle')),
-      content: Text(store.t(key)),
-      actions: [
-        CupertinoDialogAction(
-          onPressed: () => Navigator.pop(dialog),
-          child: Text(store.t('close')),
-        ),
-      ],
-    ),
+    title: store.t('diagnosticsTitle'),
+    message: store.t(key),
+    closeLabel: store.t('close'),
   );
 
   Future<void> _run(Future<void> Function() action, String failure) async {
@@ -98,8 +93,8 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     await Navigator.of(context).push<void>(
       CupertinoPageRoute(
         builder: (context) => GlassScaffold(
-          extendBody: false,
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+          statusBarStyle: GlassStatusBarStyle.auto,
           appBar: GlassAppBar(
             title: Text(store.t('diagnosticsPreview')),
             leading: GlassIconButton(
@@ -110,15 +105,19 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           ),
           body: Builder(
             builder: (context) {
+              final safe = MediaQuery.paddingOf(context);
               final previewPad = AppLayout.of(
                 context,
               ).pageHorizontalPadding(maxWidth: 920);
               return ListView.builder(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
                 padding: EdgeInsets.fromLTRB(
                   previewPad.left,
-                  20,
+                  safe.top + 64,
                   previewPad.right,
-                  MediaQuery.paddingOf(context).bottom + 20,
+                  safe.bottom + 20,
                 ),
                 itemCount: lines.length,
                 itemBuilder: (context, index) => Padding(
@@ -137,23 +136,13 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   }, 'diagnosticsStorageFailed');
 
   Future<void> _clear() async {
-    final confirmed = await showCupertinoDialog<bool>(
+    final confirmed = await showGlassConfirmDialog(
       context: context,
-      builder: (dialog) => CupertinoAlertDialog(
-        title: Text(store.t('diagnosticsClear')),
-        content: Text(store.t('diagnosticsClearConfirm')),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: Text(store.t('close')),
-          ),
-          CupertinoDialogAction(
-            isDestructiveAction: true,
-            onPressed: () => Navigator.pop(dialog, true),
-            child: Text(store.t('diagnosticsClear')),
-          ),
-        ],
-      ),
+      title: store.t('diagnosticsClear'),
+      message: store.t('diagnosticsClearConfirm'),
+      cancelLabel: store.t('close'),
+      confirmLabel: store.t('diagnosticsClear'),
+      destructive: true,
     );
     if (confirmed != true || !mounted) return;
     await _run(store.diagnostics.clear, 'diagnosticsStorageFailed');
@@ -164,10 +153,13 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     listenable: store.diagnostics,
     builder: (context, _) {
       final diagnostics = store.diagnostics;
+      final safe = MediaQuery.paddingOf(context);
       final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 680);
+      final canExport = !_busy && diagnostics.hasLogs;
       return GlassScaffold(
-        extendBody: false,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
+        statusBarStyle: GlassStatusBarStyle.auto,
+        topEdgeFadeExtent: 44,
         appBar: GlassAppBar(
           title: Text(store.t('diagnosticsTitle')),
           leading: GlassIconButton(
@@ -177,127 +169,187 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           ),
         ),
         body: ListView(
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           padding: EdgeInsets.fromLTRB(
             hPad.left,
-            20,
+            safe.top + 64,
             hPad.right,
-            MediaQuery.paddingOf(context).bottom + 40,
+            safe.bottom + 40,
           ),
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: BorderRadius.circular(26),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          diagnostics.enabled
-                              ? CupertinoIcons.circle_fill
-                              : CupertinoIcons.doc_text,
-                          color: brandBlue,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            store.t(
-                              diagnostics.enabled
-                                  ? 'diagnosticsRecording'
-                                  : 'diagnosticsStopped',
-                            ),
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+            GlassSettingsGroup(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            diagnostics.enabled
+                                ? CupertinoIcons.circle_fill
+                                : CupertinoIcons.doc_text,
+                            color: brandBlue,
                           ),
-                        ),
-                        if (_busy) const CupertinoActivityIndicator(),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _action(
-                      diagnostics.enabled
-                          ? 'diagnosticsStop'
-                          : 'diagnosticsStart',
-                      _toggle,
-                      enabled: !_busy,
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      store.t('diagnosticsInstructions'),
-                      style: TextStyle(color: secondary(context), height: 1.7),
-                    ),
-                    if (diagnostics.writeFailed) ...[
-                      const SizedBox(height: 12),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              store.t(
+                                diagnostics.enabled
+                                    ? 'diagnosticsRecording'
+                                    : 'diagnosticsStopped',
+                              ),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (_busy) const CupertinoActivityIndicator(),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _action(
+                        diagnostics.enabled
+                            ? 'diagnosticsStop'
+                            : 'diagnosticsStart',
+                        _toggle,
+                        enabled: !_busy,
+                      ),
+                      const SizedBox(height: 14),
                       Text(
-                        store.t('diagnosticsStorageFailed'),
-                        style: const TextStyle(
-                          color: CupertinoColors.systemRed,
+                        store.t('diagnosticsInstructions'),
+                        style: TextStyle(
+                          color: secondary(context),
+                          height: 1.7,
                         ),
                       ),
+                      if (diagnostics.writeFailed) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          store.t('diagnosticsStorageFailed'),
+                          style: const TextStyle(
+                            color: CupertinoColors.systemRed,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            GlassSettingsGroup(
+              children: [
+                Opacity(
+                  opacity: canExport ? 1 : .45,
+                  child: Builder(
+                    builder: (button) => GlassSettingsRow(
+                      title: store.t('diagnosticsShare'),
+                      icon: CupertinoIcons.share,
+                      onTap: canExport ? () => _share(button) : null,
+                    ),
+                  ),
+                ),
+                Opacity(
+                  opacity: canExport ? 1 : .45,
+                  child: GlassSettingsRow(
+                    title: store.t('diagnosticsPreview'),
+                    icon: CupertinoIcons.eye,
+                    onTap: canExport ? _preview : null,
+                  ),
+                ),
+                Opacity(
+                  opacity: canExport ? 1 : .45,
+                  child: GlassSettingsRow(
+                    title: store.t('diagnosticsCopy'),
+                    icon: CupertinoIcons.doc_on_clipboard,
+                    onTap: canExport ? _copy : null,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                store.t('diagnosticsPrivacy'),
+                style: TextStyle(
+                  color: secondary(context),
+                  fontSize: 12,
+                  height: 1.6,
                 ),
               ),
             ),
-            const SizedBox(height: 20),
-            Builder(
-              builder: (button) => _action(
-                'diagnosticsShare',
-                () => _share(button),
-                enabled: !_busy && diagnostics.hasLogs,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _action(
-              'diagnosticsPreview',
-              _preview,
-              enabled: !_busy && diagnostics.hasLogs,
-            ),
-            const SizedBox(height: 12),
-            _action(
-              'diagnosticsCopy',
-              _copy,
-              enabled: !_busy && diagnostics.hasLogs,
-            ),
-            const SizedBox(height: 20),
-            Text(
-              store.t('diagnosticsPrivacy'),
-              style: TextStyle(
-                color: secondary(context),
-                fontSize: 12,
-                height: 1.7,
-              ),
-            ),
-            const SizedBox(height: 20),
-            _action(
-              'diagnosticsFeedback',
-              () => _run(() async {
-                final opened = await launchUrl(
-                  Uri.parse(
-                    'https://github.com/InternetBugs/Baha-Plus/issues/new',
+            const SizedBox(height: 22),
+            GlassSettingsGroup(
+              children: [
+                Opacity(
+                  opacity: _busy ? .45 : 1,
+                  child: GlassSettingsRow(
+                    title: store.t('diagnosticsFeedback'),
+                    icon: CupertinoIcons.exclamationmark_bubble,
+                    onTap: _busy
+                        ? null
+                        : () => _run(() async {
+                            final opened = await launchUrl(
+                              Uri.parse(
+                                'https://github.com/InternetBugs/Baha-Plus/issues/new',
+                              ),
+                              mode: LaunchMode.externalApplication,
+                            );
+                            if (!opened) {
+                              throw StateError('Could not open feedback');
+                            }
+                          }, 'diagnosticsFeedbackFailed'),
                   ),
-                  mode: LaunchMode.externalApplication,
-                );
-                if (!opened) throw StateError('Could not open feedback');
-              }, 'diagnosticsFeedbackFailed'),
-              enabled: !_busy,
+                ),
+                Opacity(
+                  opacity: canExport ? 1 : .45,
+                  child: GlassSettingsHighlight(
+                    onTap: canExport ? _clear : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 18,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            CupertinoIcons.trash,
+                            color: CupertinoColors.systemRed,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              store.t('diagnosticsClear'),
+                              style: const TextStyle(
+                                fontSize: 15,
+                                color: CupertinoColors.systemRed,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            Text(
-              store.t('diagnosticsFeedbackHint'),
-              style: TextStyle(
-                color: secondary(context),
-                fontSize: 12,
-                height: 1.7,
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                store.t('diagnosticsFeedbackHint'),
+                style: TextStyle(
+                  color: secondary(context),
+                  fontSize: 12,
+                  height: 1.6,
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            CupertinoButton(
-              onPressed: !_busy && diagnostics.hasLogs ? _clear : null,
-              child: Text(store.t('diagnosticsClear')),
             ),
           ],
         ),
@@ -318,14 +370,21 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
             child: GlassButton.custom(
               // Keep the glass above the opaque capture-status card.
               useOwnLayer: true,
-              shape: const LiquidRoundedRectangle(borderRadius: 22),
+              shape: const LiquidRoundedSuperellipse(borderRadius: 24),
               height: 48,
               onTap: action,
               canRequestFocus: enabled,
               excludeFromSemantics: true,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(store.t(key), style: const TextStyle(fontSize: 14)),
+                child: Text(
+                  store.t(key),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: brandBlue,
+                  ),
+                ),
               ),
             ),
           ),

@@ -9,7 +9,7 @@ import 'glass_settings_menu.dart';
 
 const collapsedCommentLines = 3;
 
-BoxDecoration communityCardDecoration(
+ShapeDecoration communityCardDecoration(
   BuildContext context, {
   double borderRadius = 22,
   double tintAlpha = .05,
@@ -17,7 +17,7 @@ BoxDecoration communityCardDecoration(
 }) {
   final theme = Theme.of(context);
   final dark = theme.brightness == Brightness.dark;
-  return BoxDecoration(
+  return ShapeDecoration(
     // Keep the surface opaque so its own shadow cannot darken the card body.
     color:
         color ??
@@ -25,8 +25,10 @@ BoxDecoration communityCardDecoration(
           secondary(context).withValues(alpha: tintAlpha),
           theme.scaffoldBackgroundColor,
         ),
-    borderRadius: BorderRadius.circular(borderRadius),
-    boxShadow: [
+    shape: RoundedSuperellipseBorder(
+      borderRadius: BorderRadius.circular(borderRadius),
+    ),
+    shadows: [
       BoxShadow(
         color: Colors.black.withValues(alpha: dark ? .32 : .10),
         blurRadius: 20,
@@ -115,7 +117,7 @@ class BoardEpisodePicker extends StatelessWidget {
           key: const ValueKey('board-episode-selector'),
           width: 150,
           height: 38,
-          shape: const LiquidRoundedRectangle(borderRadius: 20),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 19),
           onTap: enabled ? toggleMenu : () {},
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -309,6 +311,7 @@ class CommunityComposer extends StatelessWidget {
     this.replyName,
     this.cancelReply,
     this.focusNode,
+    this.embedded = false,
     super.key,
   });
   final AppStore store;
@@ -320,108 +323,130 @@ class CommunityComposer extends StatelessWidget {
   final String? error, replyName;
   final VoidCallback? cancelReply;
   final FocusNode? focusNode;
+  final bool embedded;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-    top: false,
-    child: Material(
-      type: MaterialType.transparency,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: GlassContainer(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 26),
-          padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (replyName != null)
+          Row(
             children: [
-              if (replyName != null)
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        store.t('replyingTo').replaceAll('{name}', replyName!),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: brandBlue, fontSize: 12),
-                      ),
-                    ),
-                    CupertinoButton(
-                      padding: const EdgeInsets.all(4),
-                      minimumSize: const Size(32, 32),
-                      onPressed: cancelReply,
-                      child: const Icon(
-                        CupertinoIcons.xmark_circle_fill,
-                        size: 18,
-                      ),
-                    ),
-                  ],
+              Expanded(
+                child: Text(
+                  store.t('replyingTo').replaceAll('{name}', replyName!),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: brandBlue, fontSize: 12),
                 ),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: ValueKey('community-input-$maximum'),
-                      controller: controller,
-                      focusNode: focusNode,
-                      enabled: !sending,
-                      minLines: 1,
-                      maxLines: 3,
-                      maxLength: maximum,
-                      style: const TextStyle(fontSize: 14, height: 1.5),
-                      decoration: InputDecoration(
-                        hintText: hint,
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                        counterText: '',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ValueListenableBuilder(
-                    valueListenable: controller,
-                    builder: (context, value, child) => Semantics(
-                      label: store.t('send'),
-                      button: true,
-                      child: CupertinoButton(
-                        minimumSize: const Size(44, 44),
-                        padding: EdgeInsets.zero,
-                        onPressed: sending || value.text.trim().isEmpty
-                            ? null
-                            : onSend,
-                        child: sending
-                            ? const CupertinoActivityIndicator()
-                            : Icon(
-                                CupertinoIcons.arrow_up_circle_fill,
-                                size: 34,
-                                color:
-                                    onSend == null || value.text.trim().isEmpty
-                                    ? secondary(context)
-                                    : brandBlue,
-                              ),
-                      ),
-                    ),
-                  ),
-                ],
               ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8, bottom: 4),
-                  child: Text(
-                    error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                      fontSize: 12,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
+              CupertinoButton(
+                padding: const EdgeInsets.all(4),
+                minimumSize: const Size(32, 32),
+                onPressed: cancelReply,
+                child: const Icon(CupertinoIcons.xmark_circle_fill, size: 18),
+              ),
             ],
           ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                key: ValueKey('community-input-$maximum'),
+                controller: controller,
+                focusNode: focusNode,
+                enabled: !sending,
+                minLines: 1,
+                maxLines: 3,
+                maxLength: maximum,
+                style: const TextStyle(fontSize: 14, height: 1.5),
+                decoration: InputDecoration(
+                  hintText: hint,
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                  counterText: '',
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ValueListenableBuilder(
+              valueListenable: controller,
+              builder: (context, value, child) => Semantics(
+                label: store.t('send'),
+                button: true,
+                child: CupertinoButton(
+                  minimumSize: const Size(44, 44),
+                  padding: EdgeInsets.zero,
+                  onPressed: sending || value.text.trim().isEmpty
+                      ? null
+                      : onSend,
+                  child: sending
+                      ? const CupertinoActivityIndicator()
+                      : Icon(
+                          CupertinoIcons.arrow_up_circle_fill,
+                          size: 34,
+                          color: onSend == null || value.text.trim().isEmpty
+                              ? secondary(context)
+                              : brandBlue,
+                        ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.only(right: 8, bottom: 4),
+            child: Text(
+              error!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+          ),
+      ],
+    );
+    return SafeArea(
+      top: false,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: embedded
+              ? DecoratedBox(
+                  decoration: ShapeDecoration(
+                    color: dark
+                        ? const Color(0x24ffffff)
+                        : const Color(0xb8ffffff),
+                    shape: RoundedSuperellipseBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      side: BorderSide(
+                        color: dark
+                            ? const Color(0x1effffff)
+                            : const Color(0x14000000),
+                        width: 0.5,
+                      ),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    child: content,
+                  ),
+                )
+              : GlassContainer(
+                  shape: const LiquidRoundedSuperellipse(borderRadius: 26),
+                  padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+                  child: content,
+                ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

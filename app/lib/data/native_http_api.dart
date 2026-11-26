@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' show Color;
 
 import 'package:http/http.dart' as http;
 import 'package:html/parser.dart' show parseFragment;
@@ -56,6 +58,9 @@ class NativeHttpCookieJar {
   final _generation = OfficialCookieRotation.generation;
   final _cookies =
       <String, ({Cookie cookie, bool hostOnly, DateTime? until})>{};
+  static final _cookieSplitPattern = RegExp(r',(?=\s*[^;,\s=]+=)');
+  static final _leadingDotPattern = RegExp(r'^\.');
+  static final _invalidCookieValuePattern = RegExp(r'[\x00-\x20\x7f";,\\]');
 
   bool _trusted(Uri uri) =>
       uri.scheme == 'https' &&
@@ -68,15 +73,15 @@ class NativeHttpCookieJar {
     (Cookie, bool)? rotation;
     final time = now ?? DateTime.now().toUtc();
     // package:http joins repeated headers. Do not split the comma in Expires.
-    for (final item in raw.split(RegExp(r',(?=\s*[^;,\s=]+=)'))) {
+    for (final item in raw.split(_cookieSplitPattern)) {
       try {
         final cookie = Cookie.fromSetCookieValue(item.trim());
         final hostOnly = cookie.domain == null;
         final domain = (cookie.domain ?? uri.host)
-            .replaceFirst(RegExp(r'^\.'), '')
+            .replaceFirst(_leadingDotPattern, '')
             .toLowerCase();
         if (domain != uri.host && domain != 'gamer.com.tw') continue;
-        if (cookie.value.contains(RegExp(r'[\x00-\x20\x7f";,\\]'))) continue;
+        if (cookie.value.contains(_invalidCookieValuePattern)) continue;
         cookie.domain = domain;
         final path = cookie.path;
         if (path == null || !path.startsWith('/')) {
@@ -252,8 +257,17 @@ class NativeHttpApi {
   String _device = '', _video = '';
   NativeHttpPreparation? _preparation;
 
+  static final _videoIdPattern = RegExp(r'^[1-9][0-9]{0,9}$');
+  static final _adBlockPattern = RegExp(
+    r'function\s*\([^)]*\)\s*\{.*?var\s+adlist\s*=\s*(\[\[.*?]]);',
+    dotAll: true,
+  );
+  static final _adIdPattern = RegExp(r'^[0-9]{1,20}$');
+  static final _resolutionPattern = RegExp(r'RESOLUTION=\d+x(\d+)');
+  static final _controlCharPattern = RegExp(r'[\x00-\x20\x7f]');
+
   Future<NativeHttpPreparation> prepare(String videoId) async {
-    if (!RegExp(r'^[1-9][0-9]{0,9}$').hasMatch(videoId) || _video.isNotEmpty) {
+    if (!_videoIdPattern.hasMatch(videoId) || _video.isNotEmpty) {
       throw const NativeHttpException('video-id');
     }
     _video = videoId;
@@ -407,9 +421,7 @@ class NativeHttpApi {
     final media = variants.isEmpty
         ? playlist
         : await _text('media-playlist', variants.values.first);
-    final duration = RegExp(r'#EXTINF:([0-9.]+)')
-        .allMatches(media)
-        .fold<double>(0, (sum, match) => sum + double.parse(match[1]!));
+    final duration = _sumExtinfDuration(media);
     if (!duration.isFinite || duration <= 0 || duration > 172800) {
       throw const NativeHttpException('media-duration');
     }
@@ -425,6 +437,32 @@ class NativeHttpApi {
       'rate': rate,
       'muted': muted,
     });
+  }
+
+  static double _sumExtinfDuration(String playlist) {
+    const tag = '#EXTINF:';
+    var sum = 0.0;
+    var index = 0;
+    while (true) {
+      final start = playlist.indexOf(tag, index);
+      if (start < 0) break;
+      final valueStart = start + tag.length;
+      var valueEnd = valueStart;
+      while (valueEnd < playlist.length) {
+        final c = playlist.codeUnitAt(valueEnd);
+        if ((c >= 0x30 && c <= 0x39) || c == 0x2E) {
+          valueEnd++;
+        } else {
+          break;
+        }
+      }
+      if (valueEnd > valueStart) {
+        final parsed = double.tryParse(playlist.substring(valueStart, valueEnd));
+        if (parsed != null) sum += parsed;
+      }
+      index = valueEnd;
+    }
+    return sum;
   }
 
   Future<void> started() async {
@@ -461,6 +499,7 @@ class NativeHttpApi {
     if (rows is! List || rows.length > 20000) {
       throw const NativeHttpException('danmaku-format');
     }
+    if (rows.isEmpty) return const [];
     final items = <String, NativeDanmaku>{};
     for (final row in rows) {
       if (row is! Json) continue;
@@ -488,26 +527,28 @@ class NativeHttpApi {
           : rawText;
       final text = decoded.replaceAll(_danmakuSpacePattern, ' ').trim();
       if (text.isEmpty || text.length > 500) continue;
-      final color = row['color'];
-      items[idText] = NativeDanmaku.fromJson({
-        'id': idText,
-        'time': time / 10,
-        'text': text,
-        'mode': switch (row['position']) {
+      final rawColor = row['color'];
+      final color = rawColor is String && _danmakuColorPattern.hasMatch(rawColor)
+          ? NativeDanmaku.parseColor(rawColor)
+          : const Color(0xFFFFFFFF);
+      items[idText] = NativeDanmaku(
+        id: idText,
+        time: time / 10,
+        text: text,
+        mode: switch (row['position']) {
           1 => 'top',
           2 => 'bottom',
           _ => 'rolling',
         },
-        'size': switch (row['size']) {
-          0 => 16,
-          2 => 28,
-          _ => 24,
+        size: switch (row['size']) {
+          0 => 16.0,
+          2 => 28.0,
+          _ => 24.0,
         },
-        'color': color is String && _danmakuColorPattern.hasMatch(color)
-            ? color
-            : '#FFFFFF',
-      });
+        color: color,
+      );
     }
+    if (items.isEmpty) return const [];
     final sorted = items.values.toList()
       ..sort((a, b) {
         final time = a.time.compareTo(b.time);
@@ -558,17 +599,14 @@ class NativeHttpApi {
   }
 
   static List<NativeHttpAd> parseAds(String script) {
-    final block = RegExp(
-      r'function\s*\([^)]*\)\s*\{.*?var\s+adlist\s*=\s*(\[\[.*?]]);',
-      dotAll: true,
-    ).firstMatch(script)?[1];
+    final block = _adBlockPattern.firstMatch(script)?[1];
     if (block == null) throw const NativeHttpException('ad-config-format');
     final list = jsonDecode(block) as List;
     final result = <NativeHttpAd>[];
-    final id = RegExp(r'^[0-9]{1,20}$');
     for (final row in list) {
       if (row is! List || row.length < 4 || row[3] != 'video') continue;
-      if (id.hasMatch('${row[0]}') && id.hasMatch('${row[2]}')) {
+      if (_adIdPattern.hasMatch('${row[0]}') &&
+          _adIdPattern.hasMatch('${row[2]}')) {
         result.add(NativeHttpAd('${row[0]}', '${row[2]}'));
       }
     }
@@ -585,9 +623,7 @@ class NativeHttpApi {
     for (final line in const LineSplitter().convert(playlist)) {
       final value = line.trim();
       if (value.startsWith('#EXT-X-STREAM-INF:')) {
-        height = int.tryParse(
-          RegExp(r'RESOLUTION=\d+x(\d+)').firstMatch(value)?[1] ?? '',
-        );
+        height = int.tryParse(_resolutionPattern.firstMatch(value)?[1] ?? '');
       } else if (value.isNotEmpty && !value.startsWith('#') && height != null) {
         if (height < 144 || height > 4320 || result.length >= 20) {
           throw const NativeHttpException('playlist-variants');
@@ -606,7 +642,7 @@ class NativeHttpApi {
     if (raw is! String ||
         raw.isEmpty ||
         raw.length > 1024 ||
-        raw.contains(RegExp(r'[\x00-\x20\x7f]'))) {
+        raw.contains(_controlCharPattern)) {
       throw const NativeHttpException('device-format');
     }
     return raw;
@@ -797,15 +833,15 @@ class NativeHttpApi {
           discard();
           throw const NativeHttpException('response-size');
         }
-        final bytes = <int>[];
+        final bytes = BytesBuilder(copy: false);
         await for (final chunk in response.stream) {
           if (_disposed) throw const NativeHttpException('disposed');
           if (bytes.length + chunk.length > 2000000) {
             throw const NativeHttpException('response-size');
           }
-          bytes.addAll(chunk);
+          bytes.add(chunk);
         }
-        final body = utf8.decode(bytes);
+        final body = utf8.decode(bytes.takeBytes());
         if (body.contains('challenge-platform') || body.contains('cf-chl-')) {
           throw const NativeHttpException('verification-required');
         }

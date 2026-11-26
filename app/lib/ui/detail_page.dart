@@ -61,12 +61,11 @@ class DetailPage extends StatelessWidget {
                   style: TextStyle(color: secondary(context), height: 1.6),
                 ),
                 const SizedBox(height: 12),
-                GlassButton.custom(
-                  shape: const LiquidRoundedRectangle(borderRadius: 20),
-                  width: 100,
+                GlassActionPill(
+                  label: store.t('retry'),
+                  width: 108,
                   height: 40,
                   onTap: () => store.openDetail(anime),
-                  child: Text(store.t('retry')),
                 ),
               ],
               if (store.detail case final detail?)
@@ -103,7 +102,7 @@ class DetailPage extends StatelessWidget {
           children: [
             Flexible(
               child: GlassButton.custom(
-                shape: const LiquidRoundedRectangle(borderRadius: 24),
+                shape: const LiquidRoundedSuperellipse(borderRadius: 24),
                 useOwnLayer: true,
                 settings: mediaGlass,
                 onTap: () => _play(context),
@@ -156,7 +155,7 @@ class DetailPage extends StatelessWidget {
         ),
       ],
     );
-    return ClipRRect(
+    return ClipRSuperellipse(
       borderRadius: BorderRadius.circular(28),
       child: SizedBox(
         height: wide ? 380 : 350,
@@ -193,9 +192,11 @@ class DetailPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            boxShadow: const [
+                          decoration: ShapeDecoration(
+                            shape: RoundedSuperellipseBorder(
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            shadows: const [
                               BoxShadow(
                                 color: Color(0x66000000),
                                 blurRadius: 24,
@@ -203,7 +204,7 @@ class DetailPage extends StatelessWidget {
                               ),
                             ],
                           ),
-                          child: ClipRRect(
+                          child: ClipRSuperellipse(
                             borderRadius: BorderRadius.circular(18),
                             child: Artwork(
                               anime.poster,
@@ -324,20 +325,9 @@ class DetailPage extends StatelessWidget {
                   for (final episode in episodes)
                     SizedBox(
                       width: (bounds.maxWidth - (columns - 1) * 10) / columns,
-                      child: CupertinoButton(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        color: secondary(context).withValues(alpha: .08),
-                        borderRadius: BorderRadius.circular(13),
-                        onPressed: () => _play(context, episode: episode),
-                        child: Text(
-                          episode.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: brandBlue,
-                          ),
-                        ),
+                      child: EpisodeChipButton(
+                        label: episode.label,
+                        onTap: () => _play(context, episode: episode),
                       ),
                     ),
                 ],

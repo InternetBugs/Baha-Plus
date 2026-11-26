@@ -4,6 +4,7 @@ import 'package:baha_plus/main.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/community_widgets.dart';
+import 'package:baha_plus/ui/glass_alert.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -287,6 +288,10 @@ void main() {
         150,
         scrollable: find.byType(Scrollable).last,
       );
+      await Scrollable.ensureVisible(
+        tester.element(appearanceRow),
+        alignment: 0.5,
+      );
       await frames(tester);
       await tester.tap(appearanceRow);
       await frames(tester);
@@ -361,14 +366,43 @@ void main() {
     final store = await launch(tester);
     await openAccount(tester);
     final row = find.byKey(const ValueKey('account-skip-op-switch'));
+    final toggle = find.descendant(
+      of: row,
+      matching: find.byType(GlassSwitch),
+    );
     await tester.scrollUntilVisible(
       row,
       150,
       scrollable: find.byType(Scrollable).last,
     );
     await frames(tester);
+    expect(find.byType(CupertinoSwitch), findsNothing);
+    expect(toggle, findsOneWidget);
     expect(store.skipOpLongPress, isTrue);
+    expect(find.text(store.t('playback')), findsOneWidget);
     expect(find.text(store.t('skipOpLongPress')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.byIcon(CupertinoIcons.forward_end),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: row,
+        matching: find.text(store.t('skipOpLongPressHint')),
+      ),
+      findsNothing,
+    );
+    final footer = find.text(store.t('skipOpLongPressHint'));
+    await tester.scrollUntilVisible(
+      footer,
+      150,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await frames(tester);
+    expect(footer, findsOneWidget);
 
     await tester.tap(row);
     await frames(tester);
@@ -378,7 +412,7 @@ void main() {
       '0',
     );
 
-    await tester.tap(find.byType(CupertinoSwitch));
+    await tester.tap(toggle);
     await frames(tester);
     expect(store.skipOpLongPress, isTrue);
     expect(
@@ -386,7 +420,7 @@ void main() {
       '1',
     );
 
-    await tester.tap(find.byType(CupertinoSwitch));
+    await tester.tap(toggle);
     await frames(tester);
     expect(store.skipOpLongPress, isFalse);
     expect(
@@ -408,5 +442,62 @@ void main() {
     ))!;
     addTearDown(store.dispose);
     expect(store.skipOpLongPress, isFalse);
+  });
+
+  testWidgets('skipping age confirmation requires an explicit opt-in', (
+    tester,
+  ) async {
+    final store = await launch(tester);
+    await openAccount(tester);
+    final row = find.byKey(
+      const ValueKey('account-skip-age-confirmation-switch'),
+    );
+    final dialog = find.byType(GlassAlert);
+    const key = 'baha.device.skipAgeConfirmation';
+    await tester.scrollUntilVisible(
+      row,
+      150,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await frames(tester);
+    expect(store.skipAgeConfirmation, isFalse);
+
+    await tester.tap(row);
+    await frames(tester);
+    expect(find.byType(CupertinoAlertDialog), findsNothing);
+    expect(dialog, findsOneWidget);
+    expect(find.text('请确认阁下已年满18岁'), findsOneWidget);
+    expect(
+      find.textContaining('请不要将阁下之设备给予未满18岁之青少年使用'),
+      findsOneWidget,
+    );
+    expect(store.skipAgeConfirmation, isFalse);
+    await tester.tap(find.text(store.t('cancel')));
+    await frames(tester);
+    expect(store.skipAgeConfirmation, isFalse);
+    expect(await store.storage.read(key), isNull);
+
+    await tester.tap(row);
+    await frames(tester);
+    await tester.tap(find.text(store.t('skipAgeConfirmationEnable')));
+    await frames(tester);
+    expect(store.skipAgeConfirmation, isTrue);
+    expect(await store.storage.read(key), '1');
+
+    final restored = (await tester.runAsync(
+      () => AppStore.create(
+        storage: store.storage,
+        metadataApi: FakeMetadata(),
+        animeSearch: FakeSearch(),
+      ),
+    ))!;
+    addTearDown(restored.dispose);
+    expect(restored.skipAgeConfirmation, isTrue);
+
+    await tester.tap(row);
+    await frames(tester);
+    expect(dialog, findsNothing);
+    expect(store.skipAgeConfirmation, isFalse);
+    expect(await store.storage.read(key), '0');
   });
 }

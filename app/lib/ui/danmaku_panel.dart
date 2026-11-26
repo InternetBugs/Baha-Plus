@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +6,7 @@ import '../core/community.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_widgets.dart';
+import 'glass_alert.dart';
 import 'glass_settings_menu.dart';
 import 'layout.dart';
 
@@ -131,15 +131,26 @@ void showDanmakuComposer(BuildContext context, AppStore store) {
                     ),
                   ],
                 ),
-                child: ClipPath(
-                  clipper: ShapeBorderClipper(shape: shape),
+                child: GlassContainer(
+                  key: const ValueKey('danmaku-composer-glass-surface'),
+                  useOwnLayer: true,
+                  platformViewBackdrop: true,
+                  quality: resolveGlassAlertQuality(dialogContext),
+                  settings: glassAlertSettings(dialogContext),
+                  shape: shape,
+                  clipBehavior: Clip.antiAlias,
+                  padding: EdgeInsets.zero,
                   child: MediaQuery.removePadding(
                     context: dialogContext,
                     removeTop: true,
                     removeBottom: true,
                     child: Material(
                       type: MaterialType.transparency,
-                      child: DanmakuPanel(store: store, composerOnly: true),
+                      child: DanmakuPanel(
+                        store: store,
+                        composerOnly: true,
+                        glassSurface: true,
+                      ),
                     ),
                   ),
                 ),
@@ -174,12 +185,36 @@ class DanmakuPanel extends StatefulWidget {
   const DanmakuPanel({
     required this.store,
     this.composerOnly = false,
+    this.glassSurface = false,
     super.key,
   });
   final AppStore store;
   final bool composerOnly;
+  final bool glassSurface;
   @override
   State<DanmakuPanel> createState() => _DanmakuPanelState();
+}
+
+int _trimmedUtf8Length(String raw) {
+  final text = raw.trim();
+  var bytes = 0;
+  for (var i = 0; i < text.length; i++) {
+    final unit = text.codeUnitAt(i);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xD800 &&
+        unit <= 0xDBFF &&
+        i + 1 < text.length &&
+        (text.codeUnitAt(i + 1) & 0xFC00) == 0xDC00) {
+      bytes += 4;
+      i++;
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 class _DanmakuPanelState extends State<DanmakuPanel> {
@@ -190,7 +225,38 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
   Object? _error;
   late final String? _videoId = widget.store.playingVideoId;
   late final String _document = widget.store.operation.id;
+  late bool _canControl = widget.store.playback.value.canControl;
   AppStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.composerOnly) {
+      widget.store.playback.addListener(_onPlaybackChanged);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DanmakuPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != widget.store ||
+        oldWidget.composerOnly != widget.composerOnly) {
+      if (oldWidget.composerOnly) {
+        oldWidget.store.playback.removeListener(_onPlaybackChanged);
+      }
+      _canControl = widget.store.playback.value.canControl;
+      if (widget.composerOnly) {
+        widget.store.playback.addListener(_onPlaybackChanged);
+      }
+    }
+  }
+
+  void _onPlaybackChanged() {
+    final next = store.playback.value.canControl;
+    if (next != _canControl && mounted) {
+      setState(() => _canControl = next);
+    }
+  }
 
   bool _isDefaultSettings(DanmakuSettings settings) =>
       (settings.opacity - .8).abs() < .005 &&
@@ -230,20 +296,29 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([
-      store,
-      store.playback,
-      ?store.nativeHttpPlayback,
-    ]),
+    listenable: store.nativeHttpPlayback == null
+        ? store
+        : Listenable.merge([store, store.nativeHttpPlayback!]),
     builder: (context, _) {
       final settings = store.danmakuSettings;
       final canSend =
           store.accountProfile != null &&
           settings.enabled &&
-          store.playback.value.canControl &&
+          _canControl &&
           store.playingVideoId == _videoId &&
           store.operation.id == _document;
       final backdrop = _sheetBackdropColor(context);
+      if (widget.composerOnly && widget.glassSurface) {
+        return KeyedSubtree(
+          key: const ValueKey('danmaku-composer'),
+          child: Column(
+            children: [
+              _composerGlassHeader(context),
+              Expanded(child: _composerBody(context, canSend)),
+            ],
+          ),
+        );
+      }
       return GlassScaffold(
         key: ValueKey(
           widget.composerOnly ? 'danmaku-composer' : 'danmaku-panel',
@@ -315,9 +390,8 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
         const SizedBox(width: 10),
         ValueListenableBuilder<TextEditingValue>(
           valueListenable: _draft,
-          builder: (context, value, _) => _ByteCounterBadge(
-            bytes: utf8.encode(value.text.trim()).length,
-          ),
+          builder: (context, value, _) =>
+              _ByteCounterBadge(bytes: _trimmedUtf8Length(value.text)),
         ),
       ],
     ),
@@ -331,8 +405,61 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     ],
   );
 
+  Widget _composerGlassHeader(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final foreground = Theme.of(context).colorScheme.onSurface;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 14, 6),
+      child: Row(
+        children: [
+          Flexible(
+            child: Text(
+              store.t('sendDanmaku'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
+            ),
+          ),
+          const SizedBox(width: 10),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _draft,
+            builder: (context, value, _) =>
+                _ByteCounterBadge(bytes: _trimmedUtf8Length(value.text)),
+          ),
+          const Spacer(),
+          Semantics(
+            label: store.t('close'),
+            button: true,
+            child: CupertinoButton(
+              minimumSize: const Size(36, 36),
+              padding: EdgeInsets.zero,
+              onPressed: () => Navigator.pop(context),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: dark
+                      ? const Color(0x28ffffff)
+                      : const Color(0x16000000),
+                  shape: BoxShape.circle,
+                ),
+                child: SizedBox.square(
+                  dimension: 34,
+                  child: Icon(
+                    CupertinoIcons.xmark,
+                    size: 16,
+                    color: foreground.withValues(alpha: .85),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _settingsBody(BuildContext context, DanmakuSettings settings) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
+    const topInset = 12.0;
     final hasLoadError = store.nativeHttpPlayback?.danmakuFailureStage != null;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -354,7 +481,12 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 880),
               child: Padding(
-                padding: EdgeInsets.fromLTRB(20, 12, 20, bottomInset + 20),
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  topInset,
+                  20,
+                  bottomInset + 20,
+                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -385,7 +517,10 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
           );
         }
         return ListView(
-          padding: EdgeInsets.fromLTRB(20, 12, 20, bottomInset + 32),
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
+          padding: EdgeInsets.fromLTRB(20, topInset, 20, bottomInset + 32),
           children: [
             stage,
             if (errorBanner != null) ...[
@@ -614,7 +749,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                   const SizedBox(height: 12),
                 ],
                 GlassSettingsGroup(
-                  color: _cardSurfaceColor(context),
+                  color: widget.glassSurface
+                      ? (Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0x20ffffff)
+                            : const Color(0x94ffffff))
+                      : _cardSurfaceColor(context),
                   dividerIndent: 18,
                   children: [
                     _segmentedStyleRow(
@@ -653,8 +792,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                   valueListenable: _draft,
                   builder: (context, value, _) {
                     final overLimit =
-                        utf8.encode(value.text.trim()).length >
-                        _danmakuMaxBytes;
+                        _trimmedUtf8Length(value.text) > _danmakuMaxBytes;
                     return Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 6),
                       child: Text(
@@ -685,6 +823,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
             onSend: canSend ? _send : null,
             maximum: _danmakuMaxBytes,
             error: _error == null ? null : communityError(store, _error),
+            embedded: widget.glassSurface,
           ),
         ],
       );
@@ -914,6 +1053,9 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   @override
   void dispose() {
+    if (widget.composerOnly) {
+      widget.store.playback.removeListener(_onPlaybackChanged);
+    }
     _draft.dispose();
     super.dispose();
   }
@@ -1089,50 +1231,55 @@ class _DanmakuStagePainter extends CustomPainter {
   final String disabledHint;
   final double borderAlpha;
 
+  static Size? _cachedBackdropSize;
+  static final _skyPaint = Paint();
+  static final _glowPaint = Paint();
+  static final _vignettePaint = Paint();
+  static final _rimPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1;
+
+  static void _ensureBackdropShaders(Size size, Rect rect) {
+    if (_cachedBackdropSize == size) return;
+    _cachedBackdropSize = size;
+    _skyPaint.shader = const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xff0b1220),
+        Color(0xff14233b),
+        Color(0xff1f2f4c),
+      ],
+      stops: [0.0, 0.55, 1.0],
+    ).createShader(rect);
+    _glowPaint.shader = const RadialGradient(
+      center: Alignment(.35, -.15),
+      radius: .95,
+      colors: [Color(0x305894d6), Color(0x0014233b)],
+    ).createShader(rect);
+    _vignettePaint.shader = const LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0x52000000),
+        Color(0x00000000),
+        Color(0x00000000),
+        Color(0x5c000000),
+      ],
+      stops: [0.0, 0.28, 0.72, 1.0],
+    ).createShader(rect);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
+    _ensureBackdropShaders(size, rect);
     // Deep cinematic anime twilight backdrop for accurate danmaku legibility.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xff0b1220),
-            Color(0xff14233b),
-            Color(0xff1f2f4c),
-          ],
-          stops: [0.0, 0.55, 1.0],
-        ).createShader(rect),
-    );
+    canvas.drawRect(rect, _skyPaint);
     // Subtle atmospheric cinema horizon glow.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = RadialGradient(
-          center: const Alignment(.35, -.15),
-          radius: .95,
-          colors: const [Color(0x305894d6), Color(0x0014233b)],
-        ).createShader(rect),
-    );
+    canvas.drawRect(rect, _glowPaint);
     // Gentle cinema edge vignette so top and bottom pinned lines sit cleanly.
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color(0x52000000),
-            Color(0x00000000),
-            Color(0x00000000),
-            Color(0x5c000000),
-          ],
-          stops: [0.0, 0.28, 0.72, 1.0],
-        ).createShader(rect),
-    );
+    canvas.drawRect(rect, _vignettePaint);
 
     _paintSettingsPreview(canvas, size);
 
@@ -1141,13 +1288,8 @@ class _DanmakuStagePainter extends CustomPainter {
       rect.deflate(.5),
       const Radius.circular(21.5),
     );
-    canvas.drawRRect(
-      rim,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: borderAlpha),
-    );
+    _rimPaint.color = Colors.white.withValues(alpha: borderAlpha);
+    canvas.drawRRect(rim, _rimPaint);
   }
 
   void _paintSettingsPreview(Canvas canvas, Size size) {

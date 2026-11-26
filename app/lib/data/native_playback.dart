@@ -160,6 +160,14 @@ class NativePlayback extends ChangeNotifier {
   PlaybackState? _cachedState;
   VideoPlayerValue? _cachedVideoValue;
   int _cachedCacheVersion = -1;
+  List<DurationRange>? _cachedRawBuffered;
+  double _cachedBufferedDuration = -1;
+  int _cachedBufferedQuality = -1;
+  int _cachedBufferedCacheVersion = -1;
+  List<PlaybackBufferRange> _cachedMergedRanges = const [];
+  double _cachedBufferedEnd = 0;
+  static final _nonPrintableAsciiPattern = RegExp(r'[^\x20-\x7E]+');
+  static final _errorCodePattern = RegExp(r'^[\w.-]{1,64}$');
 
   bool get active => _active && !_disposed;
   int get seekRevision => _seekRevision;
@@ -188,33 +196,59 @@ class NativePlayback extends ChangeNotifier {
     final duration = value?.isInitialized == true
         ? value!.duration.inMilliseconds / 1000
         : source.duration;
-    final bufferedRanges = <PlaybackBufferRange>[];
-    for (final range in value?.buffered ?? const <DurationRange>[]) {
-      final start = (range.start.inMilliseconds / 1000).clamp(0.0, duration);
-      final end = range.end.inMilliseconds / 1000;
-      if (end > start) {
-        bufferedRanges.add((start: start, end: end.clamp(0.0, duration)));
+    final rawBuffered = value?.buffered;
+    List<PlaybackBufferRange> mergedRanges;
+    double bufferedEnd;
+    if (identical(rawBuffered, _cachedRawBuffered) &&
+        duration == _cachedBufferedDuration &&
+        _quality == _cachedBufferedQuality &&
+        cacheVersion == _cachedBufferedCacheVersion) {
+      mergedRanges = _cachedMergedRanges;
+      bufferedEnd = _cachedBufferedEnd;
+    } else {
+      final bufferedRanges = <PlaybackBufferRange>[];
+      for (final range in rawBuffered ?? const <DurationRange>[]) {
+        final start = (range.start.inMilliseconds / 1000).clamp(0.0, duration);
+        final end = range.end.inMilliseconds / 1000;
+        if (end > start) {
+          bufferedRanges.add((start: start, end: end.clamp(0.0, duration)));
+        }
       }
-    }
-    final media = _quality == 0 ? source.master : source.variants[_quality]!;
-    for (final range
-        in _cache?.bufferedRanges(media) ?? const <PlaybackBufferRange>[]) {
-      final start = range.start.clamp(0.0, duration);
-      final end = range.end.clamp(0.0, duration);
-      if (end > start) bufferedRanges.add((start: start, end: end));
-    }
-    bufferedRanges.sort((a, b) => a.start.compareTo(b.start));
-    final merged = <PlaybackBufferRange>[];
-    for (final range in bufferedRanges) {
-      if (merged.isNotEmpty && range.start <= merged.last.end) {
-        final last = merged.removeLast();
-        merged.add((
-          start: last.start,
-          end: range.end > last.end ? range.end : last.end,
-        ));
+      final media = _quality == 0 ? source.master : source.variants[_quality]!;
+      for (final range
+          in _cache?.bufferedRanges(media) ?? const <PlaybackBufferRange>[]) {
+        final start = range.start.clamp(0.0, duration);
+        final end = range.end.clamp(0.0, duration);
+        if (end > start) bufferedRanges.add((start: start, end: end));
+      }
+      if (bufferedRanges.isEmpty) {
+        mergedRanges = const [];
+        bufferedEnd = 0;
       } else {
-        merged.add(range);
+        if (bufferedRanges.length > 1) {
+          bufferedRanges.sort((a, b) => a.start.compareTo(b.start));
+        }
+        final merged = <PlaybackBufferRange>[];
+        for (final range in bufferedRanges) {
+          if (merged.isNotEmpty && range.start <= merged.last.end) {
+            final last = merged.removeLast();
+            merged.add((
+              start: last.start,
+              end: range.end > last.end ? range.end : last.end,
+            ));
+          } else {
+            merged.add(range);
+          }
+        }
+        mergedRanges = List.unmodifiable(merged);
+        bufferedEnd = merged.last.end;
       }
+      _cachedRawBuffered = rawBuffered;
+      _cachedBufferedDuration = duration;
+      _cachedBufferedQuality = _quality;
+      _cachedBufferedCacheVersion = cacheVersion;
+      _cachedMergedRanges = mergedRanges;
+      _cachedBufferedEnd = bufferedEnd;
     }
     final built = PlaybackState(
       phase: _blocked || value?.hasError == true
@@ -229,8 +263,8 @@ class NativePlayback extends ChangeNotifier {
       muted: value?.volume == 0,
       position: _position.clamp(0, duration),
       duration: duration,
-      buffered: merged.isEmpty ? 0 : merged.last.end,
-      bufferedRanges: List.unmodifiable(merged),
+      buffered: bufferedEnd,
+      bufferedRanges: mergedRanges,
       downloadBytesPerSecond: _downloadBytesPerSecond,
       rate: value?.playbackSpeed ?? source.rate,
       qualities: _qualities,
@@ -328,7 +362,7 @@ class NativePlayback extends ChangeNotifier {
   static String _describeFailure(Object error) {
     if (error is! PlatformException) return '';
     final text = error.message
-        ?.replaceAll(RegExp(r'[^\x20-\x7E]+'), ' ')
+        ?.replaceAll(_nonPrintableAsciiPattern, ' ')
         .trim();
     if (text == null || text.isEmpty) return '';
     return text.length > 320 ? text.substring(0, 320) : text;
@@ -404,7 +438,7 @@ class NativePlayback extends ChangeNotifier {
     } catch (error) {
       failureStage = stage;
       final code = error is PlatformException ? error.code : null;
-      failureCode = code != null && RegExp(r'^[\w.-]{1,64}$').hasMatch(code)
+      failureCode = code != null && _errorCodePattern.hasMatch(code)
           ? code
           : error.runtimeType.toString();
       final detail = _describeFailure(error);
@@ -474,7 +508,7 @@ class NativePlayback extends ChangeNotifier {
     _changed();
   }
 
-  Future<void> _samplePosition() async {
+  Future<void> _samplePosition({bool publish = true}) async {
     if (_disposed || !_active || _polling || _seeking || video == null) return;
     _polling = true;
     final current = video;
@@ -490,7 +524,7 @@ class NativePlayback extends ChangeNotifier {
           _position = seconds;
           _invalidateState();
         }
-        _publish();
+        if (publish) _publish();
       }
     } catch (_) {
       // The next event/poll will carry the state after a source replacement.
@@ -614,7 +648,7 @@ class NativePlayback extends ChangeNotifier {
       default:
         return false;
     }
-    await _samplePosition();
+    await _samplePosition(publish: false);
     _changed();
     return true;
   }

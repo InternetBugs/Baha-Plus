@@ -133,7 +133,13 @@ void main() {
       await frames(tester);
       expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
       expect(portal.communityRequests.last['page'], 2);
-      await tester.tap(find.byKey(const ValueKey('comment-order-0')));
+      expect(find.byType(RefreshIndicator), findsNothing);
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-order-control')),
+          matching: find.text(store.t('timeOrder')),
+        ),
+      );
       await frames(tester);
       expect(portal.communityRequests.last['order'], 0);
       expect(find.byKey(const ValueKey('comment-2')), findsNothing);
@@ -332,7 +338,13 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('comments-preview-heading')));
       await frames(tester);
       expect(find.byKey(const ValueKey('comments-page')), findsOneWidget);
-      expect(find.text(store.t('messageBoard')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(GlassLargeTitle),
+          matching: find.text(store.t('messageBoard')),
+        ),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -583,7 +595,13 @@ void main() {
       };
       await mount(tester, NotificationsPage(store: store));
       expect(find.byKey(const ValueKey('notification-20')), findsOneWidget);
-      expect(find.text(store.t('notifications')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(GlassLargeTitle),
+          matching: find.text(store.t('notifications')),
+        ),
+        findsOneWidget,
+      );
       expect(store.unreadNotifications, 2);
       await tester.tap(find.bySemanticsLabel(store.t('markAllRead')));
       await frames(tester);

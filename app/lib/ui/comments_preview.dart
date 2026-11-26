@@ -120,11 +120,12 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
               communityError(widget.store, snapshot.error),
               style: TextStyle(color: secondary(context), height: 1.6),
             ),
-            CupertinoButton(
-              onPressed: () => setState(() {
+            const SizedBox(height: 12),
+            GlassActionPill(
+              label: widget.store.t('retry'),
+              onTap: () => setState(() {
                 _comments = widget.store.loadComments(_videoId);
               }),
-              child: Text(widget.store.t('retry')),
             ),
           ] else if (comments.isEmpty) ...[
             Text(
@@ -177,7 +178,7 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
         child: GlassButton.custom(
           key: const ValueKey('open-full-comments'),
           useOwnLayer: true,
-          shape: const LiquidRoundedRectangle(borderRadius: 24),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 24),
           height: 48,
           width: double.infinity,
           onTap: _open,

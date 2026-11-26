@@ -1,6 +1,7 @@
 import 'dart:convert';
+import 'dart:ui' show Tristate;
 
-import 'package:baha_plus/ui/native_http_player.dart';
+import 'package:baha_plus/ui/native_http_consent.dart';
 import 'package:baha_plus/ui/native_http_rating.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
@@ -85,6 +86,16 @@ void main() {
       }
     });
 
+    test('$language badge codes map every rating level', () {
+      expect(nativeHttpRatingBadge(1).codeLabel, '0+');
+      expect(nativeHttpRatingBadge(2).codeLabel, '6+');
+      expect(nativeHttpRatingBadge(3).codeLabel, '12+');
+      expect(nativeHttpRatingBadge(4).codeLabel, '15+');
+      expect(nativeHttpRatingBadge(5).codeLabel, '18+');
+      expect(nativeHttpRatingBadge(6).codeLabel, '18+');
+      expect(nativeHttpRatingBadge(99).codeLabel, '?');
+    });
+
     for (final code in [2, 6, 99]) {
       testWidgets(
         '$language rating $code wraps and confirms on a narrow player',
@@ -112,7 +123,11 @@ void main() {
               ),
             ),
           );
-          expect(find.text(message(code)), findsOneWidget);
+          final lines = message(code).split('\n');
+          expect(find.text(nativeHttpRatingBadge(code).codeLabel), findsOneWidget);
+          for (final line in lines) {
+            expect(find.text(line), findsOneWidget);
+          }
           expect(find.text(translate('httpAgeConsent')), findsOneWidget);
           expect(
             translate('httpAgeConsent'),
@@ -133,22 +148,86 @@ void main() {
     }
   }
 
+  testWidgets(
+    'fits inside a compact 320x180 portrait player box without scrolling or overlapping top actions',
+    (tester) async {
+      const boxWidth = 320.0;
+      const boxHeight = 180.0;
+      const topActionsBottom = 44.0;
+      tester.view.physicalSize = const Size(boxWidth, boxHeight);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      for (final language in ['zh-Hans', 'zh-Hant']) {
+        for (final code in [1, 2, 3, 4, 5, 6, 99]) {
+          await tester.pumpWidget(
+            CupertinoApp(
+              home: SizedBox(
+                width: boxWidth,
+                height: boxHeight,
+                child: NativeHttpPlaybackConsent(
+                  rating: code,
+                  translate: (key) => dictionaries[language]![key]!,
+                  onConfirm: () {},
+                ),
+              ),
+            ),
+          );
+          final scroll = tester.state<ScrollableState>(
+            find.byType(Scrollable),
+          );
+          final ratingRect = tester.getRect(
+            find.byKey(const ValueKey('http-playback-age-rating')),
+          );
+          final buttonRect = tester.getRect(
+            find.byKey(const ValueKey('http-playback-consent')),
+          );
+          expect(
+            scroll.position.maxScrollExtent,
+            0,
+            reason: '$language code $code should fit without scrolling',
+          );
+          expect(
+            ratingRect.top,
+            greaterThanOrEqualTo(topActionsBottom),
+            reason: '$language code $code should clear top-right overlay icons',
+          );
+          expect(
+            buttonRect.bottom,
+            lessThanOrEqualTo(boxHeight),
+            reason: '$language code $code button should stay inside the box',
+          );
+          expect(tester.takeException(), isNull);
+        }
+      }
+    },
+  );
+
   testWidgets('confirmation stays disabled while the application is inactive', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      CupertinoApp(
-        home: NativeHttpPlaybackConsent(
-          rating: 3,
-          translate: (key) => dictionaries['zh-Hans']![key]!,
-          onConfirm: null,
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(
+        CupertinoApp(
+          home: NativeHttpPlaybackConsent(
+            rating: 3,
+            translate: (key) => dictionaries['zh-Hans']![key]!,
+            onConfirm: null,
+          ),
         ),
-      ),
-    );
-    final button = tester.widget<CupertinoButton>(
-      find.byKey(const ValueKey('http-playback-consent')),
-    );
-    expect(button.onPressed, isNull);
-    expect(tester.takeException(), isNull);
+      );
+      final button = find.byKey(const ValueKey('http-playback-consent'));
+      expect(button, findsOneWidget);
+      final node = tester.getSemantics(button);
+      expect(node.flagsCollection.isButton, isTrue);
+      expect(node.flagsCollection.isEnabled, isNot(Tristate.isTrue));
+      await tester.tap(button);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
   });
 }

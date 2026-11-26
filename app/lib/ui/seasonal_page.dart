@@ -63,7 +63,6 @@ class _SeasonalPageState extends State<SeasonalPage> {
       listenable: store,
       builder: (context, child) => GlassScaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-        bottomEdgeFade: false,
         statusBarStyle: GlassStatusBarStyle.auto,
         appBar: GlassAppBar(
           title: Text(store.t('seasonal')),
