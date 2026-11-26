@@ -281,5 +281,18 @@
   "httpParentRequired": "此影片需要家长验证，目前暂不支持，请选择其他影片。",
   "httpSessionChanged": "登录状态已变化，请重新开始播放。",
   "httpNativeRequired": "此平台尚未配置原生播放器，暂时无法播放。",
-  "httpUnsupportedAd": "当前广告需要尚未支持的后续流程，请稍后重试。"
+  "httpUnsupportedAd": "当前广告需要尚未支持的后续流程，请稍后重试。",
+  "heroSeasonalTop": "本季人气 #1",
+  "heroNewRelease": "重磅新上架",
+  "heroCollection": "官方专题",
+  "heroExpiring": "即将到期",
+  "newlyAdded": "近期新上架",
+  "curatedCollections": "主题片单",
+  "expiringSoonTitle": "即将到期片单",
+  "collectionCount": "{n} 部作品",
+  "collectionPreview": "{titles} 等 {n} 部",
+  "exploreAction": "探索",
+  "viewAction": "查看",
+  "popularEntryHint": "前往片库热门分类 · 共 {n} 部",
+  "addedOnDate": "{date} 上架"
 }

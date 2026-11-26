@@ -9,6 +9,7 @@ import '../data/playback_environment.dart';
 import 'account_page.dart';
 import 'catalog_pages.dart';
 import 'chrome.dart';
+import 'collection_page.dart';
 import 'detail_page.dart';
 import 'layout.dart';
 import 'official_browser.dart';
@@ -370,6 +371,17 @@ class _AppRootState extends State<AppRoot>
     ),
   );
 
+  void _collection(AnimeCollection collection) => Navigator.push(
+    context,
+    CupertinoPageRoute<void>(
+      builder: (_) => CollectionPage(
+        store: store,
+        collection: collection,
+        openDetail: _detail,
+      ),
+    ),
+  );
+
   void _selectTab(int index) {
     FocusManager.instance.primaryFocus?.unfocus();
     if (index == store.tab) {
@@ -544,6 +556,7 @@ class _AppRootState extends State<AppRoot>
                   openDetail: _detail,
                   openHistory: () => store.selectTab(3),
                   openSeason: _season,
+                  openCollection: _collection,
                 )
               : store.tab == 3
               ? HistoryContent(store: store)

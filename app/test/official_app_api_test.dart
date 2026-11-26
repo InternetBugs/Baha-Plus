@@ -115,6 +115,139 @@ void main() {
   });
 
   test(
+    'catalog parses seasonal popularity ranking, newly added dates, and merged curated collections',
+    () {
+      final data = {
+        'newAnime': {
+          'date': [
+            {
+              'animeSn': '10',
+              'videoSn': '20',
+              'title': '最新上架新番',
+              'cover': 'https://p2.bahamut.com.tw/ep-10.jpg',
+              'week': '7',
+              'upTime': '11/26',
+              'upTimeHours': '01:00',
+              'volume': '第8集',
+              'popular': '5000',
+            },
+            {
+              'animeSn': '11',
+              'videoSn': '21',
+              'title': '人氣冠軍新番',
+              'cover': 'https://p2.bahamut.com.tw/ep-11.jpg',
+              'week': '6',
+              'upTime': '11/22',
+              'upTimeHours': '00:30',
+              'volume': '第8集',
+              'popular': '192334',
+            },
+          ],
+          'popular': [
+            {'animeSn': '11'},
+            {'animeSn': '10'},
+            {'animeSn': '11'},
+          ],
+        },
+        'hotAnime': <dynamic>[],
+        'newAdded': [
+          {
+            'animeSn': '30',
+            'videoSn': '0',
+            'title': '劇場版 懷玉・玉折',
+            'cover': 'https://p2.bahamut.com.tw/movie.jpg',
+            'info': '上架日：11/24 共 1 集',
+            'popular': '1604',
+          },
+        ],
+        'category': [
+          {
+            'title': '音樂一下！',
+            'intro': '精選音樂動畫',
+            'list': [
+              {
+                'animeSn': '40',
+                'videoSn': '0',
+                'title': '孤獨搖滾！',
+                'cover': 'https://p2.bahamut.com.tw/bocchi.jpg',
+                'info': '年份：2022/10 共 12 集',
+                'popular': '9690107',
+              },
+            ],
+          },
+          {
+            'title': '12月份授權到期節目',
+            'intro': '',
+            'list': [
+              {
+                'animeSn': '50',
+                'videoSn': '0',
+                'title': '到期作品 A',
+                'cover': 'https://p2.bahamut.com.tw/exp-a.jpg',
+                'info': '年份：2014/12 共 1 集',
+                'popular': '1000',
+              },
+            ],
+          },
+          {
+            'title': '12月份授權到期節目',
+            'intro': '',
+            'list': [
+              {
+                'animeSn': '50',
+                'videoSn': '0',
+                'title': '到期作品 A',
+                'cover': 'https://p2.bahamut.com.tw/exp-a.jpg',
+                'info': '年份：2014/12 共 1 集',
+                'popular': '1000',
+              },
+              {
+                'animeSn': '51',
+                'videoSn': '0',
+                'title': '到期作品 B',
+                'cover': 'https://p2.bahamut.com.tw/exp-b.jpg',
+                'info': '年份：2021/01 共 13 集',
+                'popular': '2000',
+              },
+            ],
+          },
+        ],
+      };
+
+      final catalog = OfficialAppMetadata.catalog(
+        data,
+        now: DateTime.utc(2026, 11, 26),
+      );
+      expect(catalog.seasonalPopularIds, ['11', '10']);
+      final added = catalog.items.firstWhere((item) => item.id == '30');
+      expect(added.sections, ['new']);
+      expect(added.addedDate, '11/24');
+      expect(added.episodeLabel, '共 1 集');
+
+      expect(catalog.collections.length, 2);
+      expect(catalog.collections.first.title, '音樂一下！');
+      expect(catalog.collections.first.intro, '精選音樂動畫');
+      expect(catalog.collections.first.expiring, isFalse);
+      expect(catalog.collections.last.title, '12月份授權到期節目');
+      expect(catalog.collections.last.expiring, isTrue);
+      expect(
+        catalog.collections.last.items.map((item) => item.id),
+        ['50', '51'],
+      );
+
+      final roundTripped = Catalog.fromJson(
+        jsonDecode(catalog.encode()) as Json,
+      );
+      expect(roundTripped.seasonalPopularIds, ['11', '10']);
+      expect(roundTripped.collections.length, 2);
+      expect(
+        roundTripped.items.firstWhere((item) => item.id == '30').addedDate,
+        '11/24',
+      );
+    },
+  );
+
+  test(
     'catalog rolls next-year dates forward in Taipei and rejects bad dates',
     () {
       final data = catalogJson();

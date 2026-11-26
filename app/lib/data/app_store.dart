@@ -756,7 +756,12 @@ class AppStore extends ChangeNotifier {
 
   Catalog? _derivedCatalog;
   List<Anime> _seasonalCache = const [];
+  List<Anime> _seasonalPopularCache = const [];
   List<Anime> _popularCache = const [];
+  List<Anime> _newAddedCache = const [];
+  List<AnimeCollection> _thematicCollectionsCache = const [];
+  AnimeCollection? _expiringCollectionCache;
+  HomeFeed _homeFeedCache = HomeFeed.empty;
   List<Anime>? _favoriteIdsSource;
   int _favoriteIdsLength = -1;
   Set<String> _favoriteIds = const {};
@@ -769,18 +774,167 @@ class AppStore extends ChangeNotifier {
   String? _librarySearchedQuery;
   List<Anime> _libraryItemsCache = const [];
 
+  static bool _isMovieOrSingleRelease(Anime item) =>
+      item.title.contains('劇場版') ||
+      item.title.contains('剧场版') ||
+      item.title.contains('電影') ||
+      item.title.contains('电影') ||
+      item.episodeLabel == '共 1 集' ||
+      item.episodeLabel == '共1集';
+
   void _ensureCatalogSections() {
     if (identical(_derivedCatalog, catalog)) return;
     final items = catalog.items;
+    final byId = <String, Anime>{for (final item in items) item.id: item};
     _seasonalCache = List<Anime>.unmodifiable([
       for (final item in items)
         if (item.sections.contains('season')) item,
     ]);
+    final ranked = <Anime>[
+      for (final id in catalog.seasonalPopularIds) ?byId[id],
+    ];
+    _seasonalPopularCache = ranked.isEmpty
+        ? _seasonalCache
+        : List<Anime>.unmodifiable(ranked);
     _popularCache = List<Anime>.unmodifiable([
       for (final item in items)
         if (item.sections.contains('hot')) item,
     ]);
+    _newAddedCache = List<Anime>.unmodifiable([
+      for (final item in items)
+        if (item.sections.contains('new')) item,
+    ]);
+    _thematicCollectionsCache = List<AnimeCollection>.unmodifiable([
+      for (final collection in catalog.collections)
+        if (!collection.expiring) collection,
+    ]);
+    final expiringGroups = [
+      for (final collection in catalog.collections)
+        if (collection.expiring) collection,
+    ];
+    if (expiringGroups.isEmpty) {
+      _expiringCollectionCache = null;
+    } else if (expiringGroups.length == 1) {
+      _expiringCollectionCache = expiringGroups.first;
+    } else {
+      final merged = <String, Anime>{};
+      for (final group in expiringGroups) {
+        for (final item in group.items) {
+          merged.putIfAbsent(item.id, () => item);
+        }
+      }
+      _expiringCollectionCache = merged.isEmpty
+          ? null
+          : AnimeCollection(
+              id: 'expiring-all',
+              title: expiringGroups.first.title,
+              items: List<Anime>.unmodifiable(merged.values),
+              expiring: true,
+            );
+    }
+    _homeFeedCache = _buildHomeFeed();
     _derivedCatalog = catalog;
+  }
+
+  HomeFeed _buildHomeFeed() {
+    if (catalog.items.isEmpty) return HomeFeed.empty;
+    final heroItems = <HomeHeroItem>[];
+    final heroAnimeIds = <String>{};
+    final heroCollectionIds = <String>{};
+
+    // Card 1: Top seasonal anime by popularity.
+    final seasonalTop = _seasonalPopularCache.firstOrNull;
+    if (seasonalTop != null) {
+      heroAnimeIds.add(seasonalTop.id);
+      heroItems.add(
+        HomeHeroAnime(anime: seasonalTop, kind: HomeHeroKind.seasonalTop),
+      );
+    }
+
+    // Card 2: Highlighted newly added movie / back-catalog series.
+    Anime? newHighlight;
+    for (final item in _newAddedCache) {
+      if (heroAnimeIds.contains(item.id)) continue;
+      if (_isMovieOrSingleRelease(item)) {
+        newHighlight = item;
+        break;
+      }
+      newHighlight ??= item;
+    }
+    if (newHighlight != null) {
+      heroAnimeIds.add(newHighlight.id);
+      heroItems.add(
+        HomeHeroAnime(anime: newHighlight, kind: HomeHeroKind.newRelease),
+      );
+    }
+
+    // Card 3: Curated official thematic collection.
+    final featuredTheme = _thematicCollectionsCache.firstOrNull;
+    if (featuredTheme != null) {
+      heroCollectionIds.add(featuredTheme.id);
+      heroItems.add(
+        HomeHeroCollection(
+          collection: featuredTheme,
+          kind: HomeHeroKind.thematicCollection,
+        ),
+      );
+    }
+
+    // Card 4: Expiring license collection reminder.
+    final expiring = _expiringCollectionCache;
+    if (expiring != null) {
+      heroCollectionIds.add(expiring.id);
+      heroItems.add(
+        HomeHeroCollection(
+          collection: expiring,
+          kind: HomeHeroKind.expiringCollection,
+        ),
+      );
+    }
+
+    // Fallback when catalog omits newAdded or curated collections.
+    if (heroItems.length < 3) {
+      for (final anime in [..._seasonalPopularCache, ..._popularCache]) {
+        if (heroItems.length >= 3) break;
+        if (!heroAnimeIds.add(anime.id)) continue;
+        heroItems.add(
+          HomeHeroAnime(
+            anime: anime,
+            kind: anime.sections.contains('season')
+                ? HomeHeroKind.featured
+                : HomeHeroKind.popular,
+          ),
+        );
+      }
+    }
+
+    final dedupedUpdates = [
+      for (final anime in _seasonalCache)
+        if (!heroAnimeIds.contains(anime.id)) anime,
+    ];
+    final recentUpdates = dedupedUpdates.isNotEmpty
+        ? List<Anime>.unmodifiable(dedupedUpdates)
+        : _seasonalCache;
+    final newAddedRail = List<Anime>.unmodifiable([
+      for (final anime in _newAddedCache)
+        if (!heroAnimeIds.contains(anime.id)) anime,
+    ]);
+    final topicRail = List<AnimeCollection>.unmodifiable([
+      for (final collection in _thematicCollectionsCache)
+        if (!heroCollectionIds.contains(collection.id)) collection,
+    ]);
+
+    return HomeFeed(
+      heroItems: List<HomeHeroItem>.unmodifiable(heroItems),
+      recentUpdates: recentUpdates,
+      newAdded: newAddedRail,
+      topics: topicRail,
+    );
+  }
+
+  HomeFeed get homeFeed {
+    _ensureCatalogSections();
+    return _homeFeedCache;
   }
 
   List<Anime> get seasonal {
@@ -788,9 +942,29 @@ class AppStore extends ChangeNotifier {
     return _seasonalCache;
   }
 
+  List<Anime> get seasonalPopular {
+    _ensureCatalogSections();
+    return _seasonalPopularCache;
+  }
+
   List<Anime> get popular {
     _ensureCatalogSections();
     return _popularCache;
+  }
+
+  List<Anime> get newAdded {
+    _ensureCatalogSections();
+    return _newAddedCache;
+  }
+
+  List<AnimeCollection> get thematicCollections {
+    _ensureCatalogSections();
+    return _thematicCollectionsCache;
+  }
+
+  AnimeCollection? get expiringCollection {
+    _ensureCatalogSections();
+    return _expiringCollectionCache;
   }
 
   bool get _usesOfficialSearch =>
@@ -979,7 +1153,12 @@ class AppStore extends ChangeNotifier {
           item,
     ];
     return changed
-        ? Catalog(items: items, fetchedAt: source.fetchedAt)
+        ? Catalog(
+            items: items,
+            fetchedAt: source.fetchedAt,
+            seasonalPopularIds: source.seasonalPopularIds,
+            collections: source.collections,
+          )
         : source;
   }
 
@@ -1070,7 +1249,10 @@ class AppStore extends ChangeNotifier {
     try {
       final fetched = await metadataApi.fetchCatalog();
       if (_disposed || generation != _catalogGeneration) return;
-      _rememberPosters(catalog.items);
+      _rememberPosters([
+        ...catalog.items,
+        for (final collection in fetched.collections) ...collection.items,
+      ]);
       final updated = _mergePosters(fetched);
       catalog = updated;
       catalogSource = 'live';

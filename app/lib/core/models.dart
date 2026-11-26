@@ -55,6 +55,7 @@ class Anime {
     this.updateDay,
     this.updateTime,
     this.updateDate,
+    this.addedDate,
     this.views,
     this.year,
     this.sections = const [],
@@ -71,6 +72,7 @@ class Anime {
       updateDay: json['updateDay'] as int?,
       updateTime: json['updateTime'] as String?,
       updateDate: json['updateDate'] as String?,
+      addedDate: json['addedDate'] as String?,
       views: json['views'] as String?,
       year: json['year'] as String?,
       sections: (json['sections'] as List).cast<String>(),
@@ -85,6 +87,7 @@ class Anime {
       episodeLabel,
       updateTime,
       updateDate,
+      addedDate,
       views,
       year;
   final int? updateDay;
@@ -100,6 +103,7 @@ class Anime {
       (latestVideoId == null || OfficialSite.validId(latestVideoId!)) &&
       (updateDay == null || (updateDay! >= 0 && updateDay! <= 6)) &&
       (updateDate == null || Catalog.validDate(updateDate!)) &&
+      (addedDate == null || RegExp(r'^\d{1,2}/\d{1,2}$').hasMatch(addedDate!)) &&
       sections.every(const ['season', 'hot', 'new'].contains);
 
   Json toJson() => {
@@ -112,35 +116,160 @@ class Anime {
     if (updateDay != null) 'updateDay': updateDay,
     if (updateTime != null) 'updateTime': updateTime,
     if (updateDate != null) 'updateDate': updateDate,
+    if (addedDate != null) 'addedDate': addedDate,
     if (views != null) 'views': views,
     if (year != null) 'year': year,
     'sections': sections,
   };
 }
 
+class AnimeCollection {
+  const AnimeCollection({
+    required this.id,
+    required this.title,
+    this.intro = '',
+    this.items = const [],
+    this.expiring = false,
+  });
+
+  factory AnimeCollection.fromJson(Json json) {
+    final value = AnimeCollection(
+      id: json['id'] as String,
+      title: json['title'] as String,
+      intro: json['intro'] as String? ?? '',
+      items: (json['items'] as List)
+          .map((item) => Anime.fromJson(item as Json))
+          .toList(growable: false),
+      expiring: json['expiring'] as bool? ?? false,
+    );
+    if (!value.isValid) throw const FormatException('Invalid anime collection');
+    return value;
+  }
+
+  final String id, title, intro;
+  final List<Anime> items;
+  final bool expiring;
+
+  bool get isValid =>
+      id.isNotEmpty &&
+      id.runes.length <= 128 &&
+      title.isNotEmpty &&
+      title.runes.length < 500 &&
+      intro.runes.length <= 2000 &&
+      items.isNotEmpty &&
+      items.length <= 500 &&
+      items.every((item) => item.isValid) &&
+      items.map((item) => item.id).toSet().length == items.length;
+
+  Json toJson() => {
+    'id': id,
+    'title': title,
+    if (intro.isNotEmpty) 'intro': intro,
+    'items': items.map((item) => item.toJson()).toList(),
+    if (expiring) 'expiring': true,
+  };
+}
+
+enum HomeHeroKind {
+  seasonalTop,
+  newRelease,
+  featured,
+  popular,
+  thematicCollection,
+  expiringCollection,
+}
+
+sealed class HomeHeroItem {
+  const HomeHeroItem({required this.kind});
+
+  final HomeHeroKind kind;
+  String get keyId;
+}
+
+class HomeHeroAnime extends HomeHeroItem {
+  const HomeHeroAnime({required this.anime, required super.kind});
+
+  final Anime anime;
+
+  @override
+  String get keyId => anime.id;
+}
+
+class HomeHeroCollection extends HomeHeroItem {
+  const HomeHeroCollection({required this.collection, required super.kind});
+
+  final AnimeCollection collection;
+
+  @override
+  String get keyId => 'collection-${collection.id}';
+}
+
+class HomeFeed {
+  const HomeFeed({
+    this.heroItems = const [],
+    this.recentUpdates = const [],
+    this.newAdded = const [],
+    this.topics = const [],
+  });
+
+  static const empty = HomeFeed();
+
+  final List<HomeHeroItem> heroItems;
+  final List<Anime> recentUpdates;
+  final List<Anime> newAdded;
+  final List<AnimeCollection> topics;
+}
+
 class Catalog {
-  const Catalog({this.items = const [], this.fetchedAt = ''});
+  const Catalog({
+    this.items = const [],
+    this.fetchedAt = '',
+    this.seasonalPopularIds = const [],
+    this.collections = const [],
+  });
   factory Catalog.fromJson(Json json) {
+    final rawPopularIds = json['seasonalPopularIds'];
+    final rawCollections = json['collections'];
     final result = Catalog(
       items: (json['items'] as List)
           .map((value) => Anime.fromJson(value as Json))
           .toList(growable: false),
       fetchedAt: json['fetchedAt'] as String,
+      seasonalPopularIds: rawPopularIds == null
+          ? const []
+          : (rawPopularIds as List).cast<String>().toList(growable: false),
+      collections: rawCollections == null
+          ? const []
+          : (rawCollections as List)
+                .map((value) => AnimeCollection.fromJson(value as Json))
+                .toList(growable: false),
     );
     if (!result.isValid) throw const FormatException('Invalid catalog');
     return result;
   }
   final List<Anime> items;
   final String fetchedAt;
+  final List<String> seasonalPopularIds;
+  final List<AnimeCollection> collections;
   bool get isValid =>
       items.isNotEmpty &&
       items.length <= 5000 &&
       items.every((item) => item.isValid) &&
       items.map((item) => item.id).toSet().length == items.length &&
+      seasonalPopularIds.length <= 5000 &&
+      seasonalPopularIds.every(OfficialSite.validId) &&
+      seasonalPopularIds.toSet().length == seasonalPopularIds.length &&
+      collections.length <= 100 &&
+      collections.every((collection) => collection.isValid) &&
+      collections.map((collection) => collection.id).toSet().length ==
+          collections.length &&
       validTimestamp(fetchedAt);
   Json toJson() => {
     'items': items.map((item) => item.toJson()).toList(),
     'fetchedAt': fetchedAt,
+    if (seasonalPopularIds.isNotEmpty) 'seasonalPopularIds': seasonalPopularIds,
+    if (collections.isNotEmpty)
+      'collections': collections.map((collection) => collection.toJson()).toList(),
   };
   String encode() => jsonEncode(toJson());
 

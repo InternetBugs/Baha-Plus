@@ -409,7 +409,11 @@ class OfficialAppMetadata {
     final instant = (now ?? DateTime.now()).toUtc();
     final taipei = instant.add(const Duration(hours: 8));
     final items = <String, Anime>{};
-    final seasonal = (data['newAnime'] as Json)['date'] as List;
+    final newAnime = data['newAnime'] as Json;
+    final seasonal = newAnime['date'] as List;
+    final seasonalPopular = newAnime['popular'] == null
+        ? const <dynamic>[]
+        : newAnime['popular'] as List;
     final hot = data['hotAnime'] == null
         ? const <dynamic>[]
         : data['hotAnime'] as List;
@@ -429,10 +433,14 @@ class OfficialAppMetadata {
         final id = OfficialAppVideo._id(record['animeSn']);
         final old = items[id];
         final isSeason = section == 'season';
+        final isNew = section == 'new';
         final cover = _image(record['cover']);
         final videoId = record['videoSn']?.toString();
         final info = OfficialAppVideo._text(record['info'], 500);
         final week = int.tryParse(record['week']?.toString() ?? '');
+        final addedDate = isNew
+            ? RegExp(r'上架日[：:]\s*(\d{1,2}/\d{1,2})').firstMatch(info)?.group(1)
+            : null;
         final item = Anime.fromJson({
           'id': id,
           'title': OfficialAppVideo._text(record['title'], 499, required: true),
@@ -453,17 +461,90 @@ class OfficialAppMetadata {
           // a second section supplies the same series' main visual.
           if (old != null) ...old.toJson(),
           if (!isSeason) 'poster': cover,
+          'addedDate': ?addedDate,
           'sections': {...?old?.sections, section}.toList(),
         });
         items[id] = item;
       }
     }
+    if (seasonalPopular.length > 5000) {
+      throw const FormatException('Too many seasonal popular entries');
+    }
+    final seasonalPopularIds = <String>[];
+    final seenPopularIds = <String>{};
+    for (final raw in seasonalPopular) {
+      final record = raw as Json;
+      final id = OfficialAppVideo._id(record['animeSn']);
+      if (items.containsKey(id) && seenPopularIds.add(id)) {
+        seasonalPopularIds.add(id);
+      }
+    }
+    final collections = _collections(data['category']);
     final result = Catalog(
       items: items.values.toList(growable: false),
       fetchedAt: instant.toIso8601String(),
+      seasonalPopularIds: List<String>.unmodifiable(seasonalPopularIds),
+      collections: collections,
     );
     if (!result.isValid) throw const FormatException('Invalid App catalog');
     return result;
+  }
+
+  static List<AnimeCollection> _collections(dynamic rawCategories) {
+    if (rawCategories == null) return const [];
+    final records = rawCategories as List;
+    if (records.length > 100) {
+      throw const FormatException('Too many catalog collections');
+    }
+    // Official index.php splits large expiring-license groups into repeated
+    // category blocks sharing the same title. Merge identical titles in order.
+    final grouped = <String, ({String intro, bool expiring, Map<String, Anime> items})>{};
+    for (final raw in records) {
+      final record = raw as Json;
+      final title = OfficialAppVideo._text(record['title'], 499, required: true);
+      final intro = OfficialAppVideo._text(record['intro'], 2000);
+      final list = record['list'] as List;
+      if (list.length > 500) {
+        throw const FormatException('Too many collection entries');
+      }
+      final expiring = title.contains('到期') || title.contains('下架');
+      final bucket = grouped.putIfAbsent(
+        title,
+        () => (intro: intro, expiring: expiring, items: <String, Anime>{}),
+      );
+      for (final entryRaw in list) {
+        final entry = entryRaw as Json;
+        final id = OfficialAppVideo._id(entry['animeSn']);
+        if (bucket.items.containsKey(id)) continue;
+        final cover = _image(entry['cover']);
+        final videoId = entry['videoSn']?.toString();
+        final info = OfficialAppVideo._text(entry['info'], 500);
+        bucket.items[id] = Anime.fromJson({
+          'id': id,
+          'title': OfficialAppVideo._text(entry['title'], 499, required: true),
+          'cover': cover,
+          'poster': cover,
+          if (videoId != null && OfficialAppApi._videoId.hasMatch(videoId))
+            'latestVideoId': videoId,
+          'episodeLabel': RegExp(r'共\s*(\d+)\s*集').firstMatch(info)?.group(0),
+          'views': _views(entry['popular']),
+          'year': RegExp(r'\d{4}/\d{2}').firstMatch(info)?.group(0),
+          'sections': const <String>[],
+        });
+      }
+    }
+    var index = 0;
+    return List<AnimeCollection>.unmodifiable([
+      for (final entry in grouped.entries)
+        if (entry.value.items.isNotEmpty)
+          AnimeCollection(
+            id: entry.value.expiring ? 'expiring-${++index}' : 'topic-${++index}',
+            title: entry.key,
+            intro: entry.value.intro,
+            items: List<Anime>.unmodifiable(entry.value.items.values),
+            expiring: entry.value.expiring,
+          ),
+    ]);
   }
 
   static AnimeDetail detail(

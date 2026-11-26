@@ -277,8 +277,16 @@ void main() {
 
       final seasonal1 = store.seasonal;
       final popular1 = store.popular;
+      final seasonalPopular1 = store.seasonalPopular;
+      final newAdded1 = store.newAdded;
+      final thematic1 = store.thematicCollections;
+      final homeFeed1 = store.homeFeed;
       expect(identical(seasonal1, store.seasonal), isTrue);
       expect(identical(popular1, store.popular), isTrue);
+      expect(identical(seasonalPopular1, store.seasonalPopular), isTrue);
+      expect(identical(newAdded1, store.newAdded), isTrue);
+      expect(identical(thematic1, store.thematicCollections), isTrue);
+      expect(identical(homeFeed1, store.homeFeed), isTrue);
       expect(seasonal1.map((e) => e.id), ['1']);
       expect(popular1.map((e) => e.id), ['2']);
 

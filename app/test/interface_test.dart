@@ -16,6 +16,7 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/app_root.dart';
+import 'package:baha_plus/ui/collection_page.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
 import 'package:baha_plus/ui/glass_alert.dart';
 import 'package:baha_plus/ui/player_page.dart';
@@ -149,7 +150,7 @@ void main() {
   });
 
   testWidgets(
-    'popular titles form a vertical waterfall and catalog status text is absent',
+    'popular entry jumps to library hot waterfall without duplicating a waterfall on home',
     (tester) async {
       final store = await launch(tester);
       final titles = List.generate(
@@ -177,12 +178,24 @@ void main() {
       expect(find.textContaining(store.t('dataCached')), findsNothing);
       expect(find.textContaining(store.t('dataLive')), findsNothing);
       expect(find.byType(ListView), findsNothing);
-      final first = tester.getRect(find.byKey(const ValueKey('popular-1')));
-      final second = tester.getRect(find.byKey(const ValueKey('popular-2')));
+      expect(find.byKey(const ValueKey('popular-waterfall')), findsNothing);
+      final popularEntry = find.byKey(const ValueKey('home-popular-entry'));
+      expect(popularEntry, findsOneWidget);
+      await Scrollable.ensureVisible(
+        tester.element(popularEntry),
+        alignment: .4,
+      );
+      await frames(tester);
+      await tester.tap(popularEntry);
+      await frames(tester);
+      expect(store.tab, 2);
+      expect(store.libraryFilter, 'hot');
+      final first = tester.getRect(find.byKey(const ValueKey('library-1')));
+      final second = tester.getRect(find.byKey(const ValueKey('library-2')));
       expect(first.top, second.top);
       expect(first.left, lessThan(second.left));
       expect(first.height, lessThan(second.height));
-      final lastTile = find.byKey(const ValueKey('popular-20')).hitTestable();
+      final lastTile = find.byKey(const ValueKey('library-20')).hitTestable();
       for (var step = 0; step < 35 && lastTile.evaluate().isEmpty; step++) {
         await tester.drag(find.byType(CustomScrollView), const Offset(0, -350));
         await frames(tester);
@@ -557,7 +570,7 @@ void main() {
       expect(pages.controller!.page, greaterThan(.5));
       final heading = find.descendant(
         of: find.byType(SectionHeading),
-        matching: find.text(store.t('seasonal')),
+        matching: find.text(store.t('recentUpdates')),
       );
       await Scrollable.ensureVisible(tester.element(heading), alignment: .35);
       await frames(tester);
@@ -617,6 +630,180 @@ void main() {
       expect(find.byType(SeasonalPage), findsNothing);
       expect(store.playingVideoId, '101');
       expect(store.browserVisible, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'home curated hybrid carousel deduplicates below-the-fold sections and opens CollectionPage',
+    (tester) async {
+      final store = await launch(tester);
+      store.catalog = const Catalog(
+        fetchedAt: '2026-11-26T00:00:00Z',
+        seasonalPopularIds: ['12', '11'],
+        items: [
+          Anime(
+            id: '11',
+            title: 'Latest Update Show',
+            cover: 'https://p2.bahamut.com.tw/ep-11.jpg',
+            latestVideoId: '211',
+            episodeLabel: '第20集',
+            updateDate: '2026-11-26',
+            updateTime: '01:15',
+            sections: ['season'],
+          ),
+          Anime(
+            id: '12',
+            title: 'Seasonal Popular #1',
+            cover: 'https://p2.bahamut.com.tw/ep-12.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-12.jpg',
+            latestVideoId: '212',
+            episodeLabel: '第8集',
+            updateDate: '2026-11-22',
+            updateTime: '01:00',
+            views: '192334',
+            sections: ['season'],
+          ),
+          Anime(
+            id: '21',
+            title: '劇場版 新上架大作',
+            cover: 'https://p2.bahamut.com.tw/poster-21.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-21.jpg',
+            episodeLabel: '共 1 集',
+            addedDate: '11/24',
+            sections: ['new'],
+          ),
+          Anime(
+            id: '22',
+            title: '新上架補番作品',
+            cover: 'https://p2.bahamut.com.tw/poster-22.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-22.jpg',
+            episodeLabel: '共 13 集',
+            addedDate: '11/25',
+            sections: ['new'],
+          ),
+          Anime(
+            id: '31',
+            title: 'Popular Evergreen',
+            cover: 'https://p2.bahamut.com.tw/poster-31.jpg',
+            poster: 'https://p2.bahamut.com.tw/poster-31.jpg',
+            episodeLabel: '共 12 集',
+            sections: ['hot'],
+          ),
+        ],
+        collections: [
+          AnimeCollection(
+            id: 'topic-1',
+            title: '音樂特輯',
+            items: [
+              Anime(
+                id: '41',
+                title: '孤獨搖滾！',
+                cover: 'https://p2.bahamut.com.tw/poster-41.jpg',
+                poster: 'https://p2.bahamut.com.tw/poster-41.jpg',
+                episodeLabel: '共 12 集',
+              ),
+              Anime(
+                id: '42',
+                title: 'K-ON！',
+                cover: 'https://p2.bahamut.com.tw/poster-42.jpg',
+                poster: 'https://p2.bahamut.com.tw/poster-42.jpg',
+                episodeLabel: '共 14 集',
+              ),
+            ],
+          ),
+          AnimeCollection(
+            id: 'topic-2',
+            title: '競速特輯',
+            items: [
+              Anime(
+                id: '43',
+                title: '強風吹拂',
+                cover: 'https://p2.bahamut.com.tw/poster-43.jpg',
+                poster: 'https://p2.bahamut.com.tw/poster-43.jpg',
+                episodeLabel: '共 23 集',
+              ),
+            ],
+          ),
+          AnimeCollection(
+            id: 'expiring-3',
+            title: '12月份授權到期節目',
+            expiring: true,
+            items: [
+              Anime(
+                id: '51',
+                title: '櫻花莊的寵物女孩',
+                cover: 'https://p2.bahamut.com.tw/poster-51.jpg',
+                poster: 'https://p2.bahamut.com.tw/poster-51.jpg',
+                episodeLabel: '共 24 集',
+              ),
+            ],
+          ),
+        ],
+      );
+      store.selectTab(0);
+      await frames(tester);
+
+      final carousel = find.byKey(const ValueKey('home-featured-carousel'));
+      final pages = tester.widget<PageView>(
+        find.descendant(of: carousel, matching: find.byType(PageView)),
+      );
+      expect(pages.childrenDelegate.estimatedChildCount, 4);
+      expect(find.byKey(const ValueKey('featured-12')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('featured-carousel-indicators')),
+        findsOneWidget,
+      );
+
+      Future<void> reveal(Finder target) async {
+        for (var step = 0; step < 15 && target.evaluate().isEmpty; step++) {
+          await tester.drag(
+            find.byType(CustomScrollView),
+            const Offset(0, -320),
+          );
+          await frames(tester);
+        }
+        expect(target, findsOneWidget);
+        await Scrollable.ensureVisible(tester.element(target), alignment: .4);
+        await frames(tester);
+      }
+
+      // Recent updates deduplicates item 12 (shown in Hero) and shows item 11.
+      await reveal(find.byKey(const ValueKey('recent-11')));
+      expect(find.byKey(const ValueKey('recent-12')), findsNothing);
+
+      // Newly added rail deduplicates movie 21 (shown in Hero) and shows 22.
+      final newAddedRail = find.byKey(const ValueKey('home-new-added-rail'));
+      await reveal(newAddedRail);
+      expect(
+        find.descendant(of: newAddedRail, matching: find.text('新上架補番作品')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: newAddedRail, matching: find.text('劇場版 新上架大作')),
+        findsNothing,
+      );
+
+      // Curated topics rail skips topic-1 (featured in Hero) and opens CollectionPage on tap.
+      final topicCard = find.byKey(const ValueKey('home-topic-topic-2'));
+      await reveal(topicCard);
+      expect(find.byKey(const ValueKey('home-topic-topic-1')), findsNothing);
+      await tester.tap(topicCard);
+      await frames(tester);
+      expect(find.byType(CollectionPage), findsOneWidget);
+      expect(find.text('強風吹拂'), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel(store.t('back')));
+      await frames(tester);
+      expect(find.byType(CollectionPage), findsNothing);
+
+      // Popular entry jumps to Library hot filter instead of rendering a waterfall on Home.
+      expect(find.byKey(const ValueKey('popular-waterfall')), findsNothing);
+      final popularEntry = find.byKey(const ValueKey('home-popular-entry'));
+      await reveal(popularEntry);
+      await tester.tap(popularEntry);
+      await frames(tester);
+      expect(store.tab, 2);
+      expect(store.libraryFilter, 'hot');
       expect(tester.takeException(), isNull);
     },
   );
