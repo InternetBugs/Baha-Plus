@@ -21,6 +21,7 @@
 | 内容表面 | 浅色 `#FFFFFF`，深色 `#1C1C1E`；最低层容器分别为 `#F2F2F7`、`#000000` |
 | 字体 | `BahaSans`（Noto Sans TC），文字样式回退到 `BahaSansSC`（Noto Sans SC） |
 | 图标 | 统一使用 `CupertinoIcons`；缺失的 Apple SF Symbols 形态（如画中画 `PipIcon`）在 `chrome.dart` 以统一线宽与圆角绘制，不使用 Material `Icons.*` |
+| iOS 26 应用图标 | 原生多层液态玻璃图标位于 `app/ios/Runner/AppIcon.icon`（`tile.svg`、`play.svg`、`badge.svg` 三层玻璃 + 浅色／深色背景渐变），已接入 `Runner.xcodeproj`（`folder.iconcomposer.icon`）；Xcode 26 `actool` 编译后向 `Assets.car` 写入 `AppIcon.iconstack`（浅色／深色／色调／透明外观与实时镜面高光）并自动产出 iOS 15–18 兼容位图；同时保留 `Assets.xcassets/AppIcon.appiconset` 兼容旧版 Xcode |
 | 文字层级 | 默认正文 16；导航标题 17 / 600，大标题 34 / 700，标签文字 11；次要文字使用主题前景色的 55% 透明度 |
 
 颜色及文字入口见 `app/lib/main.dart` 和 `app/lib/ui/chrome.dart`。优先复用主题与共享组件，不要在业务页面另写一套旧式控件。

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:baha_plus/ui/chrome.dart';
@@ -267,6 +268,51 @@ void main() {
       );
       expect(railContainer.quality, GlassQuality.minimal);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  test(
+    'iOS 26 multi-layer Liquid Glass AppIcon.icon is valid and wired in Runner.xcodeproj',
+    () {
+      final iconDir = Directory('ios/Runner/AppIcon.icon');
+      final iconJsonFile = File('${iconDir.path}/icon.json');
+      expect(iconDir.existsSync(), isTrue);
+      expect(iconJsonFile.existsSync(), isTrue);
+
+      final parsed =
+          jsonDecode(iconJsonFile.readAsStringSync()) as Map<String, dynamic>;
+      final fills = (parsed['fill-specializations'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      expect(fills.length, greaterThanOrEqualTo(2));
+      expect(fills.any((entry) => entry['appearance'] == 'dark'), isTrue);
+
+      final groups = (parsed['groups'] as List<dynamic>)
+          .cast<Map<String, dynamic>>();
+      expect(groups.length, greaterThanOrEqualTo(3));
+      for (final group in groups) {
+        expect(group['specular'], isTrue);
+        final layers = (group['layers'] as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+        expect(layers, isNotEmpty);
+        for (final layer in layers) {
+          expect(layer['glass'], isTrue);
+          final imageName = layer['image-name'] as String;
+          final assetFile = File('${iconDir.path}/Assets/$imageName');
+          expect(
+            assetFile.existsSync(),
+            isTrue,
+            reason: 'Missing AppIcon.icon layer asset: $imageName',
+          );
+        }
+      }
+
+      final pbxproj = File(
+        'ios/Runner.xcodeproj/project.pbxproj',
+      ).readAsStringSync();
+      expect(pbxproj, contains('lastKnownFileType = folder.iconcomposer.icon'));
+      expect(pbxproj, contains('path = AppIcon.icon;'));
+      expect(pbxproj, contains('AppIcon.icon in Resources'));
+      expect(pbxproj, contains('ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;'));
     },
   );
 }
