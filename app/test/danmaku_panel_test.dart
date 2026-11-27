@@ -7,6 +7,7 @@ import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/native_danmaku_sender.dart';
 import 'package:baha_plus/data/native_http_api.dart';
 import 'package:baha_plus/ui/danmaku_panel.dart';
+import 'package:baha_plus/ui/glass_settings_menu.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -353,6 +354,138 @@ void main() {
       expect(find.text('130%'), findsOneWidget);
       expect(find.byKey(const ValueKey('danmaku-reset')), findsOneWidget);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'showDanmakuComposer pins the close button to the trailing edge in portrait and landscape',
+    (tester) async {
+      final store = await createStore(tester);
+      store
+        ..playingAnime = const Anime(
+          id: '10',
+          title: '测试动画',
+          cover: 'https://p2.bahamut.com.tw/10.jpg',
+          latestVideoId: '20',
+        )
+        ..playingVideoId = '20'
+        ..playback.value = const PlaybackState(
+          phase: PlaybackPhase.content,
+          surfaceReady: true,
+          duration: 1200,
+        );
+
+      for (final (size, padding) in [
+        (const Size(390, 844), const FakeViewPadding(top: 47, bottom: 34)),
+        (
+          const Size(844, 390),
+          const FakeViewPadding(left: 47, right: 47, bottom: 21),
+        ),
+      ]) {
+        tester.view.padding = padding;
+        tester.view.viewPadding = padding;
+        await mount(
+          tester,
+          Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: CupertinoButton(
+                  key: const ValueKey('open-composer-align'),
+                  onPressed: () => showDanmakuComposer(context, store),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+          size: size,
+        );
+
+        await tester.tap(find.byKey(const ValueKey('open-composer-align')));
+        await frames(tester);
+
+        final surfaceRect = tester.getRect(
+          find.byKey(const ValueKey('danmaku-composer-glass-surface')),
+        );
+        final closeButton = find.ancestor(
+          of: find.byIcon(CupertinoIcons.xmark),
+          matching: find.byType(CupertinoButton),
+        );
+        final closeRect = tester.getRect(closeButton);
+        final titleRect = tester.getRect(find.text(store.t('sendDanmaku')));
+        final groupRect = tester.getRect(find.byType(GlassSettingsGroup));
+
+        // Close button stays aligned with the trailing edge and centered with the title.
+        expect(surfaceRect.right - closeRect.right, closeTo(17, 1.5));
+        expect(closeRect.right, closeTo(groupRect.right + 1, 1.5));
+        expect(closeRect.center.dy, closeTo(titleRect.center.dy, 1.5));
+
+        await tester.tap(closeButton);
+        await frames(tester);
+        expect(find.byKey(const ValueKey('danmaku-composer')), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
+  testWidgets(
+    'showDanmakuPanel aligns the close button with settings content and clears sheet top chrome',
+    (tester) async {
+      final store = await createStore(tester);
+
+      for (final (size, padding) in [
+        (const Size(390, 844), const FakeViewPadding(top: 47, bottom: 34)),
+        (
+          const Size(844, 390),
+          const FakeViewPadding(left: 47, right: 47, bottom: 21),
+        ),
+        (const Size(1024, 768), const FakeViewPadding(top: 24, bottom: 20)),
+      ]) {
+        tester.view.padding = padding;
+        tester.view.viewPadding = padding;
+        await mount(
+          tester,
+          Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: CupertinoButton(
+                  key: const ValueKey('open-panel-align'),
+                  onPressed: () => showDanmakuPanel(context, store),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+          size: size,
+        );
+
+        await tester.tap(find.byKey(const ValueKey('open-panel-align')));
+        await frames(tester, count: 16);
+
+        final panelRect = tester.getRect(
+          find.byKey(const ValueKey('danmaku-panel')),
+        );
+        final closeButton = find.ancestor(
+          of: find.byIcon(CupertinoIcons.xmark),
+          matching: find.byType(GlassIconButton),
+        );
+        final closeRect = tester.getRect(closeButton);
+        final titleRect = tester.getRect(find.text(store.t('danmakuSettings')));
+        final groupRect = tester.getRect(find.byType(GlassSettingsGroup).first);
+        final stageRect = tester.getRect(
+          find.byKey(const ValueKey('danmaku-settings-stage')),
+        );
+
+        expect(closeRect.center.dy, closeTo(titleRect.center.dy, 1.5));
+        expect(closeRect.top - panelRect.top, greaterThanOrEqualTo(12));
+        expect(closeRect.top - panelRect.top, lessThanOrEqualTo(32));
+        expect(titleRect.left, closeTo(stageRect.left, 1.5));
+        expect(closeRect.right, closeTo(groupRect.right, 1.5));
+
+        await tester.tap(closeButton);
+        await frames(tester, count: 16);
+        expect(find.byKey(const ValueKey('danmaku-panel')), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
     },
   );
 }

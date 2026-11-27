@@ -144,6 +144,8 @@ void showDanmakuComposer(BuildContext context, AppStore store) {
                     context: dialogContext,
                     removeTop: true,
                     removeBottom: true,
+                    removeLeft: true,
+                    removeRight: true,
                     child: Material(
                       type: MaterialType.transparency,
                       child: DanmakuPanel(
@@ -340,8 +342,8 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     final modified = !_isDefaultSettings(settings);
     return GlassAppBar(
       centerTitle: false,
-      toolbarHeight: 56,
-      padding: const EdgeInsets.fromLTRB(20, 8, 16, 4),
+      toolbarHeight: 68,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       title: Text(
         store.t('danmakuSettings'),
         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
@@ -375,8 +377,8 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   GlassAppBar _composerAppBar(BuildContext context) => GlassAppBar(
     centerTitle: false,
-    toolbarHeight: 56,
-    padding: const EdgeInsets.fromLTRB(18, 8, 14, 4),
+    toolbarHeight: 64,
+    padding: const EdgeInsets.symmetric(horizontal: 18),
     title: Row(
       children: [
         Flexible(
@@ -409,24 +411,33 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final foreground = Theme.of(context).colorScheme.onSurface;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 14, 6),
+      padding: const EdgeInsets.fromLTRB(20, 14, 17, 6),
       child: Row(
         children: [
-          Flexible(
-            child: Text(
-              store.t('sendDanmaku'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 17),
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    store.t('sendDanmaku'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 17,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _draft,
+                  builder: (context, value, _) =>
+                      _ByteCounterBadge(bytes: _trimmedUtf8Length(value.text)),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 10),
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _draft,
-            builder: (context, value, _) =>
-                _ByteCounterBadge(bytes: _trimmedUtf8Length(value.text)),
-          ),
-          const Spacer(),
+          const SizedBox(width: 12),
           Semantics(
             label: store.t('close'),
             button: true,
@@ -443,10 +454,12 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                 ),
                 child: SizedBox.square(
                   dimension: 34,
-                  child: Icon(
-                    CupertinoIcons.xmark,
-                    size: 16,
-                    color: foreground.withValues(alpha: .85),
+                  child: Center(
+                    child: Icon(
+                      CupertinoIcons.xmark,
+                      size: 16,
+                      color: foreground.withValues(alpha: .85),
+                    ),
                   ),
                 ),
               ),
@@ -458,8 +471,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
   }
 
   Widget _settingsBody(BuildContext context, DanmakuSettings settings) {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    const topInset = 12.0;
+    final safe = MediaQuery.paddingOf(context);
+    final leftInset = safe.left + 20.0;
+    final rightInset = safe.right + 20.0;
+    final bottomInset = safe.bottom;
+    const topInset = 4.0;
     final hasLoadError = store.nativeHttpPlayback?.danmakuFailureStage != null;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -482,9 +498,9 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
               constraints: const BoxConstraints(maxWidth: 880),
               child: Padding(
                 padding: EdgeInsets.fromLTRB(
-                  20,
+                  leftInset,
                   topInset,
-                  20,
+                  rightInset,
                   bottomInset + 20,
                 ),
                 child: Row(
@@ -520,7 +536,12 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
           physics: const BouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
-          padding: EdgeInsets.fromLTRB(20, topInset, 20, bottomInset + 32),
+          padding: EdgeInsets.fromLTRB(
+            leftInset,
+            topInset,
+            rightInset,
+            bottomInset + 32,
+          ),
           children: [
             stage,
             if (errorBanner != null) ...[

@@ -338,7 +338,22 @@ Future<T?> showAdaptiveGlassSheet<T>({
       expandedColor: expandedColor,
       expandedDarkColor: expandedDarkColor,
       sheetAnimationStyle: sheetAnimationStyle,
-      builder: builder,
+      builder: (sheetContext) {
+        final media = MediaQuery.of(sheetContext);
+        final sheetHeight = fullSize <= 1.0
+            ? media.size.height * fullSize
+            : fullSize;
+        final sheetTop = math.max(0.0, media.size.height - sheetHeight);
+        final topOverlap = math.max(0.0, media.padding.top - sheetTop);
+        final sheetTopInset = math.max(12.0, topOverlap);
+        return MediaQuery(
+          data: media.copyWith(
+            padding: media.padding.copyWith(top: sheetTopInset),
+            viewPadding: media.viewPadding.copyWith(top: sheetTopInset),
+          ),
+          child: builder(sheetContext),
+        );
+      },
     );
   }
   final duration =

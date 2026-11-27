@@ -478,7 +478,7 @@ void main() {
   );
 
   testSeekWidgets(
-    'hidden controls reveal and stay visible throughout a long swipe',
+    'hidden controls stay hidden throughout a swipe while seek preview shows progress',
     (tester) async {
       final portal = await launch(tester);
       await tester.pump(const Duration(seconds: 4));
@@ -487,17 +487,29 @@ void main() {
       final gesture = await tester.startGesture(tester.getCenter(surface));
       await gesture.moveBy(const Offset(-85, 0));
       await tester.pump(const Duration(milliseconds: 150));
-      expect(controls.hitTestable(), findsOneWidget);
+      expect(preview, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('player-seek-preview-bar')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: preview, matching: find.text('09:48 / 20:00')),
+        findsOneWidget,
+      );
+      expect(controls.hitTestable(), findsNothing);
       await tester.pump(const Duration(seconds: 4));
-      expect(controls.hitTestable(), findsOneWidget);
-      expect(position(tester), closeTo(588, .001));
+      expect(preview, findsOneWidget);
+      expect(controls.hitTestable(), findsNothing);
       await gesture.up();
       await tester.pump();
       expect(portal.commands, [('seek', 588.0)]);
       expect(portal.store.playback.value.paused, isFalse);
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pump(const Duration(milliseconds: 150));
+      expect(preview, findsNothing);
       expect(controls.hitTestable(), findsNothing);
+      await tester.tap(surface);
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(controls.hitTestable(), findsOneWidget);
+      expect(position(tester), 588);
     },
   );
 
@@ -1029,16 +1041,34 @@ void main() {
       );
       final closeBtn = find.byKey(const ValueKey('player-fullscreen-close'));
       final lockBtn = find.byKey(const ValueKey('player-lock'));
+      final muteBtn = find.byKey(const ValueKey('player-mute-button'));
+      final hitTarget = find.byKey(
+        const ValueKey('player-scrubber-hit-target'),
+      );
 
-      // Phone landscape: slim single-row bottom bar + unified 36pt top/lock controls.
+      // Phone landscape: slim subtitle-clearing bottom bar + mute moved to top capsule.
       final phoneBar = tester.getRect(controls);
+      final phoneHitTarget = tester.getRect(hitTarget);
       final phoneCenter = tester.getRect(centerControls);
       final phoneTopCapsule = tester.getRect(topCapsule);
-      expect(phoneBar.height, closeTo(44, 1));
+      expect(phoneBar.height, closeTo(27, 1));
+      expect(390 - phoneBar.top, lessThanOrEqualTo(36));
+      expect(phoneHitTarget.height, greaterThanOrEqualTo(40));
       expect(phoneCenter.bottom, lessThan(phoneBar.top));
       expect(tester.getSize(closeBtn), const Size(36, 36));
       expect(tester.getSize(lockBtn), const Size(36, 36));
       expect(phoneTopCapsule.height, closeTo(36, 1));
+      expect(
+        find.descendant(of: topCapsule, matching: muteBtn),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: controls,
+          matching: find.byIcon(CupertinoIcons.arrow_down_right_arrow_up_left),
+        ),
+        findsNothing,
+      );
       expect(
         find.descendant(of: controls, matching: find.text('02:05')),
         findsOneWidget,
@@ -1048,12 +1078,31 @@ void main() {
         findsOneWidget,
       );
 
-      // Center transport actions trigger play/pause and relative seeks.
+      // Mute button in top capsule and center transport actions work as expected.
+      await tester.tap(muteBtn);
+      await tester.pump();
       await tester.tap(find.byIcon(CupertinoIcons.gobackward_10));
       await tester.pump();
       await tester.tap(find.byIcon(CupertinoIcons.pause_fill));
       await tester.pump();
-      expect(portal.commands, [('seek', 115.0), ('pause', null)]);
+      expect(portal.commands, [
+        ('mute', null),
+        ('seek', 115.0),
+        ('pause', null),
+      ]);
+
+      // iPhone landscape safe area keeps bottom footprint compact to clear hardcoded subtitles.
+      tester.view.padding = const FakeViewPadding(
+        left: 59,
+        right: 59,
+        bottom: 21,
+      );
+      await tester.pump();
+      final iosSafeBar = tester.getRect(controls);
+      expect(iosSafeBar.height, closeTo(27, 1));
+      expect(390 - iosSafeBar.top, lessThanOrEqualTo(36));
+      tester.view.padding = FakeViewPadding.zero;
+      await tester.pump();
 
       // Buffering hides the center transport buttons to avoid overlapping the spinner.
       portal.store.playback.value = const PlaybackState(
@@ -1074,10 +1123,10 @@ void main() {
       await tester.pump();
       expect(centerControls, findsOneWidget);
 
-      // Tablet fullscreen scales up to 40pt top/lock controls and 48pt bottom pill.
+      // Tablet fullscreen scales up to 40pt top/lock controls and 32pt slim bottom pill.
       tester.view.physicalSize = const Size(1180, 820);
       await tester.pump();
-      expect(tester.getRect(controls).height, closeTo(48, 1));
+      expect(tester.getRect(controls).height, closeTo(32, 1));
       expect(tester.getSize(closeBtn), const Size(40, 40));
       expect(tester.getSize(lockBtn), const Size(40, 40));
       expect(tester.getRect(topCapsule).height, closeTo(40, 1));
@@ -1086,6 +1135,99 @@ void main() {
       tester.view.physicalSize = const Size(320, 640);
       await tester.pump();
       expect(tester.getRect(controls).width, lessThanOrEqualTo(320));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'double-tapping hidden fullscreen video pauses and resumes without revealing bottom controls',
+    (tester) async {
+      final portal = await launch(tester, size: const Size(844, 390));
+      final centerControls = find.byKey(
+        const ValueKey('player-center-controls'),
+      );
+      final closeBtn = find.byKey(const ValueKey('player-fullscreen-close'));
+
+      // Wait for fullscreen controls to auto-hide during playback.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(controls.hitTestable(), findsNothing);
+      expect(centerControls.hitTestable(), findsNothing);
+      expect(closeBtn.hitTestable(), findsNothing);
+
+      Future<void> doubleTap() async {
+        final target = gestureOrigin(tester);
+        await tester.tapAt(target);
+        await tester.pump(const Duration(milliseconds: 80));
+        await tester.tapAt(target);
+        await tester.pump();
+      }
+
+      // Double-tap to pause keeps all overlays hidden so subtitles stay unobstructed.
+      await doubleTap();
+      expect(portal.commands, [('pause', null)]);
+      portal.store.playback.value = _playback(paused: true);
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(controls.hitTestable(), findsNothing);
+      expect(centerControls.hitTestable(), findsNothing);
+      expect(closeBtn.hitTestable(), findsNothing);
+
+      // Double-tap again to resume also keeps overlays hidden.
+      await doubleTap();
+      expect(portal.commands, [('pause', null), ('play', null)]);
+      portal.store.playback.value = _playback(paused: false);
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(controls.hitTestable(), findsNothing);
+
+      // Single-tapping still reveals controls on demand.
+      await tester.tapAt(gestureOrigin(tester));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(controls.hitTestable(), findsOneWidget);
+      expect(centerControls.hitTestable(), findsOneWidget);
+
+      // Hide again and verify an external pause (not double-tap) still reveals controls.
+      await tester.tapAt(gestureOrigin(tester));
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(controls.hitTestable(), findsNothing);
+      portal.store.playback.value = _playback(paused: true);
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(controls.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testSeekWidgets(
+    'dragging the extended touch apron above the slim fullscreen scrubber seeks smoothly',
+    (tester) async {
+      final portal = await launch(
+        tester,
+        size: const Size(844, 390),
+        state: _playback(position: 600, duration: 1200, paused: true),
+      );
+      final barRect = tester.getRect(controls);
+      final hitRect = tester.getRect(
+        find.byKey(const ValueKey('player-scrubber-hit-target')),
+      );
+      final sliderRect = tester.getRect(slider);
+      expect(hitRect.top, lessThan(barRect.top));
+
+      // Start dragging in the invisible top apron just above the visual glass capsule.
+      final apronStart = Offset(
+        sliderRect.center.dx,
+        (hitRect.top + barRect.top) / 2,
+      );
+      final gesture = await tester.startGesture(apronStart);
+      await gesture.moveBy(Offset(sliderRect.width / 4, 0));
+      await tester.pump();
+      final target = position(tester);
+      expect(target, greaterThan(800));
+      expect(preview, findsNothing);
+      expect(portal.commands, isEmpty);
+
+      await gesture.up();
+      await tester.pump();
+      expect(portal.commands, [('seek', target)]);
+      expect(position(tester), target);
       expect(tester.takeException(), isNull);
     },
   );

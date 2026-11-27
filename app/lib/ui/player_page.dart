@@ -58,6 +58,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   bool _isTablet = false;
   bool _controlsVisible = true;
   bool _settingsMenuOpen = false;
+  bool _apronScrubbing = false;
+  bool? _silentPauseToggleTarget;
   PlaybackPhase? _controlPhase;
   bool? _controlPaused;
   Timer? _hideTimer;
@@ -66,6 +68,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   final _settingsMenuController = GlassSettingsMenuController();
   final _inlinePlayerKey = GlobalKey(debugLabel: 'inline-player');
   final _videoSurfaceKey = GlobalKey(debugLabel: 'player-video-surface');
+  final _fullscreenSliderKey = GlobalKey(debugLabel: 'fullscreen-slider');
   late final ValueNotifier<_PlayerChromeState> _chromeState;
   static final _numericEpisodePattern = RegExp(r'^\d+(?:\.\d+)?$');
   // The top strip of the landscape surface never starts a seek. Pulling down
@@ -158,12 +161,23 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       store.setPlayerLocked(false);
     }
     if (state.phase == _controlPhase && state.paused == _controlPaused) return;
+    final phaseChanged = state.phase != _controlPhase;
     _controlPhase = state.phase;
     _controlPaused = state.paused;
+    if (!phaseChanged &&
+        store.playerFullscreen &&
+        !_controlsVisible &&
+        state.phase == PlaybackPhase.content &&
+        _silentPauseToggleTarget == state.paused) {
+      _silentPauseToggleTarget = null;
+      return;
+    }
+    _silentPauseToggleTarget = null;
     _revealControls();
   }
 
   void _revealControls() {
+    _silentPauseToggleTarget = null;
     _hideTimer?.cancel();
     if (!_controlsVisible && mounted) setState(() => _controlsVisible = true);
     final state = store.playback.value;
@@ -193,6 +207,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _setLocked(bool locked) {
+    _silentPauseToggleTarget = null;
     if (locked) _settingsMenuController.close();
     store.setPlayerLocked(locked);
     _revealControls();
@@ -228,6 +243,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       _cancelScrub();
     }
     if (_fullscreen == store.playerFullscreen) return;
+    _silentPauseToggleTarget = null;
     _settingsMenuController.close();
     _fullscreen = store.playerFullscreen;
     _revealControls();
@@ -314,14 +330,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
   }
 
-  void _beginScrub(double position) {
+  void _beginScrub(double position, {bool revealControls = true}) {
     if (!store.playback.value.canControl || store.playerLocked) return;
     _scrubRevision++;
     final wasScrubbing = _scrubPosition.value != null;
     _scrubDocument = store.operation.id;
     _scrubPosition.value = position.clamp(0.0, store.playback.value.duration);
     if (!wasScrubbing) setState(() {});
-    _revealControls();
+    if (revealControls) {
+      _revealControls();
+    } else if (_controlsVisible) {
+      _hideTimer?.cancel();
+    }
   }
 
   void _updateScrub(double position) {
@@ -366,6 +386,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _cancelScrub() {
+    _apronScrubbing = false;
     if (_scrubPosition.value == null) return;
     _scrubRevision++;
     _scrubDocument = null;
@@ -373,7 +394,53 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _swipeViewport = null;
     _scrubPosition.value = null;
     setState(() {});
-    _revealControls();
+    if (_controlsVisible) _revealControls();
+  }
+
+  double? _sliderPositionForGlobalX(
+    double globalX, {
+    required double thumbRadius,
+  }) {
+    final box = _fullscreenSliderKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final trackWidth = box.size.width - thumbRadius * 2;
+    if (trackWidth <= 0) return null;
+    final localX = box.globalToLocal(Offset(globalX, 0)).dx;
+    final raw = ((localX - thumbRadius) / trackWidth).clamp(0.0, 1.0);
+    final normalized = Directionality.of(context) == TextDirection.rtl
+        ? 1.0 - raw
+        : raw;
+    return normalized * store.playback.value.duration;
+  }
+
+  void _startScrubberApron(DragStartDetails details, double thumbRadius) {
+    final target = _sliderPositionForGlobalX(
+      details.globalPosition.dx,
+      thumbRadius: thumbRadius,
+    );
+    if (target == null) return;
+    _apronScrubbing = true;
+    _beginScrub(target);
+  }
+
+  void _updateScrubberApron(DragUpdateDetails details, double thumbRadius) {
+    if (!_apronScrubbing) return;
+    final target = _sliderPositionForGlobalX(
+      details.globalPosition.dx,
+      thumbRadius: thumbRadius,
+    );
+    if (target != null) _updateScrub(target);
+  }
+
+  void _endScrubberApron(DragEndDetails details) {
+    if (!_apronScrubbing) return;
+    _apronScrubbing = false;
+    unawaited(_commitScrub());
+  }
+
+  void _cancelScrubberApron() {
+    if (!_apronScrubbing) return;
+    _cancelScrub();
   }
 
   void _startSwipe(DragStartDetails details) {
@@ -396,7 +463,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     // Keep fractional seconds so small reversals can refine the target.
     _swipeSecondsPerPixel =
         state.duration.clamp(0.0, 120.0) / surface.size.width;
-    _beginScrub(_swipeStartPosition!);
+    _beginScrub(_swipeStartPosition!, revealControls: false);
   }
 
   void _updateSwipe(DragUpdateDetails details) {
@@ -787,7 +854,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ? () {
                 final playback = store.playback.value;
                 if (!store.playerLocked && playback.canControl) {
-                  store.controlPlayer(playback.paused ? 'play' : 'pause');
+                  final targetPaused = !playback.paused;
+                  if (store.playerFullscreen && !_controlsVisible) {
+                    _silentPauseToggleTarget = targetPaused;
+                  }
+                  store.controlPlayer(targetPaused ? 'pause' : 'play');
                 }
               }
             : null,
@@ -867,14 +938,16 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                             bottom: 0,
                             left: 0,
                             right: 0,
-                            height: safe.bottom + (tablet ? 96 : 82),
+                            height: tablet
+                                ? math.max(56.0, safe.bottom + 32.0)
+                                : 44.0,
                             child: const DecoratedBox(
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
                                   begin: Alignment.bottomCenter,
                                   end: Alignment.topCenter,
                                   colors: [
-                                    Color(0x44000000),
+                                    Color(0x2E000000),
                                     Colors.transparent,
                                   ],
                                 ),
@@ -989,6 +1062,38 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                                     ],
                                   ),
                                 ),
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  key: const ValueKey(
+                                    'player-seek-preview-bar',
+                                  ),
+                                  width: 136,
+                                  height: 3.5,
+                                  child: ClipRSuperellipse(
+                                    borderRadius: BorderRadius.circular(2),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        const ColoredBox(
+                                          color: Color(0x38FFFFFF),
+                                        ),
+                                        FractionallySizedBox(
+                                          alignment:
+                                              AlignmentDirectional.centerStart,
+                                          widthFactor: chrome.duration > 0
+                                              ? (scrub / chrome.duration).clamp(
+                                                  0.0,
+                                                  1.0,
+                                                )
+                                              : 0.0,
+                                          child: const ColoredBox(
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
                               ],
                             ),
                           );
@@ -1040,32 +1145,90 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               if (store.playerFullscreen &&
                   chrome.canOperate &&
                   !store.playerLocked)
-                Positioned(
-                  left: math.max(minSide, safe.left + (tablet ? 16.0 : 12.0)),
-                  right: math.max(minSide, safe.right + (tablet ? 16.0 : 12.0)),
-                  bottom: tablet
-                      ? math.max(16.0, safe.bottom + 4.0)
-                      : math.max(12.0, safe.bottom + 2.0),
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: IgnorePointer(
-                      ignoring: !_controlsVisible,
-                      child: AnimatedOpacity(
-                        opacity: _controlsVisible ? 1 : 0,
-                        duration: const Duration(milliseconds: 100),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: tablet ? 720 : 680,
-                          ),
-                          child: Listener(
-                            onPointerDown: (_) => _revealControls(),
-                            child: _controls(chrome: chrome, fullscreen: true),
+                () {
+                  final visualBottom = tablet
+                      ? (safe.bottom > 0
+                            ? math.max(12.0, safe.bottom - 6.0)
+                            : 12.0)
+                      : (safe.bottom > 0
+                            ? math.max(8.0, safe.bottom - 13.0)
+                            : 8.0);
+                  final topApron = tablet ? 6.0 : 10.0;
+                  const bottomApron = 4.0;
+                  final hitBottom = math.max(0.0, visualBottom - bottomApron);
+                  final thumbRadius = tablet ? 6.5 : 5.5;
+                  final seekable =
+                      chrome.canControl && _swipeStartPosition == null;
+                  return Positioned(
+                    left: math.max(minSide, safe.left + (tablet ? 16.0 : 12.0)),
+                    right: math.max(
+                      minSide,
+                      safe.right + (tablet ? 16.0 : 12.0),
+                    ),
+                    bottom: hitBottom,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: IgnorePointer(
+                        ignoring: !_controlsVisible,
+                        child: AnimatedOpacity(
+                          opacity: _controlsVisible ? 1 : 0,
+                          duration: const Duration(milliseconds: 100),
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: tablet ? 680 : 640,
+                            ),
+                            child: Listener(
+                              onPointerDown: (_) => _revealControls(),
+                              onPointerCancel: (_) => _cancelScrubberApron(),
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Positioned.fill(
+                                    child: GestureDetector(
+                                      key: const ValueKey(
+                                        'player-scrubber-hit-target',
+                                      ),
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _revealControls,
+                                      onHorizontalDragStart: seekable
+                                          ? (details) => _startScrubberApron(
+                                              details,
+                                              thumbRadius,
+                                            )
+                                          : null,
+                                      onHorizontalDragUpdate: seekable
+                                          ? (details) => _updateScrubberApron(
+                                              details,
+                                              thumbRadius,
+                                            )
+                                          : null,
+                                      onHorizontalDragEnd: seekable
+                                          ? _endScrubberApron
+                                          : null,
+                                      onHorizontalDragCancel: seekable
+                                          ? _cancelScrubberApron
+                                          : null,
+                                    ),
+                                  ),
+                                  Padding(
+                                    padding: EdgeInsets.only(
+                                      top: topApron,
+                                      bottom: visualBottom - hitBottom,
+                                    ),
+                                    child: _controls(
+                                      chrome: chrome,
+                                      fullscreen: true,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                }(),
             ],
           );
         },
@@ -1306,31 +1469,31 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     bool compactInline = false,
   }) {
     final seekable = chrome.canControl && _swipeStartPosition == null;
-    final active = !fullscreen || _controlsVisible || _scrub != null;
+    final active = !fullscreen || _controlsVisible;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final color = fullscreen || dark ? Colors.white : const Color(0xff1c1c1e);
     if (fullscreen) {
       final tablet = AppLayout.of(context).isTablet;
-      final buttonSize = tablet ? 38.0 : 36.0;
+      final thumbRadius = tablet ? 6.5 : 5.5;
       final timeStyle = TextStyle(
         color: color,
-        fontSize: tablet ? 12.5 : 11.5,
+        fontSize: tablet ? 12.0 : 11.0,
         fontFeatures: const [FontFeature.tabularFigures()],
       );
       return GlassContainer(
         key: const ValueKey('video-glass-controls'),
         useOwnLayer: true,
         platformViewBackdrop: true,
-        shape: LiquidRoundedSuperellipse(borderRadius: tablet ? 24 : 22),
+        shape: LiquidRoundedSuperellipse(borderRadius: tablet ? 16 : 13.5),
         settings: _fullscreenControlGlass,
         padding: EdgeInsets.symmetric(
-          horizontal: tablet ? 14 : 10,
-          vertical: tablet ? 5 : 4,
+          horizontal: tablet ? 12 : 10,
+          vertical: tablet ? 1.5 : 0,
         ),
         child: Row(
           children: [
             Padding(
-              padding: const EdgeInsets.only(left: 4, right: 8),
+              padding: const EdgeInsets.only(left: 2, right: 8),
               child: _PlaybackTimeText(
                 playback: store.playback,
                 active: active,
@@ -1341,10 +1504,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             ),
             Expanded(
               child: _PlaybackProgressBar(
+                key: _fullscreenSliderKey,
                 playback: store.playback,
                 active: active,
                 seekable: seekable,
-                thumbRadius: tablet ? 7 : 6.5,
+                thumbRadius: thumbRadius,
                 color: color,
                 label: store.t('playbackProgress'),
                 scrub: _scrubPosition,
@@ -1355,7 +1519,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.only(left: 8, right: 4),
+              padding: const EdgeInsets.only(left: 8, right: 2),
               child: _PlaybackTimeText(
                 playback: store.playback,
                 active: active,
@@ -1363,24 +1527,6 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 format: _PlaybackTimeFormat.duration,
                 style: timeStyle.copyWith(color: color.withValues(alpha: .72)),
               ),
-            ),
-            _control(
-              chrome.muted
-                  ? CupertinoIcons.speaker_slash_fill
-                  : CupertinoIcons.speaker_2_fill,
-              chrome.muted ? 'unmutePlayback' : 'mutePlayback',
-              () => store.controlPlayer('mute'),
-              color,
-              size: tablet ? 20 : 18,
-              minimumSize: buttonSize,
-            ),
-            _control(
-              CupertinoIcons.arrow_down_right_arrow_up_left,
-              'exitFullScreen',
-              () => store.setPlayerFullscreen(false),
-              color,
-              size: tablet ? 19 : 17,
-              minimumSize: buttonSize,
             ),
           ],
         ),
@@ -1658,6 +1804,18 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (chrome.canOperate)
+              _capsuleAction(
+                chrome.muted
+                    ? CupertinoIcons.speaker_slash_fill
+                    : CupertinoIcons.speaker_2_fill,
+                chrome.muted ? 'unmutePlayback' : 'mutePlayback',
+                () => store.controlPlayer('mute'),
+                key: const ValueKey('player-mute-button'),
+                width: slotWidth,
+                height: capsuleHeight,
+                iconSize: iconSize,
+              ),
             if (widget.onEnterPictureInPicture != null &&
                 chrome.canControl &&
                 !chrome.ended)
@@ -2012,6 +2170,7 @@ class _PlaybackProgressBar extends StatefulWidget {
     required this.onUpdateScrub,
     required this.onCommitScrub,
     required this.onCancelScrub,
+    super.key,
   });
 
   final ValueListenable<PlaybackState> playback;

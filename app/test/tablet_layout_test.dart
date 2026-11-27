@@ -201,6 +201,13 @@ void main() {
           find.byType(GlassSettingsGroup).first,
         );
         expect(accountGroupRect.width, closeTo(sheetRect.width - 40, 2));
+        final closeButton = find.ancestor(
+          of: find.byIcon(CupertinoIcons.xmark),
+          matching: find.byType(GlassIconButton),
+        );
+        final closeRect = tester.getRect(closeButton);
+        expect(closeRect.top - sheetRect.top, greaterThanOrEqualTo(12));
+        expect(closeRect.right, closeTo(accountGroupRect.right, 1.5));
 
         await tester.tap(find.bySemanticsLabel(store.t('close')).last);
         await frames(tester);

@@ -69,6 +69,7 @@ class AccountPage extends StatelessWidget {
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
         centerTitle: false,
+        toolbarHeight: 72,
         padding: const EdgeInsets.symmetric(horizontal: 20),
         title: Text(
           store.t('me'),
@@ -91,9 +92,9 @@ class AccountPage extends StatelessWidget {
               parent: AlwaysScrollableScrollPhysics(),
             ),
             padding: EdgeInsets.fromLTRB(
-              side,
-              12,
-              side,
+              math.max(side, safe.left + 20),
+              6,
+              math.max(side, safe.right + 20),
               safe.bottom + 40,
             ),
             children: [
