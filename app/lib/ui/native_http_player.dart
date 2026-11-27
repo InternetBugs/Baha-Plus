@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
@@ -63,6 +64,7 @@ class _NativeHttpVideoLayerState extends State<_NativeHttpVideoLayer> {
   late var _danmakuSettings = store.danmakuSettings;
   late var _applicationActive = store.applicationActive;
   late var _language = store.language;
+  late var _playerFullscreen = store.playerFullscreen;
 
   @override
   void initState() {
@@ -82,6 +84,7 @@ class _NativeHttpVideoLayerState extends State<_NativeHttpVideoLayer> {
       _danmakuSettings = store.danmakuSettings;
       _applicationActive = store.applicationActive;
       _language = store.language;
+      _playerFullscreen = store.playerFullscreen;
       _session?.addListener(_onSessionChanged);
       store.addListener(_onStoreChanged);
     }
@@ -92,11 +95,13 @@ class _NativeHttpVideoLayerState extends State<_NativeHttpVideoLayer> {
     final nextSettings = store.danmakuSettings;
     final nextActive = store.applicationActive;
     final nextLanguage = store.language;
+    final nextFullscreen = store.playerFullscreen;
     final sessionChanged = !identical(nextSession, _session);
     if (!sessionChanged &&
         nextSettings == _danmakuSettings &&
         nextActive == _applicationActive &&
-        nextLanguage == _language) {
+        nextLanguage == _language &&
+        nextFullscreen == _playerFullscreen) {
       return;
     }
     if (sessionChanged) {
@@ -107,6 +112,7 @@ class _NativeHttpVideoLayerState extends State<_NativeHttpVideoLayer> {
     _danmakuSettings = nextSettings;
     _applicationActive = nextActive;
     _language = nextLanguage;
+    _playerFullscreen = nextFullscreen;
     if (mounted) setState(() {});
   }
 
@@ -157,24 +163,33 @@ class _NativeHttpVideoLayerState extends State<_NativeHttpVideoLayer> {
                   : null,
             ),
           if (session.isAdvertisement && player != null)
-            Positioned(
-              bottom: 12,
-              right: 12,
-              child: AdSkipCapsule(
-                key: const ValueKey('http-skip-ad'),
-                canSkip: session.canSkipAd,
-                label: session.canSkipAd
-                    ? store.t('httpSkipAd')
-                    : store
-                          .t('httpAdCountdown')
-                          .replaceAll(
-                            '{seconds}',
-                            '${session.adSecondsRemaining}',
-                          ),
-                onSkip: session.canSkipAd
-                    ? () => unawaited(session.skipAd())
-                    : null,
-              ),
+            Builder(
+              builder: (context) {
+                final safe = MediaQuery.paddingOf(context);
+                return Positioned(
+                  bottom: _playerFullscreen
+                      ? math.max(16.0, safe.bottom + 12.0)
+                      : 12.0,
+                  right: _playerFullscreen
+                      ? math.max(16.0, safe.right + 12.0)
+                      : 12.0,
+                  child: AdSkipCapsule(
+                    key: const ValueKey('http-skip-ad'),
+                    canSkip: session.canSkipAd,
+                    label: session.canSkipAd
+                        ? store.t('httpSkipAd')
+                        : store
+                              .t('httpAdCountdown')
+                              .replaceAll(
+                                '{seconds}',
+                                '${session.adSecondsRemaining}',
+                              ),
+                    onSkip: session.canSkipAd
+                        ? () => unawaited(session.skipAd())
+                        : null,
+                  ),
+                );
+              },
             ),
           if (session.failureStage != null)
             Center(

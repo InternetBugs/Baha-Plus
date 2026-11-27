@@ -554,6 +554,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (store.playerFullscreen) return _cinema(context);
     final layout = AppLayout.of(context);
     final hPad = layout.pageHorizontalPadding(maxWidth: 820);
+    final barPad = layout.useSplitPlayer
+        ? layout.pageHorizontalPadding(maxWidth: 1380)
+        : hPad;
     final safe = MediaQuery.paddingOf(context);
     return GlassScaffold(
       key: const ValueKey('native-player-page'),
@@ -564,15 +567,26 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           store.t('nowPlaying'),
           style: const TextStyle(fontSize: 17),
         ),
-        leading: GlassIconButton(
-          semanticLabel: store.t('close'),
-          icon: const Icon(CupertinoIcons.xmark),
-          onPressed: store.closeBrowser,
-        ),
+        padding: layout.isCompact
+            ? const EdgeInsets.symmetric(horizontal: 8)
+            : EdgeInsets.only(
+                left: math.max(8.0, barPad.left - 8),
+                right: math.max(8.0, barPad.right - 8),
+              ),
+        actions: [
+          GlassIconButton(
+            semanticLabel: store.t('close'),
+            icon: const Icon(CupertinoIcons.xmark),
+            onPressed: store.closeBrowser,
+          ),
+        ],
       ),
       body: layout.useSplitPlayer
           ? _splitTheaterBody(context, layout)
           : CustomScrollView(
+              physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics(),
+              ),
               slivers: [
                 _inlinePlayer(context, hPad),
                 SliverPadding(
@@ -815,6 +829,193 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       ? store.t('episodeNumber').replaceAll('{n}', value)
       : value;
 
+  Episode? _nextEpisode() {
+    final detail = store.playerDetail;
+    final currentId = store.playingVideoId;
+    if (detail == null || currentId == null || detail.episodes.length < 2) {
+      return null;
+    }
+    final index = detail.episodes.indexWhere((ep) => ep.id == currentId);
+    if (index < 0 || index + 1 >= detail.episodes.length) return null;
+    return detail.episodes[index + 1];
+  }
+
+  Future<void> _showFullscreenEpisodes(BuildContext context) async {
+    final detail = store.playerDetail;
+    final anime = store.playingAnime;
+    if (detail == null || anime == null || detail.episodes.isEmpty) return;
+    _settingsMenuOpen = true;
+    _hideTimer?.cancel();
+    try {
+      await showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: CupertinoLocalizations.of(
+          context,
+        ).modalBarrierDismissLabel,
+        barrierColor: const Color(0x8a000000),
+        transitionDuration: const Duration(milliseconds: 160),
+        pageBuilder: (dialogContext, _, _) {
+          final media = MediaQuery.of(dialogContext);
+          final safe = media.padding;
+          final availableWidth = math.max(
+            260.0,
+            media.size.width - safe.left - safe.right - 32.0,
+          );
+          final availableHeight = math.max(
+            200.0,
+            media.size.height - safe.top - safe.bottom - 32.0,
+          );
+          final shape = const LiquidRoundedSuperellipse(borderRadius: 28);
+          final episodes = detail.episodes;
+          final currentId = store.playingVideoId;
+          return SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: ConstrainedBox(
+                  key: const ValueKey('player-fullscreen-episodes-dialog'),
+                  constraints: BoxConstraints(
+                    maxWidth: math.min(520.0, availableWidth),
+                    maxHeight: math.min(420.0, availableHeight),
+                  ),
+                  child: GlassContainer(
+                    useOwnLayer: true,
+                    platformViewBackdrop: true,
+                    shape: shape,
+                    settings: LiquidGlassSettings.ios27Dark.copyWith(
+                      backerColor: const Color(0xcc141418),
+                      saturation: 1.0,
+                    ),
+                    padding: EdgeInsets.zero,
+                    child: Theme(
+                      data: Theme.of(dialogContext).copyWith(
+                        brightness: Brightness.dark,
+                        colorScheme: const ColorScheme.dark(
+                          surface: Color(0xff1c1c1e),
+                          onSurface: Colors.white,
+                        ),
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                14,
+                                14,
+                                10,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      store.t('episodes'),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  GlassIconButton(
+                                    size: 36,
+                                    iconSize: 17,
+                                    semanticLabel: store.t('close'),
+                                    settings: _overlayActionGlass,
+                                    icon: const Icon(
+                                      CupertinoIcons.xmark,
+                                      color: Colors.white,
+                                    ),
+                                    onPressed: () =>
+                                        Navigator.pop(dialogContext),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Flexible(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  4,
+                                  20,
+                                  20,
+                                ),
+                                child: LayoutBuilder(
+                                  builder: (context, bounds) {
+                                    final count = (bounds.maxWidth / 64)
+                                        .floor()
+                                        .clamp(4, 8);
+                                    return Wrap(
+                                      spacing: 10,
+                                      runSpacing: 10,
+                                      children: [
+                                        for (final episode in episodes)
+                                          SizedBox(
+                                            width:
+                                                (bounds.maxWidth -
+                                                    (count - 1) * 10) /
+                                                count,
+                                            child: EpisodeChipButton(
+                                              key: ValueKey(
+                                                'fullscreen-ep-${episode.id}',
+                                              ),
+                                              label: episode.label,
+                                              selected: episode.id == currentId,
+                                              onTap: episode.id == currentId
+                                                  ? null
+                                                  : () {
+                                                      Navigator.pop(
+                                                        dialogContext,
+                                                      );
+                                                      store.play(
+                                                        anime,
+                                                        episode: episode,
+                                                      );
+                                                    },
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+        transitionBuilder: (dialogContext, animation, _, child) {
+          if (MediaQuery.disableAnimationsOf(dialogContext)) return child;
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: .96, end: 1.0).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      );
+    } finally {
+      _settingsMenuOpen = false;
+      if (mounted) _revealControls();
+    }
+  }
+
   Widget _gestureSurface() => Listener(
     // An accepted Flutter drag reports onEnd for PointerCancelEvent as well.
     // Cancel first so an interrupted touch cannot commit its preview target.
@@ -891,15 +1092,23 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           final safe = MediaQuery.paddingOf(context);
           final showLoading =
               !store.browserError &&
+              !chrome.ended &&
               (chrome.phase == PlaybackPhase.loading ||
                   (chrome.phase == PlaybackPhase.content && chrome.buffering));
           final showSeekPreview = _swipeStartPosition != null && _scrub != null;
+          final nextEpisode = chrome.ended ? _nextEpisode() : null;
           final showCenterControls =
               store.playerFullscreen &&
               chrome.canOperate &&
               !store.playerLocked &&
               !showLoading &&
               !showSeekPreview;
+          final showEndedNext =
+              nextEpisode != null &&
+              !store.playerLocked &&
+              !showLoading &&
+              !showSeekPreview &&
+              (!store.playerFullscreen || _controlsVisible);
           final minSide = tablet ? 32.0 : (layout.width < 500 ? 16.0 : 24.0);
           return Stack(
             fit: StackFit.expand,
@@ -1131,15 +1340,26 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                       duration: const Duration(milliseconds: 100),
                       child: Listener(
                         onPointerDown: (_) => _revealControls(),
-                        child: _centerControls(chrome, tablet: tablet),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _centerControls(chrome, tablet: tablet),
+                            if (showEndedNext) ...[
+                              const SizedBox(height: 16),
+                              _endedNextEpisodePill(nextEpisode),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
+                )
+              else if (!store.playerFullscreen && showEndedNext)
+                Center(child: _endedNextEpisodePill(nextEpisode)),
               if (!store.playerFullscreen)
                 Positioned(
-                  top: 8,
-                  right: 8,
+                  top: 6,
+                  right: 6,
                   child: _portraitTopActions(chrome),
                 ),
               if (store.playerFullscreen &&
@@ -1320,9 +1540,27 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     ),
   );
 
+  Widget _endedNextEpisodePill(Episode episode) {
+    final anime = store.playingAnime!;
+    return GlassActionPill(
+      key: const ValueKey('player-ended-next-episode'),
+      useOwnLayer: true,
+      platformViewBackdrop: true,
+      settings: _fullscreenControlGlass,
+      foregroundColor: Colors.white,
+      height: 42,
+      fontSize: 13.5,
+      horizontalPadding: 18,
+      icon: CupertinoIcons.forward_end_fill,
+      label:
+          '${store.t('playNextEpisode')} · ${_episodeLabel(episode.label)}',
+      onTap: () => store.play(anime, episode: episode),
+    );
+  }
+
   Widget _portraitTopActions(_PlayerChromeState chrome) {
-    const capsuleHeight = 34.0;
-    const slotWidth = 32.0;
+    const capsuleHeight = 36.0;
+    const slotWidth = 36.0;
     const iconSize = 17.0;
     final enabled = store.danmakuSettings.enabled;
     return GlassContainer(
@@ -1720,6 +1958,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
             forceDark: forceDark,
             onTap: () => showDanmakuPanel(context, store),
           ),
+        if (fullscreen && (store.playerDetail?.episodes.length ?? 0) > 1)
+          glassSettingsActionItem(
+            context,
+            key: const ValueKey('player-menu-episodes'),
+            icon: CupertinoIcons.list_bullet,
+            title: store.t('episodes'),
+            forceDark: forceDark,
+            onTap: () => unawaited(_showFullscreenEpisodes(context)),
+          ),
         glassSettingsActionItem(
           context,
           key: const ValueKey('player-menu-refresh'),
@@ -1792,6 +2039,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     final slotWidth = tablet ? 38.0 : 34.0;
     final iconSize = tablet ? 19.0 : 17.0;
     final enabled = store.danmakuSettings.enabled;
+    final hasEpisodes =
+        (store.playerDetail?.episodes.length ?? 0) > 1 &&
+        MediaQuery.sizeOf(context).width >= 380;
     return ValueListenableBuilder(
       valueListenable: _chromeState,
       builder: (context, chrome, child) => GlassContainer(
@@ -1812,6 +2062,16 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 chrome.muted ? 'unmutePlayback' : 'mutePlayback',
                 () => store.controlPlayer('mute'),
                 key: const ValueKey('player-mute-button'),
+                width: slotWidth,
+                height: capsuleHeight,
+                iconSize: iconSize,
+              ),
+            if (hasEpisodes)
+              _capsuleAction(
+                CupertinoIcons.list_bullet,
+                'episodes',
+                () => unawaited(_showFullscreenEpisodes(context)),
+                key: const ValueKey('player-fullscreen-episodes'),
                 width: slotWidth,
                 height: capsuleHeight,
                 iconSize: iconSize,
@@ -1913,16 +2173,63 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                         ),
                         SizedBox(width: tablet ? 14 : 12),
                         Expanded(
-                          child: Text(
-                            store.playingAnime!.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: tablet ? 16 : 15,
-                              shadows: const [Shadow(blurRadius: 8)],
-                            ),
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  store.playingEpisodeLabel.isEmpty
+                                      ? store.playingAnime!.title
+                                      : '${store.playingAnime!.title} · ${_episodeLabel(store.playingEpisodeLabel)}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: tablet ? 16 : 15,
+                                    shadows: const [Shadow(blurRadius: 8)],
+                                  ),
+                                ),
+                              ),
+                              ValueListenableBuilder(
+                                valueListenable: _chromeState,
+                                builder: (context, chrome, _) {
+                                  if ((chrome.rate - 1.0).abs() < 0.01) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Padding(
+                                    padding: const EdgeInsets.only(left: 8),
+                                    child: DecoratedBox(
+                                      key: const ValueKey('player-rate-badge'),
+                                      decoration: ShapeDecoration(
+                                        color: const Color(0x52ffffff),
+                                        shape: RoundedSuperellipseBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 7,
+                                          vertical: 2.5,
+                                        ),
+                                        child: Text(
+                                          _rateLabel(chrome.rate),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            fontFeatures: [
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                         ),
                         SizedBox(width: tablet ? 14 : 12),
@@ -2513,12 +2820,15 @@ class _PlayerCompanionSection extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 90,
+                    width: MediaQuery.textScalerOf(
+                      context,
+                    ).scale(78.0).clamp(90.0, 140.0),
                     child: Text(
                       item.label,
                       style: TextStyle(color: secondary(context), fontSize: 13),
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       item.value,

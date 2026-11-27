@@ -144,6 +144,7 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
                   key: ValueKey('inline-comments-$_videoId'),
                   controller: _scroll,
                   scrollDirection: Axis.horizontal,
+                  clipBehavior: Clip.none,
                   primary: false,
                   padding: const EdgeInsets.only(top: 12, bottom: 20),
                   child: Row(
@@ -212,9 +213,9 @@ class _CompactCommentsPreviewState extends State<CompactCommentsPreview> {
 
   Widget _comment(BuildContext context, OfficialComment comment) => Semantics(
     button: true,
-    child: GestureDetector(
+    child: PressableSurface(
       key: ValueKey('preview-comment-${comment.id}'),
-      behavior: HitTestBehavior.opaque,
+      pressedScale: 0.985,
       onTap: _open,
       child: Container(
         height:

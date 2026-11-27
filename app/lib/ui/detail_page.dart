@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -30,6 +31,12 @@ class DetailPage extends StatelessWidget {
         statusBarStyle: GlassStatusBarStyle.auto,
         appBar: GlassAppBar(
           title: Text(store.t('details'), style: const TextStyle(fontSize: 17)),
+          padding: layout.isCompact
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : EdgeInsets.only(
+                  left: math.max(8.0, hPad.left - 8),
+                  right: math.max(8.0, hPad.right - 8),
+                ),
           actions: [
             GlassIconButton(
               semanticLabel: store.t('close'),
@@ -39,6 +46,9 @@ class DetailPage extends StatelessWidget {
           ],
         ),
         body: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           padding: EdgeInsets.fromLTRB(
             hPad.left,
             safe.top + 56,
@@ -63,7 +73,7 @@ class DetailPage extends StatelessWidget {
                 const SizedBox(height: 12),
                 GlassActionPill(
                   label: store.t('retry'),
-                  width: 108,
+                  minWidth: 108,
                   height: 40,
                   onTap: () => store.openDetail(anime),
                 ),
@@ -78,68 +88,60 @@ class DetailPage extends StatelessWidget {
   }
 
   Widget _hero(BuildContext context, {required bool wide}) {
+    final textScaler = MediaQuery.textScalerOf(context);
     final showPoster = wide && anime.poster != null;
+    final titleFontSize = wide ? 30.0 : 25.0;
+    final heroHeight = math.max(
+      wide ? 380.0 : 350.0,
+      190.0 + textScaler.scale(titleFontSize * 1.3 * 3 + 32.0),
+    );
+    final playButtonHeight = (textScaler.scale(16) + 26).clamp(48.0, 62.0);
     final info = Column(
       mainAxisAlignment: MainAxisAlignment.end,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           anime.title,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: Colors.white,
-            fontSize: wide ? 30 : 26,
+            fontSize: titleFontSize,
             fontWeight: FontWeight.w700,
-            height: 1.3,
+            height: 1.28,
           ),
         ),
         const SizedBox(height: 12),
         Text(
           [anime.year, anime.episodeLabel].whereType<String>().join(' · '),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: Color(0xbbffffff), fontSize: 12),
         ),
         const SizedBox(height: 20),
         Row(
           children: [
             Flexible(
-              child: GlassButton.custom(
-                shape: const LiquidRoundedSuperellipse(borderRadius: 24),
+              child: GlassActionPill(
                 useOwnLayer: true,
                 settings: mediaGlass,
-                onTap: () => _play(context),
-                height: 48,
-                width: 185,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(
-                      CupertinoIcons.play_fill,
-                      color: Colors.white,
-                      size: 17,
-                    ),
-                    const SizedBox(width: 9),
-                    Flexible(
-                      child: Text(
-                        store.t(
-                          anime.latestVideoId == null ? 'play' : 'playLatest',
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
+                foregroundColor: Colors.white,
+                icon: CupertinoIcons.play_fill,
+                label: store.t(
+                  anime.latestVideoId == null ? 'play' : 'playLatest',
                 ),
+                minWidth: 168,
+                height: playButtonHeight,
+                fontSize: 16,
+                horizontalPadding: 20,
+                onTap: () => _play(context),
               ),
             ),
             const SizedBox(width: 14),
             GlassIconButton(
               useOwnLayer: true,
               settings: mediaGlass,
-              size: 48,
+              size: playButtonHeight,
               semanticLabel: store.t(
                 store.isFavorite(anime) ? 'unsave' : 'save',
               ),
@@ -156,9 +158,9 @@ class DetailPage extends StatelessWidget {
       ],
     );
     return ClipRSuperellipse(
-      borderRadius: BorderRadius.circular(28),
+      borderRadius: BorderRadius.circular(BahaRadius.hero),
       child: SizedBox(
-        height: wide ? 380 : 350,
+        height: heroHeight,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -194,7 +196,9 @@ class DetailPage extends StatelessWidget {
                         DecoratedBox(
                           decoration: ShapeDecoration(
                             shape: RoundedSuperellipseBorder(
-                              borderRadius: BorderRadius.circular(18),
+                              borderRadius: BorderRadius.circular(
+                                BahaRadius.tile,
+                              ),
                             ),
                             shadows: const [
                               BoxShadow(
@@ -205,7 +209,7 @@ class DetailPage extends StatelessWidget {
                             ],
                           ),
                           child: ClipRSuperellipse(
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(BahaRadius.tile),
                             child: Artwork(
                               anime.poster,
                               width: 170,
@@ -337,33 +341,39 @@ class DetailPage extends StatelessWidget {
         ],
       );
 
-  Widget _metadataSection(BuildContext context, List<Metadata> items) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      SectionHeading(store.t('metadata')),
-      const SizedBox(height: 12),
-      for (final metadata in items)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 90,
-                child: Text(
-                  metadata.label,
-                  style: TextStyle(color: secondary(context), fontSize: 13),
+  Widget _metadataSection(BuildContext context, List<Metadata> items) {
+    final labelWidth = MediaQuery.textScalerOf(
+      context,
+    ).scale(78.0).clamp(90.0, 140.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeading(store.t('metadata')),
+        const SizedBox(height: 12),
+        for (final metadata in items)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: labelWidth,
+                  child: Text(
+                    metadata.label,
+                    style: TextStyle(color: secondary(context), fontSize: 13),
+                  ),
                 ),
-              ),
-              Expanded(
-                child: Text(
-                  metadata.value,
-                  style: const TextStyle(fontSize: 13),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    metadata.value,
+                    style: const TextStyle(fontSize: 13),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-    ],
-  );
+      ],
+    );
+  }
 }

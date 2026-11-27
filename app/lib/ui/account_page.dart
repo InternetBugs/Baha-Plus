@@ -307,17 +307,12 @@ class AccountPage extends StatelessWidget {
           GlassSettingsGroup(
             children: [
               GlassSettingsRow(
-                title: 'Baha Plus',
-                icon: CupertinoIcons.info_circle,
-                onTap: store.updates.checking ? null : onCheckUpdates,
-                value: store.updates.currentVersion ?? '—',
-              ),
-              GlassSettingsRow(
                 title: store.t(
                   store.updates.checking ? 'checkingUpdates' : 'checkUpdates',
                 ),
                 icon: CupertinoIcons.arrow_clockwise,
                 onTap: store.updates.checking ? null : onCheckUpdates,
+                value: store.updates.currentVersion ?? '—',
                 busy: store.updates.checking,
               ),
               GlassSettingsRow(

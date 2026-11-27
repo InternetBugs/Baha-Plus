@@ -140,7 +140,18 @@ class _BahaPlusAppState extends State<BahaPlusApp> {
           ),
           child: GlassTheme(
             data: _glassTheme(),
-            child: child ?? const SizedBox.shrink(),
+            child: Stack(
+              children: [
+                child ?? const SizedBox.shrink(),
+                if (child != null)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: GlassNoticeToast(store: store),
+                  ),
+              ],
+            ),
           ),
         ),
       );

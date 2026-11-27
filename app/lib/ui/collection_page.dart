@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -79,6 +80,12 @@ class _CollectionPageState extends State<CollectionPage> {
               overflow: TextOverflow.ellipsis,
             ),
             largeTitleController: _title,
+            padding: layout.isCompact
+                ? const EdgeInsets.symmetric(horizontal: 8)
+                : EdgeInsets.only(
+                    left: math.max(8.0, hPad.left - 8),
+                    right: math.max(8.0, hPad.right - 8),
+                  ),
             leading: GlassIconButton(
               semanticLabel: store.t('back'),
               icon: const Icon(CupertinoIcons.chevron_back),
@@ -92,12 +99,14 @@ class _CollectionPageState extends State<CollectionPage> {
               parent: AlwaysScrollableScrollPhysics(),
             ),
             slivers: [
-              CupertinoSliverRefreshControl(onRefresh: store.refreshCatalog),
-              SliverToBoxAdapter(child: SizedBox(height: safe.top + 56)),
+              BahaSliverRefreshControl(
+                topInset: safe.top + 44,
+                onRefresh: store.refreshCatalog,
+              ),
               GlassLargeTitle(
                 text: collection.title,
                 controller: _title,
-                padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 8),
+                padding: EdgeInsets.fromLTRB(hPad.left, 4, hPad.right, 8),
               ),
               SliverToBoxAdapter(
                 child: Padding(

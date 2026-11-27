@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -65,7 +66,8 @@ class _NotificationsPageState extends State<NotificationsPage>
 
   @override
   Widget build(BuildContext context) {
-    final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 780);
+    final layout = AppLayout.of(context);
+    final hPad = layout.pageHorizontalPadding(maxWidth: 780);
     final safe = MediaQuery.paddingOf(context);
     return ListenableBuilder(
       listenable: store,
@@ -76,9 +78,6 @@ class _NotificationsPageState extends State<NotificationsPage>
         final hasError = store.notificationsError != null;
         final isEmpty = items.isEmpty && store.notificationsError == null;
         final prefix = (hasError ? 1 : 0) + (isEmpty ? 1 : 0);
-        final dark = Theme.of(context).brightness == Brightness.dark;
-        final controlHeight =
-            (MediaQuery.textScalerOf(context).scale(13) + 22).clamp(38.0, 56.0);
         return GlassScaffold(
           key: const ValueKey('notifications-page'),
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -86,9 +85,15 @@ class _NotificationsPageState extends State<NotificationsPage>
           appBar: GlassAppBar(
             title: Text(store.t('notifications')),
             largeTitleController: _title,
+            padding: layout.isCompact
+                ? const EdgeInsets.symmetric(horizontal: 8)
+                : EdgeInsets.only(
+                    left: math.max(8.0, hPad.left - 8),
+                    right: math.max(8.0, hPad.right - 8),
+                  ),
             leading: GlassIconButton(
-              semanticLabel: store.t('close'),
-              icon: const Icon(CupertinoIcons.xmark),
+              semanticLabel: store.t('back'),
+              icon: const Icon(CupertinoIcons.chevron_back),
               onPressed: () => Navigator.pop(context),
             ),
             actions: [
@@ -122,10 +127,10 @@ class _NotificationsPageState extends State<NotificationsPage>
               parent: AlwaysScrollableScrollPhysics(),
             ),
             slivers: [
-              CupertinoSliverRefreshControl(
+              BahaSliverRefreshControl(
+                topInset: safe.top + 44,
                 onRefresh: store.refreshNotifications,
               ),
-              SliverToBoxAdapter(child: SizedBox(height: safe.top + 44)),
               GlassLargeTitle(
                 text: store.t('notifications'),
                 controller: _title,
@@ -138,30 +143,8 @@ class _NotificationsPageState extends State<NotificationsPage>
                     alignment: AlignmentDirectional.centerStart,
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 280),
-                      child: GlassSegmentedControl(
+                      child: BahaSegmentedControl(
                         key: const ValueKey('notifications-filter-control'),
-                        height: controlHeight,
-                        borderRadius: controlHeight / 2,
-                        backgroundColor: dark
-                            ? const Color(0x1affffff)
-                            : const Color(0x14000000),
-                        indicatorColor: dark
-                            ? const Color(0x30ffffff)
-                            : Colors.white,
-                        selectedTextStyle: TextStyle(
-                          fontFamily: 'BahaSans',
-                          fontFamilyFallback: const ['BahaSansSC'],
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: dark ? Colors.white : brandBlue,
-                        ),
-                        unselectedTextStyle: TextStyle(
-                          fontFamily: 'BahaSans',
-                          fontFamilyFallback: const ['BahaSansSC'],
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: secondary(context),
-                        ),
                         selectedIndex: _unreadOnly ? 1 : 0,
                         segments: [
                           GlassSegment(label: store.t('all')),
@@ -240,9 +223,9 @@ class _NotificationsPageState extends State<NotificationsPage>
                       return Semantics(
                         button: true,
                         label: '${item.title}, ${item.time}',
-                        child: GestureDetector(
+                        child: PressableSurface(
                           key: ValueKey('notification-${item.videoId}'),
-                          behavior: HitTestBehavior.opaque,
+                          pressedScale: 0.985,
                           onTap: () {
                             Navigator.pop(context);
                             unawaited(store.openNotification(item));
@@ -253,7 +236,9 @@ class _NotificationsPageState extends State<NotificationsPage>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 ClipRSuperellipse(
-                                  borderRadius: BorderRadius.circular(18),
+                                  borderRadius: BorderRadius.circular(
+                                    BahaRadius.tile,
+                                  ),
                                   child: Artwork(
                                     item.cover,
                                     width: 60,

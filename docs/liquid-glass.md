@@ -30,18 +30,18 @@
 
 | 场景 | 规范实现 |
 | --- | --- |
-| 页面容器与标题 | `GlassScaffold`（默认 `extendBody: true` 以在顶栏与底栏下方产生真实折射与滚动边缘淡出）、`GlassAppBar`；主目录页及通知／留言板二级列表使用随滚动折叠的 `GlassLargeTitle` |
+| 页面容器与标题 | `GlassScaffold`（默认 `extendBody: true` 以在顶栏与底栏下方产生真实折射与滚动边缘淡出）、`GlassAppBar`；主目录页及通知／留言板二级列表使用随滚动折叠的 `GlassLargeTitle`。推入式子页（新番时间线、合集、通知中心、诊断日志）左侧统一使用 `chevron_back` 返回；模态浮层与详情／简介／留言板／竖屏播放页关闭按钮 `xmark` 统一置于右上角 `actions`，宽屏顶栏与居中内容列对齐 |
 | 底部与侧边导航 | 手机与窄分屏使用 `GlassTabBar.searchable`（4 个浏览标签 + 独立搜索变形球）浮于内容上方，并开启底部边缘淡出；平板竖屏／中等分屏（600–899pt）居中限宽展示；宽平板（≥900pt 且高度 ≥560pt）切换为带平滑滑动超椭圆指示胶囊的左侧浮动液态玻璃导航栏 `GlassNavigationRail` |
-| 搜索 | 移动端与中等分屏全局搜索直接由 `GlassTabBar.searchable` 变形承载；片库内筛选及宽平板搜索页使用 `GlassSearchBar`（高度 48，实色表面与内容区和谐融入，宽屏限宽并与大标题左对齐） |
+| 搜索 | 移动端与中等分屏全局搜索直接由 `GlassTabBar.searchable` 变形承载，绑定 `store.query`；片库内局部筛选使用独立 `store.libraryQuery` 与 `GlassSearchBar`（高度 48，实色表面，宽屏限宽并与大标题左对齐），无本地匹配时提供一键跳转全站搜索入口 |
 | 圆形与分组操作 | 单按钮使用 `GlassIconButton`（头像入口尺寸 44）；同侧多个顶栏动作使用 `GlassButtonGroup.icons` 合并胶囊（如通知页全部已读／刷新、内置浏览器返回／刷新）；未读数与校验状态角标使用 `GlassBadge` / `GlassBadge.dot` |
-| 主要与辅助操作 | 主要操作使用 `GlassButton.custom` + `LiquidRoundedSuperellipse`（胶囊半径取 `height / 2`）；重试、登录提示等次级行动统一复用 `GlassActionPill`；详情页与播放页选集统一复用超椭圆按压反馈组件 `EpisodeChipButton` |
-| 分段筛选与切换 | 2–5 项互斥切换使用 `GlassSegmentedControl`（片库筛选、通知全部／未读、留言板排序、弹幕样式）；6 项及以上（如排期页周一至周日）使用 `GlassSegmentedControl.scrollable` |
+| 主要与辅助操作 | 主要操作使用 `GlassButton.custom` + `LiquidRoundedSuperellipse`（胶囊半径取 `height / 2`）；重试、登录、跳转与行内行动按钮统一复用支持大字体自撑高的 `GlassActionPill`；详情页与播放页选集统一复用超椭圆按压反馈组件 `EpisodeChipButton`；可点击卡片与行统一复用 `PressableSurface` 提供微缩按压与桌面悬停反馈 |
+| 分段筛选与切换 | 全应用统一复用 `chrome.dart` 的 `BahaSegmentedControl`（2–5 项，封装 `GlassSegmentedControl`）与 `BahaSegmentedControl.scrollable`（6 项及以上，如排期页周一至周日），内置浅／深色高对比样式、大字体自适应高度，以及玻璃容器内嵌防裁切模式（`insideGlassContainer: true`） |
 | 开关控件 | 设置项布尔开关统一使用 `GlassSwitch`（封装于 `GlassSettingsSwitchRow`），提供 iOS 26 修长胶囊滑块与拖拽液态拉伸反馈 |
-| 下拉刷新与加载进度 | 列表下拉刷新统一使用 `CustomScrollView` + `CupertinoSliverRefreshControl` + `BouncingScrollPhysics`；网页加载与线性进度条使用 `GlassProgressIndicator.linear` |
-| 账号、诊断与弹幕面板 | 手机与窄分屏使用带拖拽指示条的 `GlassModalSheet`；平板（≥640×540）以居中圆角浮层卡片呈现；诊断页采用 iOS 26 分组设置卡片（`GlassSettingsGroup` + `GlassSettingsRow`）；视频上的弹幕发送浮层使用半透明 `GlassContainer` 承载内嵌输入区，避免玻璃叠玻璃 |
+| 下拉刷新、通知与进度 | `extendBody: true` 列表下拉刷新统一复用 `BahaSliverRefreshControl`（内置 `SliverPadding(top: safe.top + 44)` + `CupertinoSliverRefreshControl`），确保刷新指示器位于 `GlassAppBar` 下方而非被遮挡；全局瞬态反馈（如收藏成功／失败）通过 `main.dart` 顶层挂载的 `GlassNoticeToast` 呈现；网页加载与线性进度条使用 `GlassProgressIndicator.linear` |
+| 账号、诊断与弹幕面板 | 手机与窄分屏使用带拖拽指示条的 `GlassModalSheet`；平板（≥640×540）以居中圆角浮层卡片呈现；诊断页采用 iOS 26 分组设置卡片（`GlassSettingsGroup` + `GlassSettingsRow`）；视频上的弹幕发送浮层使用半透明 `GlassContainer` 承载内嵌输入区，避免玻璃叠玻璃；留言板底部输入框以 `GlassScaffold.bodyOverlays` 浮于列表上方并开启底部边缘淡出 |
 | 弹窗与确认提示 | 全应用所有提示、报错与二次确认弹窗统一使用 `GlassAlert`（`showGlassAlertDialog` / `showGlassMessageDialog` / `showGlassConfirmDialog`、`GlassUpdateAlert`）：同心超椭圆圆角、左对齐排版、胶囊操作按钮（支持 `isPrimary` 蓝胶囊与 `isDestructive` 红胶囊），跟随三档玻璃效果设置 |
-| 内容图片与超椭圆 | 封面、海报、视频画布与附件图统一使用 `ClipRSuperellipse` 连续曲率圆角裁切，不透明内容卡片使用 `RoundedSuperellipseBorder`；普通作品缩略图圆角 18，横向列表图圆角 14 |
-| 播放控制与浮层 HUD | 竖屏在视频下方显示 `GlassContainer`、`GlassSlider` 与 Cupertino 图标（遵循用户三档玻璃质量设置）；横屏全屏叠放于视频画面；竖屏与全屏视频右上角多动作统一合并为共享液态玻璃胶囊；长按倍速提示、滑动快进预览、广告倒计时／跳过胶囊均使用 `GlassContainer`（`useOwnLayer: true`、`platformViewBackdrop: true`、`LiquidRoundedSuperellipse`）；宽平板非全屏采用左播放、右选集／简介／留言双栏布局，全屏不强锁方向 |
+| 内容图片与超椭圆 | 统一复用 `BahaRadius`（`hero: 26`、`card: 22`、`tile: 18`、`thumb: 14`、`chip: 15`）与 `bahaCardDecoration`；封面、海报、视频画布与附件图使用 `ClipRSuperellipse`，不透明内容卡片使用 `RoundedSuperellipseBorder`；首页横向滑动轨道与 Hero 轮播贴屏幕边缘滑动不裁切 |
+| 播放控制与浮层 HUD | 竖屏在视频下方显示 `GlassContainer`、`GlassSlider` 与 Cupertino 图标（遵循用户三档玻璃质量设置）；横屏全屏叠放于视频画面并支持标题集数／非 1× 倍速标识、全屏玻璃选集浮层与片尾下一集快捷胶囊；竖屏与全屏视频右上角多动作统一合并为共享液态玻璃胶囊；长按倍速提示、滑动快进预览、广告倒计时／跳过胶囊均使用 `GlassContainer`（`useOwnLayer: true`、`platformViewBackdrop: true`、`LiquidRoundedSuperellipse`）并适配全屏安全区；宽平板非全屏采用左播放、右选集／简介／留言双栏布局，全屏不强锁方向 |
 | 作品资料 | 详情页与播放页均使用无背景的标签、数值分栏，不添加独立卡片；宽屏详情页采用海报横幅与双栏排版 |
 | 评分与留言 | 使用不透明内容表面，并以柔和外部投影和较短的接触阴影加强层次；横向留言预览在平板限制单卡宽度并列展示，二级阅读页居中限宽 |
 

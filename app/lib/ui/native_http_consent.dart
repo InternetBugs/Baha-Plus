@@ -58,7 +58,7 @@ class NativeHttpPlaybackConsent extends StatelessWidget {
                           DecoratedBox(
                             decoration: ShapeDecoration(
                               color: const Color(0x14FFFFFF),
-                              shape: RoundedRectangleBorder(
+                              shape: RoundedSuperellipseBorder(
                                 borderRadius: BorderRadius.circular(16),
                                 side: const BorderSide(
                                   color: Color(0x22FFFFFF),

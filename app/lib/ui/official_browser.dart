@@ -392,7 +392,7 @@ class _OfficialBrowserState extends State<OfficialBrowser>
                 const SizedBox(height: 20),
                 GlassActionPill(
                   label: store.t('retry'),
-                  width: 120,
+                  minWidth: 120,
                   height: 44,
                   onTap: store.reloadBrowser,
                 ),

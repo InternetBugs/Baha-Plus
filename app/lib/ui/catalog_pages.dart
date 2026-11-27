@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
@@ -91,11 +92,13 @@ class ContinueCard extends StatelessWidget {
     required this.store,
     required this.entry,
     this.compact = false,
+    this.onOpenDetail,
     super.key,
   });
   final AppStore store;
   final WatchEntry entry;
   final bool compact;
+  final VoidCallback? onOpenDetail;
 
   String _summary() {
     final label = entry.episodeLabel.trim();
@@ -158,170 +161,188 @@ class ContinueCard extends StatelessWidget {
       ),
       onPressed: () => store.continueWatching(entry),
     );
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => store.continueWatching(entry),
+    final nextButton = nextVideoId == null
+        ? null
+        : GlassActionPill(
+            key: ValueKey('history-next-${entry.anime.id}'),
+            label: store.t('nextEpisode'),
+            icon: CupertinoIcons.forward_end_fill,
+            height: 44,
+            fontSize: 12.5,
+            horizontalPadding: 12,
+            settings: controlsGlass,
+            onTap: () => store.play(
+              entry.anime,
+              episode: Episode(
+                id: nextVideoId,
+                label: store.t('nextEpisode'),
+              ),
+            ),
+          );
+    final progressText = entry.progress == 1
+        ? store.t('historyFinished')
+        : entry.progressLabel ?? '';
+    return PressableSurface(
+      pressedScale: 0.985,
+      onTap: onOpenDetail ?? () => store.continueWatching(entry),
       child: Container(
         padding: const EdgeInsets.all(14),
-        decoration: ShapeDecoration(
-          color: secondary(context).withValues(alpha: .06),
-          shape: RoundedSuperellipseBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
+        decoration: bahaCardDecoration(
+          context,
+          borderRadius: BahaRadius.card,
+          tintAlpha: .055,
+          elevated: !compact,
         ),
         child: Row(
           children: [
             ClipRSuperellipse(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(BahaRadius.thumb),
               child: Artwork(
                 entry.anime.artwork,
                 width: compact ? 60 : 80,
                 height: compact ? 80 : 112,
               ),
             ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      entry.anime.title,
-                      maxLines: compact ? 1 : 2,
-                      overflow: TextOverflow.ellipsis,
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    entry.anime.title,
+                    maxLines: compact ? 1 : 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    compact ? 'EP ${entry.episodeLabel}' : _summary(),
+                    maxLines: compact ? 1 : 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: secondary(context)),
+                  ),
+                  if (entry.progress != null) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: Colors.white.withValues(
+                              alpha: dark ? .18 : .7,
+                            ),
+                            width: .75,
+                          ),
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withValues(alpha: dark ? .12 : .65),
+                              Colors.white.withValues(alpha: dark ? .03 : .12),
+                            ],
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(1.5),
+                          child: GlassProgressIndicator.linear(
+                            value: entry.progress,
+                            minWidth: 0,
+                            height: 5,
+                            color: brandBlue.withValues(alpha: .82),
+                            backgroundColor: Colors.transparent,
+                            semanticLabel: store.t('playbackProgress'),
+                          ),
+                        ),
+                      ),
                     ),
+                  ],
+                  if (compact && entry.progressLabel != null) ...[
                     const SizedBox(height: 5),
                     Text(
-                      compact ? 'EP ${entry.episodeLabel}' : _summary(),
-                      maxLines: 2,
+                      progressText,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: secondary(context)),
+                      style: TextStyle(fontSize: 10, color: secondary(context)),
                     ),
-                    if (entry.progress != null) ...[
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 8,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: Colors.white.withValues(
-                                alpha: dark ? .18 : .7,
-                              ),
-                              width: .75,
-                            ),
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.white.withValues(
-                                  alpha: dark ? .12 : .65,
+                  ],
+                  if (!compact) ...[
+                    const SizedBox(height: 8),
+                    LayoutBuilder(
+                      builder: (context, bounds) {
+                        final stackActions =
+                            nextButton != null &&
+                            (bounds.maxWidth < 210 ||
+                                MediaQuery.textScalerOf(context).scale(12) >
+                                    15);
+                        if (stackActions) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (progressText.isNotEmpty) ...[
+                                Text(
+                                  progressText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: secondary(context),
+                                  ),
                                 ),
-                                Colors.white.withValues(
-                                  alpha: dark ? .03 : .12,
-                                ),
+                                const SizedBox(height: 8),
                               ],
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(1.5),
-                            child: GlassProgressIndicator.linear(
-                              value: entry.progress,
-                              minWidth: 0,
-                              height: 5,
-                              color: brandBlue.withValues(alpha: .82),
-                              backgroundColor: Colors.transparent,
-                              semanticLabel: store.t('playbackProgress'),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (compact && entry.progressLabel != null) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        entry.progress == 1
-                            ? store.t('historyFinished')
-                            : entry.progressLabel!,
-                        maxLines: 1,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: secondary(context),
-                        ),
-                      ),
-                    ],
-                    if (!compact) ...[
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              entry.progress == 1
-                                  ? store.t('historyFinished')
-                                  : entry.progressLabel ?? '',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: secondary(context),
-                              ),
-                            ),
-                          ),
-                          if (nextVideoId != null) ...[
-                            GlassButton.custom(
-                              key: ValueKey('history-next-${entry.anime.id}'),
-                              shape: const LiquidRoundedSuperellipse(
-                                borderRadius: 22,
-                              ),
-                              width: 88,
-                              height: 44,
-                              settings: controlsGlass,
-                              label: store.t('nextEpisode'),
-                              onTap: () => store.play(
-                                entry.anime,
-                                episode: Episode(
-                                  id: nextVideoId,
-                                  label: store.t('nextEpisode'),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  const Icon(
-                                    CupertinoIcons.forward_end_fill,
-                                    size: 14,
-                                    color: brandBlue,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    store.t('nextEpisode'),
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: brandBlue,
-                                    ),
-                                  ),
+                                  Flexible(child: nextButton),
+                                  const SizedBox(width: 8),
+                                  playButton,
                                 ],
                               ),
+                            ],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                progressText,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: secondary(context),
+                                ),
+                              ),
                             ),
+                            if (nextButton != null) ...[
+                              const SizedBox(width: 8),
+                              nextButton,
+                            ],
                             const SizedBox(width: 8),
+                            playButton,
                           ],
-                          playButton,
-                        ],
-                      ),
-                    ],
+                        );
+                      },
+                    ),
                   ],
-                ),
+                ],
               ),
-              if (compact) ...[const SizedBox(width: 12), playButton],
-            ],
-          ),
+            ),
+            if (compact) ...[const SizedBox(width: 12), playButton],
+          ],
         ),
+      ),
     );
   }
 }
 
 class HistoryContent extends StatelessWidget {
-  const HistoryContent({required this.store, super.key});
+  const HistoryContent({required this.store, this.openDetail, super.key});
   final AppStore store;
+  final ShowAnime? openDetail;
 
   @override
   Widget build(BuildContext context) {
@@ -352,16 +373,15 @@ class HistoryContent extends StatelessWidget {
               ),
               if (needsSync && !loading) ...[
                 const SizedBox(height: 24),
-                GlassButton.custom(
-                  shape: const LiquidRoundedSuperellipse(borderRadius: 23),
-                  width: 225,
+                GlassActionPill(
+                  label: store.t(
+                    store.hasAccount ? 'retry' : 'connectAccount',
+                  ),
+                  minWidth: 180,
                   height: 46,
                   onTap: store.hasAccount
                       ? () => store.syncAccount()
                       : store.connectAccount,
-                  child: Text(
-                    store.t(store.hasAccount ? 'retry' : 'connectAccount'),
-                  ),
                 ),
               ],
             ],
@@ -374,10 +394,19 @@ class HistoryContent extends StatelessWidget {
         if (constraints.crossAxisExtent < 680) {
           return SliverList.builder(
             itemCount: store.history.length,
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: ContinueCard(store: store, entry: store.history[index]),
-            ),
+            itemBuilder: (context, index) {
+              final entry = store.history[index];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: ContinueCard(
+                  store: store,
+                  entry: entry,
+                  onOpenDetail: openDetail == null
+                      ? null
+                      : () => openDetail!(entry.anime),
+                ),
+              );
+            },
           );
         }
         final columns = constraints.crossAxisExtent >= 1100 ? 3 : 2;
@@ -387,8 +416,16 @@ class HistoryContent extends StatelessWidget {
           mainAxisSpacing: 16,
           crossAxisSpacing: 16,
           childCount: store.history.length,
-          itemBuilder: (context, index) =>
-              ContinueCard(store: store, entry: store.history[index]),
+          itemBuilder: (context, index) {
+            final entry = store.history[index];
+            return ContinueCard(
+              store: store,
+              entry: entry,
+              onOpenDetail: openDetail == null
+                  ? null
+                  : () => openDetail!(entry.anime),
+            );
+          },
         );
       },
     );
@@ -564,10 +601,10 @@ class SearchContent extends StatelessWidget {
     Anime? anime,
     Color color, {
     double height = 116,
-  }) => GestureDetector(
+  }) => PressableSurface(
     onTap: () => store.selectTab(2, filter: filter),
     child: ClipRSuperellipse(
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(BahaRadius.tile),
       child: SizedBox(
         height: height,
         child: Stack(
@@ -640,7 +677,9 @@ class LibraryContent extends StatelessWidget {
     final items = store.libraryItems;
     final needsSync =
         store.libraryFilter == 'favorites' && !store.accountSynced;
-    final filterBar = GlassSegmentedControl(
+    final trimmedFilter = store.libraryQuery.trim();
+    final filterBar = BahaSegmentedControl(
+      key: const ValueKey('library-filter-control'),
       selectedIndex: const [
         'all',
         'season',
@@ -687,29 +726,43 @@ class LibraryContent extends StatelessWidget {
                           ),
                           const SizedBox(height: 20),
                         ],
-                        GlassButton.custom(
-                          shape: const LiquidRoundedSuperellipse(
-                            borderRadius: 23,
+                        GlassActionPill(
+                          label: store.t(
+                            store.hasAccount ? 'retry' : 'connectAccount',
                           ),
+                          minWidth: 180,
+                          height: 46,
                           onTap: store.hasAccount
                               ? () => store.syncAccount()
                               : connectAccount,
-                          width: 225,
-                          height: 46,
-                          child: Text(
-                            store.t(
-                              store.hasAccount ? 'retry' : 'connectAccount',
-                            ),
-                          ),
                         ),
                       ],
                     ],
                   ),
                 )
-              else if (items.isEmpty &&
-                  store.query.isNotEmpty &&
-                  store.libraryFilter == 'all')
-                SearchStatus(store: store)
+              else if (items.isEmpty && trimmedFilter.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: Column(
+                    children: [
+                      Text(
+                        store.t('noResults'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 18),
+                      GlassActionPill(
+                        key: const ValueKey('library-search-full-catalog'),
+                        icon: CupertinoIcons.search,
+                        label: store
+                            .t('searchFullCatalog')
+                            .replaceAll('{query}', trimmedFilter),
+                        height: 44,
+                        onTap: () => store.openGlobalSearch(trimmedFilter),
+                      ),
+                    ],
+                  ),
+                )
               else if (items.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 40),
@@ -724,6 +777,20 @@ class LibraryContent extends StatelessWidget {
             items: items,
             openDetail: openDetail,
             itemKeyPrefix: 'library',
+          ),
+        if (!needsSync &&
+            items.isNotEmpty &&
+            store.libraryFilter == 'all' &&
+            trimmedFilter.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 24),
+              child: Text(
+                store.t('libraryScopeHint'),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: secondary(context)),
+              ),
+            ),
           ),
       ],
     );
@@ -761,33 +828,11 @@ class _ScheduleContentState extends State<ScheduleContent> {
             ? 2
             : 1;
         const order = [1, 2, 3, 4, 5, 6, 0];
-        final dark = Theme.of(context).brightness == Brightness.dark;
-        final textScaler = MediaQuery.textScalerOf(context);
-        final controlHeight = (textScaler.scale(13) + 22).clamp(36.0, 56.0);
-        final weekdayControl = GlassSegmentedControl.scrollable(
+        final weekdayControl = BahaSegmentedControl.scrollable(
           key: const ValueKey('schedule-weekday-control'),
-          height: controlHeight,
-          borderRadius: controlHeight / 2,
-          maskingQuality: MaskingQuality.off,
+          fontSize: 12,
+          minHeight: 36,
           labelPadding: EdgeInsets.symmetric(horizontal: wide ? 18 : 11),
-          backgroundColor: dark
-              ? const Color(0x1affffff)
-              : const Color(0x14000000),
-          indicatorColor: dark ? const Color(0x30ffffff) : Colors.white,
-          selectedTextStyle: TextStyle(
-            fontFamily: 'BahaSans',
-            fontFamilyFallback: const ['BahaSansSC'],
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: dark ? Colors.white : brandBlue,
-          ),
-          unselectedTextStyle: TextStyle(
-            fontFamily: 'BahaSans',
-            fontFamilyFallback: const ['BahaSansSC'],
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: secondary(context),
-          ),
           selectedIndex: order.indexOf(day).clamp(0, order.length - 1),
           segments: [for (final index in order) GlassSegment(label: days[index])],
           onSegmentSelected: (index) => setState(() => day = order[index]),
@@ -843,59 +888,69 @@ class _ScheduleContentState extends State<ScheduleContent> {
     );
   }
 
-  Widget _compactRow(BuildContext context, Anime anime) => GestureDetector(
-    behavior: HitTestBehavior.opaque,
-    onTap: () => widget.openDetail(anime),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 44,
-            child: Text(
-              anime.updateTime ?? '',
-              style: TextStyle(fontSize: 12, color: secondary(context)),
+  Widget _compactRow(BuildContext context, Anime anime) {
+    final textScaler = MediaQuery.textScalerOf(context);
+    final timeMinWidth = math.max(44.0, textScaler.scale(38.0));
+    return PressableSurface(
+      pressedScale: 0.985,
+      onTap: () => widget.openDetail(anime),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Row(
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(minWidth: timeMinWidth),
+              child: Text(
+                anime.updateTime ?? '',
+                maxLines: 1,
+                style: TextStyle(fontSize: 12, color: secondary(context)),
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          ClipRSuperellipse(
-            borderRadius: BorderRadius.circular(12),
-            child: Artwork(anime.cover, width: 88, height: 58),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(anime.title, maxLines: 2),
-                const SizedBox(height: 4),
-                Text(
-                  anime.episodeLabel ?? '',
-                  style: TextStyle(fontSize: 11, color: secondary(context)),
-                ),
-              ],
+            const SizedBox(width: 12),
+            ClipRSuperellipse(
+              borderRadius: BorderRadius.circular(BahaRadius.thumb),
+              child: Artwork(anime.cover, width: 88, height: 58),
             ),
-          ),
-        ],
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    anime.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    anime.episodeLabel ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: secondary(context)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
-  Widget _tabletCard(BuildContext context, Anime anime) => GestureDetector(
-    behavior: HitTestBehavior.opaque,
+  Widget _tabletCard(BuildContext context, Anime anime) => PressableSurface(
+    pressedScale: 0.985,
     onTap: () => widget.openDetail(anime),
     child: Container(
       padding: const EdgeInsets.all(14),
-      decoration: ShapeDecoration(
-        color: secondary(context).withValues(alpha: .06),
-        shape: RoundedSuperellipseBorder(
-          borderRadius: BorderRadius.circular(18),
-        ),
+      decoration: bahaCardDecoration(
+        context,
+        borderRadius: BahaRadius.tile,
+        tintAlpha: .055,
       ),
       child: Row(
         children: [
           ClipRSuperellipse(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(BahaRadius.thumb),
             child: Artwork(anime.cover, width: 104, height: 64),
           ),
           const SizedBox(width: 14),

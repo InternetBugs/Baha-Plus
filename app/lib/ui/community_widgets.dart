@@ -11,7 +11,7 @@ const collapsedCommentLines = 3;
 
 ShapeDecoration communityCardDecoration(
   BuildContext context, {
-  double borderRadius = 22,
+  double borderRadius = BahaRadius.card,
   double tintAlpha = .05,
   Color? color,
 }) {
@@ -27,6 +27,10 @@ ShapeDecoration communityCardDecoration(
         ),
     shape: RoundedSuperellipseBorder(
       borderRadius: BorderRadius.circular(borderRadius),
+      side: BorderSide(
+        color: dark ? const Color(0x18ffffff) : const Color(0x0d000000),
+        width: 0.5,
+      ),
     ),
     shadows: [
       BoxShadow(
@@ -113,32 +117,45 @@ class BoardEpisodePicker extends StatelessWidget {
               onTap: () => onSelected(episode),
             ),
         ],
-        triggerBuilder: (context, toggleMenu) => GlassButton.custom(
-          key: const ValueKey('board-episode-selector'),
-          width: 150,
-          height: 38,
-          shape: const LiquidRoundedSuperellipse(borderRadius: 19),
-          onTap: enabled ? toggleMenu : () {},
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: brandBlue, fontSize: 13),
+        triggerBuilder: (context, toggleMenu) {
+          final pillHeight =
+              (MediaQuery.textScalerOf(context).scale(13) + 22).clamp(
+                38.0,
+                54.0,
+              );
+          return ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
+            child: GlassButton.custom(
+              key: const ValueKey('board-episode-selector'),
+              height: pillHeight,
+              shape: LiquidRoundedSuperellipse(borderRadius: pillHeight / 2),
+              onTap: enabled ? toggleMenu : () {},
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: brandBlue, fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      CupertinoIcons.chevron_up_chevron_down,
+                      size: 12,
+                      color: brandBlue,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 8),
-              const Icon(
-                CupertinoIcons.chevron_up_chevron_down,
-                size: 12,
-                color: brandBlue,
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -204,17 +221,20 @@ class RatingSummaryCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 88,
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 88, maxWidth: 132),
             child: Column(
               children: [
-                Text(
-                  rating.value.toStringAsFixed(1),
-                  style: const TextStyle(
-                    fontSize: 38,
-                    height: 1,
-                    fontWeight: FontWeight.w700,
-                    color: brandBlue,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    rating.value.toStringAsFixed(1),
+                    style: const TextStyle(
+                      fontSize: 38,
+                      height: 1,
+                      fontWeight: FontWeight.w700,
+                      color: brandBlue,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 7),
@@ -264,7 +284,7 @@ class RatingSummaryCard extends StatelessWidget {
         const SizedBox(width: 6),
         Expanded(
           child: LayoutBuilder(
-            builder: (context, bounds) => ClipRRect(
+            builder: (context, bounds) => ClipRSuperellipse(
               borderRadius: BorderRadius.circular(8),
               child: SizedBox(
                 height: 7,
@@ -441,6 +461,7 @@ class CommunityComposer extends StatelessWidget {
                   ),
                 )
               : GlassContainer(
+                  useOwnLayer: true,
                   shape: const LiquidRoundedSuperellipse(borderRadius: 26),
                   padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
                   child: content,

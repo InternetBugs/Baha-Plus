@@ -579,17 +579,13 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                 style: const TextStyle(fontSize: 13, height: 1.4),
               ),
             ),
-            CupertinoButton(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              minimumSize: const Size(44, 36),
-              onPressed: () => store.nativeHttpPlayback?.loadDanmaku(),
-              child: Text(
-                store.t('retry'),
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+            const SizedBox(width: 8),
+            GlassActionPill(
+              height: 34,
+              fontSize: 12.5,
+              horizontalPadding: 14,
+              label: store.t('retry'),
+              onTap: () => store.nativeHttpPlayback?.loadDanmaku(),
             ),
           ],
         ),
@@ -705,9 +701,11 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
               ),
               const SizedBox(width: 10),
               DecoratedBox(
-                decoration: BoxDecoration(
+                decoration: ShapeDecoration(
                   color: brandBlue.withValues(alpha: dark ? .22 : .11),
-                  borderRadius: BorderRadius.circular(10),
+                  shape: RoundedSuperellipseBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -753,7 +751,6 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
       final textScaler = MediaQuery.textScalerOf(context);
       final stackedControls =
           constraints.maxWidth < 340 || textScaler.scale(14) > 17.5;
-      final segmentHeight = (textScaler.scale(13) + 22).clamp(38.0, 58.0);
       return Column(
         children: [
           Expanded(
@@ -788,7 +785,6 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                       ],
                       selectedIndex: _position,
                       stacked: stackedControls,
-                      controlHeight: segmentHeight,
                       onSelected: (index) => setState(() => _position = index),
                     ),
                     _segmentedStyleRow(
@@ -802,7 +798,6 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
                       ],
                       selectedIndex: _size,
                       stacked: stackedControls,
-                      controlHeight: segmentHeight,
                       onSelected: (index) => setState(() => _size = index),
                     ),
                     _colorPaletteRow(context, stacked: stackedControls),
@@ -901,30 +896,15 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     required List<String> labels,
     required int selectedIndex,
     required bool stacked,
-    required double controlHeight,
     required ValueChanged<int> onSelected,
   }) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final control = GlassSegmentedControl(
+    final labelWidth = math.max(
+      52.0,
+      MediaQuery.textScalerOf(context).scale(42.0),
+    );
+    final control = BahaSegmentedControl(
       key: key,
-      height: controlHeight,
-      borderRadius: controlHeight / 2,
-      backgroundColor: dark ? const Color(0x1fffffff) : const Color(0x14000000),
-      indicatorColor: dark ? const Color(0x36ffffff) : Colors.white,
-      selectedTextStyle: TextStyle(
-        fontFamily: 'BahaSans',
-        fontFamilyFallback: const ['BahaSansSC'],
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        color: dark ? Colors.white : brandBlue,
-      ),
-      unselectedTextStyle: TextStyle(
-        fontFamily: 'BahaSans',
-        fontFamilyFallback: const ['BahaSansSC'],
-        fontSize: 13,
-        fontWeight: FontWeight.w500,
-        color: secondary(context),
-      ),
+      insideGlassContainer: widget.glassSurface,
       segments: [for (final text in labels) GlassSegment(label: text)],
       selectedIndex: selectedIndex,
       onSegmentSelected: onSelected,
@@ -950,7 +930,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
           : Row(
               children: [
                 SizedBox(
-                  width: 52,
+                  width: labelWidth,
                   child: Text(
                     label,
                     maxLines: 1,
@@ -971,6 +951,10 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   Widget _colorPaletteRow(BuildContext context, {required bool stacked}) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final labelWidth = math.max(
+      52.0,
+      MediaQuery.textScalerOf(context).scale(42.0),
+    );
     Widget swatch(String hex) => _ColorSwatch(
       hex: hex,
       label: store.t('danmakuColor').replaceAll('{color}', hex),
@@ -1041,7 +1025,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 SizedBox(
-                  width: 52,
+                  width: labelWidth,
                   child: Text(
                     store.t('danmakuColorLabel'),
                     maxLines: 1,
@@ -1107,9 +1091,11 @@ class _ByteCounterBadge extends StatelessWidget {
     }
     return DecoratedBox(
       key: const ValueKey('danmaku-byte-counter'),
-      decoration: BoxDecoration(
+      decoration: ShapeDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(10),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(10),
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

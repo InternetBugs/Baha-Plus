@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -92,45 +93,54 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     final lines = report.split('\n');
     await Navigator.of(context).push<void>(
       CupertinoPageRoute(
-        builder: (context) => GlassScaffold(
-          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
-          statusBarStyle: GlassStatusBarStyle.auto,
-          appBar: GlassAppBar(
-            title: Text(store.t('diagnosticsPreview')),
-            leading: GlassIconButton(
-              semanticLabel: store.t('close'),
-              icon: const Icon(CupertinoIcons.back),
-              onPressed: () => Navigator.pop(context),
+        builder: (context) {
+          final previewLayout = AppLayout.of(context);
+          final previewPad = previewLayout.pageHorizontalPadding(maxWidth: 920);
+          return GlassScaffold(
+            backgroundColor: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerLowest,
+            statusBarStyle: GlassStatusBarStyle.auto,
+            appBar: GlassAppBar(
+              title: Text(store.t('diagnosticsPreview')),
+              padding: previewLayout.isCompact
+                  ? const EdgeInsets.symmetric(horizontal: 8)
+                  : EdgeInsets.only(
+                      left: math.max(8.0, previewPad.left - 8),
+                      right: math.max(8.0, previewPad.right - 8),
+                    ),
+              leading: GlassIconButton(
+                semanticLabel: store.t('back'),
+                icon: const Icon(CupertinoIcons.chevron_back),
+                onPressed: () => Navigator.pop(context),
+              ),
             ),
-          ),
-          body: Builder(
-            builder: (context) {
-              final safe = MediaQuery.paddingOf(context);
-              final previewPad = AppLayout.of(
-                context,
-              ).pageHorizontalPadding(maxWidth: 920);
-              return ListView.builder(
-                physics: const BouncingScrollPhysics(
-                  parent: AlwaysScrollableScrollPhysics(),
-                ),
-                padding: EdgeInsets.fromLTRB(
-                  previewPad.left,
-                  safe.top + 64,
-                  previewPad.right,
-                  safe.bottom + 20,
-                ),
-                itemCount: lines.length,
-                itemBuilder: (context, index) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: SelectableText(
-                    lines[index],
-                    style: const TextStyle(fontSize: 12, height: 1.5),
+            body: Builder(
+              builder: (context) {
+                final safe = MediaQuery.paddingOf(context);
+                return ListView.builder(
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
                   ),
-                ),
-              );
-            },
-          ),
-        ),
+                  padding: EdgeInsets.fromLTRB(
+                    previewPad.left,
+                    safe.top + 64,
+                    previewPad.right,
+                    safe.bottom + 20,
+                  ),
+                  itemCount: lines.length,
+                  itemBuilder: (context, index) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: SelectableText(
+                      lines[index],
+                      style: const TextStyle(fontSize: 12, height: 1.5),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }, 'diagnosticsStorageFailed');
@@ -154,7 +164,8 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     builder: (context, _) {
       final diagnostics = store.diagnostics;
       final safe = MediaQuery.paddingOf(context);
-      final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 680);
+      final layout = AppLayout.of(context);
+      final hPad = layout.pageHorizontalPadding(maxWidth: 680);
       final canExport = !_busy && diagnostics.hasLogs;
       return GlassScaffold(
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
@@ -162,9 +173,15 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
         topEdgeFadeExtent: 44,
         appBar: GlassAppBar(
           title: Text(store.t('diagnosticsTitle')),
+          padding: layout.isCompact
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : EdgeInsets.only(
+                  left: math.max(8.0, hPad.left - 8),
+                  right: math.max(8.0, hPad.right - 8),
+                ),
           leading: GlassIconButton(
-            semanticLabel: store.t('close'),
-            icon: const Icon(CupertinoIcons.back),
+            semanticLabel: store.t('back'),
+            icon: const Icon(CupertinoIcons.chevron_back),
             onPressed: () => Navigator.pop(context),
           ),
         ),

@@ -27,6 +27,7 @@ class CommentAvatar extends StatelessWidget {
                 url!,
                 key: ValueKey('comment-avatar-$url'),
                 fit: BoxFit.cover,
+                gaplessPlayback: true,
                 excludeFromSemantics: true,
                 loadingBuilder: (_, child, progress) =>
                     progress == null ? child : fallback,
@@ -70,11 +71,12 @@ class CommentAttachment extends StatelessWidget {
           child: Image.network(
             url,
             fit: compact ? BoxFit.cover : BoxFit.contain,
+            gaplessPlayback: true,
             alignment: Alignment.centerLeft,
             loadingBuilder: (_, child, progress) => progress == null
                 ? child
                 : SizedBox(
-                    height: compact ? 100 : 160,
+                    height: compact ? 56 : 160,
                     child: const Center(child: CupertinoActivityIndicator()),
                   ),
             errorBuilder: (_, error, stack) => compact
@@ -105,11 +107,13 @@ class _AttachmentViewer extends StatelessWidget {
         store.t('attachedImage'),
         style: const TextStyle(color: Colors.white, fontSize: 17),
       ),
-      leading: GlassIconButton(
-        semanticLabel: store.t('close'),
-        icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
-      ),
+      actions: [
+        GlassIconButton(
+          semanticLabel: store.t('close'),
+          icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
     ),
     body: InteractiveViewer(
       minScale: .5,
@@ -118,6 +122,7 @@ class _AttachmentViewer extends StatelessWidget {
         child: Image.network(
           url,
           fit: BoxFit.contain,
+          gaplessPlayback: true,
           loadingBuilder: (_, child, progress) => progress == null
               ? child
               : const CupertinoActivityIndicator(color: Colors.white),

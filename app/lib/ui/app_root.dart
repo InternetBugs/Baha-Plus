@@ -36,6 +36,7 @@ class _AppRootState extends State<AppRoot>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final _titles = List.generate(5, (_) => GlassLargeTitleController());
   final _search = TextEditingController();
+  final _librarySearch = TextEditingController();
   late final AnimationController _tabAnimation;
   late int _lastTab;
   int _lastBrowseTab = 0;
@@ -413,6 +414,12 @@ class _AppRootState extends State<AppRoot>
           selection: TextSelection.collapsed(offset: store.query.length),
         );
       }
+      if (_librarySearch.text != store.libraryQuery) {
+        _librarySearch.value = TextEditingValue(
+          text: store.libraryQuery,
+          selection: TextSelection.collapsed(offset: store.libraryQuery.length),
+        );
+      }
       final nativeLayer = Positioned.fill(
         key: const ValueKey('native-layer'),
         // Keep tab state, but stop painting and animating its glass while the
@@ -484,21 +491,36 @@ class _AppRootState extends State<AppRoot>
     final controller = _titles[store.tab];
     final safe = MediaQuery.paddingOf(context);
     final bottomSpace = safe.bottom + (useRail ? 36 : 110);
-    final searchField = Semantics(
-      identifier: 'search-query',
-      child: GlassSearchBar(
-        surfaceStyle: GlassSurfaceStyle.solid,
-        controller: _search,
-        placeholder: store.t('searchPlaceholder'),
-        clearButtonSemanticLabel: store.t('clearSearch'),
-        height: 48,
-        onChanged: (value) => store.query = value,
-        onSubmitted: (_) {
-          FocusManager.instance.primaryFocus?.unfocus();
-          store.search();
-        },
-      ),
-    );
+    final searchField = store.tab == 2
+        ? Semantics(
+            identifier: 'library-filter-query',
+            child: GlassSearchBar(
+              key: const ValueKey('library-filter-bar'),
+              surfaceStyle: GlassSurfaceStyle.solid,
+              controller: _librarySearch,
+              placeholder: store.t('libraryFilterPlaceholder'),
+              clearButtonSemanticLabel: store.t('clearSearch'),
+              height: 48,
+              onChanged: (value) => store.libraryQuery = value,
+              onSubmitted: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+            ),
+          )
+        : Semantics(
+            identifier: 'search-query',
+            child: GlassSearchBar(
+              key: const ValueKey('global-search-bar'),
+              surfaceStyle: GlassSurfaceStyle.solid,
+              controller: _search,
+              placeholder: store.t('searchPlaceholder'),
+              clearButtonSemanticLabel: store.t('clearSearch'),
+              height: 48,
+              onChanged: (value) => store.query = value,
+              onSubmitted: (_) {
+                FocusManager.instance.primaryFocus?.unfocus();
+                store.search();
+              },
+            ),
+          );
     final body = CustomScrollView(
       key: PageStorageKey('catalog-tab-${store.tab}'),
       controller: controller.scrollController,
@@ -506,17 +528,14 @@ class _AppRootState extends State<AppRoot>
         parent: AlwaysScrollableScrollPhysics(),
       ),
       slivers: [
-        CupertinoSliverRefreshControl(
+        BahaSliverRefreshControl(
+          topInset: safe.top + 44,
           onRefresh: switch (store.tab) {
             3 => store.syncAccount,
+            2 when store.libraryFilter == 'favorites' => store.syncAccount,
             4 when store.query.isNotEmpty => store.search,
-            2 when store.query.isNotEmpty && store.libraryFilter == 'all' =>
-              store.search,
             _ => store.refreshCatalog,
           },
-        ),
-        SliverToBoxAdapter(
-          child: SizedBox(height: safe.top + 44),
         ),
         GlassLargeTitle(
           text: title,
@@ -527,7 +546,7 @@ class _AppRootState extends State<AppRoot>
         if (store.tab == 0 ||
             store.tab == 1 ||
             (store.tab == 2 &&
-                store.query.isEmpty &&
+                store.libraryQuery.isEmpty &&
                 store.libraryFilter != 'favorites'))
           CatalogStatus(
             store: store,
@@ -548,33 +567,38 @@ class _AppRootState extends State<AppRoot>
                   : searchField,
             ),
           ),
-        SliverPadding(
-          padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, bottomSpace),
-          sliver: store.tab == 0
-              ? HomeContent(
-                  store: store,
-                  openDetail: _detail,
-                  openHistory: () => store.selectTab(3),
-                  openSeason: _season,
-                  openCollection: _collection,
-                )
-              : store.tab == 3
-              ? HistoryContent(store: store)
-              : store.tab == 2
-              ? LibraryContent(
-                  store: store,
-                  openDetail: _detail,
-                  connectAccount: store.connectAccount,
-                )
-              : store.tab == 4
-              ? SearchContent(store: store, openDetail: _detail)
-              : SliverToBoxAdapter(
-                  child: switch (store.tab) {
-                    1 => ScheduleContent(store: store, openDetail: _detail),
-                    _ => const SizedBox.shrink(),
-                  },
-                ),
-        ),
+        if (store.tab == 0)
+          SliverPadding(
+            padding: EdgeInsets.only(bottom: bottomSpace),
+            sliver: HomeContent(
+              store: store,
+              horizontalPadding: hPad,
+              openDetail: _detail,
+              openHistory: () => store.selectTab(3),
+              openSeason: _season,
+              openCollection: _collection,
+            ),
+          )
+        else
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, bottomSpace),
+            sliver: store.tab == 3
+                ? HistoryContent(store: store, openDetail: _detail)
+                : store.tab == 2
+                ? LibraryContent(
+                    store: store,
+                    openDetail: _detail,
+                    connectAccount: store.connectAccount,
+                  )
+                : store.tab == 4
+                ? SearchContent(store: store, openDetail: _detail)
+                : SliverToBoxAdapter(
+                    child: switch (store.tab) {
+                      1 => ScheduleContent(store: store, openDetail: _detail),
+                      _ => const SizedBox.shrink(),
+                    },
+                  ),
+          ),
       ],
     );
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -760,6 +784,7 @@ class _AppRootState extends State<AppRoot>
     _favoritePortalEntry?.dispose();
     _tabAnimation.dispose();
     _search.dispose();
+    _librarySearch.dispose();
     for (final title in _titles) {
       title.dispose();
     }

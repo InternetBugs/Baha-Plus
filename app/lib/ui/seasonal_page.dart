@@ -1,5 +1,7 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
@@ -67,6 +69,12 @@ class _SeasonalPageState extends State<SeasonalPage> {
         appBar: GlassAppBar(
           title: Text(store.t('seasonal')),
           largeTitleController: _title,
+          padding: layout.isCompact
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : EdgeInsets.only(
+                  left: math.max(8.0, hPad.left - 8),
+                  right: math.max(8.0, hPad.right - 8),
+                ),
           leading: GlassIconButton(
             semanticLabel: store.t('back'),
             icon: const Icon(CupertinoIcons.chevron_back),
@@ -80,14 +88,14 @@ class _SeasonalPageState extends State<SeasonalPage> {
             parent: AlwaysScrollableScrollPhysics(),
           ),
           slivers: [
-            CupertinoSliverRefreshControl(onRefresh: store.refreshCatalog),
-            SliverToBoxAdapter(
-              child: SizedBox(height: safe.top + 56),
+            BahaSliverRefreshControl(
+              topInset: safe.top + 44,
+              onRefresh: store.refreshCatalog,
             ),
             GlassLargeTitle(
               text: store.t('seasonal'),
               controller: _title,
-              padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 16),
+              padding: EdgeInsets.fromLTRB(hPad.left, 4, hPad.right, 16),
             ),
             CatalogStatus(
               store: store,
@@ -113,17 +121,11 @@ class _SeasonalPageState extends State<SeasonalPage> {
                     final columns = AppLayout.timelineColumns(
                       constraints.crossAxisExtent,
                     );
-                    final width =
-                        (constraints.crossAxisExtent - 16 * (columns - 1)) /
-                        columns;
-                    return SliverGrid.builder(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: columns,
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 18,
-                        mainAxisExtent: width / (16 / 9) + 86,
-                      ),
-                      itemCount: group.value.length,
+                    return SliverMasonryGrid.count(
+                      crossAxisCount: columns,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 18,
+                      childCount: group.value.length,
                       itemBuilder: (context, index) {
                         final anime = group.value[index];
                         return AnimeTile(

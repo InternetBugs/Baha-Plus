@@ -105,7 +105,7 @@ Future<_Session> _launch(
   store.accountSynced = true;
   if (saved) store.favorites = [...store.catalog.items];
   store.selectTab(tab, filter: filter);
-  if (tab == 2) store.query = 'Favorite';
+  if (tab == 2) store.libraryQuery = 'Favorite';
   portal.accountApi.favoriteHandler = (_, _) async {};
   await store.attach(portal);
   store.updateNavigation(OfficialSite.home, canGoBack: false);
@@ -265,7 +265,7 @@ void main() {
         expect(scroll.position.pixels, detailOffset);
         expect(store.tab, 2);
         expect(store.libraryFilter, saved ? 'favorites' : 'season');
-        expect(store.query, 'Favorite');
+        expect(store.libraryQuery, 'Favorite');
         expect(source.offset, offset);
         await tester.tap(find.bySemanticsLabel(store.t('close')));
         await _frames(tester);

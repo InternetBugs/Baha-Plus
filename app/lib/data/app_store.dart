@@ -280,7 +280,7 @@ class AppStore extends ChangeNotifier {
   bool get hasAccount => accountProfile != null || accountSynced;
   bool searching = false, searchFailed = false;
   int tab = 0;
-  String libraryFilter = 'all', _query = '', searchedQuery = '';
+  String libraryFilter = 'all', _query = '', _libraryQuery = '', searchedQuery = '';
   Anime? selectedAnime;
   AnimeDetail? detail;
   Anime? playingAnime;
@@ -299,7 +299,18 @@ class AppStore extends ChangeNotifier {
   bool browserVisible = false, browserError = false, busy = false;
   bool verificationRequired = false, browserCanGoBack = false;
   String browserTitle = '';
-  String? notice;
+  String? _notice;
+  int _noticeRevision = 0;
+  final noticeEvents = ValueNotifier<int>(0);
+  String? get notice => _notice;
+  int get noticeRevision => _noticeRevision;
+  set notice(String? value) {
+    _notice = value;
+    if (value != null && value.isNotEmpty) {
+      _noticeRevision++;
+      if (!_disposed) noticeEvents.value = _noticeRevision;
+    }
+  }
   Uri? browserUri;
   BrowserRequest operation = BrowserRequest(intent: BrowserIntent.idle);
   OfficialPortal? _portal;
@@ -770,8 +781,6 @@ class AppStore extends ChangeNotifier {
   int _libraryFavoritesLen = -1;
   String? _libraryFilterCache;
   String? _libraryQueryCache;
-  List<Anime>? _librarySearchResults;
-  String? _librarySearchedQuery;
   List<Anime> _libraryItemsCache = const [];
 
   static bool _isMovieOrSingleRelease(Anime item) =>
@@ -967,8 +976,7 @@ class AppStore extends ChangeNotifier {
     return _expiringCollectionCache;
   }
 
-  bool get _usesOfficialSearch =>
-      tab == 4 || (tab == 2 && libraryFilter == 'all');
+  bool get _usesOfficialSearch => tab == 4;
   String get query => _query;
   set query(String value) {
     if (value == _query) return;
@@ -988,6 +996,39 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  String get libraryQuery => _libraryQuery;
+  set libraryQuery(String value) {
+    if (value == _libraryQuery) return;
+    _libraryQuery = value;
+    _emit();
+  }
+
+  void openGlobalSearch(String term) {
+    final trimmed = term.trim();
+    tab = 4;
+    if (trimmed.isEmpty) {
+      query = '';
+      _emit();
+      return;
+    }
+    if (_query == trimmed) {
+      _emit();
+      if (searchedQuery != trimmed && !searching) {
+        unawaited(search());
+      }
+      return;
+    }
+    _query = trimmed;
+    searchedQuery = '';
+    searchResults = [];
+    _searchDebounce?.cancel();
+    _searchGeneration++;
+    searching = true;
+    searchFailed = false;
+    _emit();
+    unawaited(search());
+  }
+
   bool isFavorite(Anime item) {
     if (!identical(_favoriteIdsSource, favorites) ||
         _favoriteIdsLength != favorites.length) {
@@ -1004,14 +1045,11 @@ class AppStore extends ChangeNotifier {
   }
 
   List<Anime> get libraryItems {
-    if (libraryFilter == 'all' && query.trim().isNotEmpty) return searchMatches;
     if (identical(_libraryCatalog, catalog) &&
         identical(_libraryFavorites, favorites) &&
         _libraryFavoritesLen == favorites.length &&
         _libraryFilterCache == libraryFilter &&
-        _libraryQueryCache == _query &&
-        identical(_librarySearchResults, searchResults) &&
-        _librarySearchedQuery == searchedQuery) {
+        _libraryQueryCache == _libraryQuery) {
       return _libraryItemsCache;
     }
     final source = libraryFilter == 'favorites' ? favorites : catalog.items;
@@ -1019,29 +1057,38 @@ class AppStore extends ChangeNotifier {
       for (final item in source)
         if ((const ['all', 'favorites'].contains(libraryFilter) ||
                 item.sections.contains(libraryFilter)) &&
-            folding.matches(item.title, query))
+            folding.matches(item.title, _libraryQuery))
           item,
     ]);
     _libraryCatalog = catalog;
     _libraryFavorites = favorites;
     _libraryFavoritesLen = favorites.length;
     _libraryFilterCache = libraryFilter;
-    _libraryQueryCache = _query;
-    _librarySearchResults = searchResults;
-    _librarySearchedQuery = searchedQuery;
+    _libraryQueryCache = _libraryQuery;
     _libraryItemsCache = result;
     return result;
   }
 
   void selectTab(int value, {String? filter}) {
     diagnostics.record('app.tab', {'tab': value});
+    final previousTab = tab;
     tab = value;
     if (filter != null) {
       libraryFilter = filter;
-      query = '';
+      if (previousTab != 2) {
+        _libraryQuery = '';
+      }
     }
     _emit();
     if (value == 3 &&
+        !browserVisible &&
+        !busy &&
+        (_portal != null || _portalHostActive)) {
+      unawaited(syncAccount());
+    }
+    if (value == 2 &&
+        libraryFilter == 'favorites' &&
+        !accountSynced &&
         !browserVisible &&
         !busy &&
         (_portal != null || _portalHostActive)) {
@@ -2192,6 +2239,7 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
     updates.dispose();
     playback.removeListener(_recordPlayback);
     playback.dispose();
+    noticeEvents.dispose();
     super.dispose();
   }
 }

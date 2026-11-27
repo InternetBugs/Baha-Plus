@@ -294,5 +294,9 @@
   "exploreAction": "探索",
   "viewAction": "查看",
   "popularEntryHint": "前往片庫熱門分類 · 共 {n} 部",
-  "addedOnDate": "{date} 上架"
+  "addedOnDate": "{date} 上架",
+  "libraryFilterPlaceholder": "篩選目前片庫…",
+  "searchFullCatalog": "在全站搜尋「{query}」",
+  "libraryScopeHint": "目前顯示近期目錄，完整片庫請使用搜尋。",
+  "playNextEpisode": "播放下一集"
 }

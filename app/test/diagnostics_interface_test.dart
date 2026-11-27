@@ -210,7 +210,7 @@ void main() {
         tester.getRect(reportHeading).top,
         greaterThan(tester.getRect(previewAppBar).bottom),
       );
-      await tester.tap(find.byIcon(CupertinoIcons.back).last);
+      await tester.tap(find.byIcon(CupertinoIcons.chevron_back).last);
       await drain(tester);
       expect(tester.takeException(), isNull);
     });

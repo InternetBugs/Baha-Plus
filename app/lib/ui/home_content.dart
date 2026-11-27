@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'catalog_pages.dart' show ContinueCard, ShowAnime, ShowCollection;
@@ -15,6 +14,7 @@ class HomeContent extends StatelessWidget {
     required this.openHistory,
     required this.openSeason,
     required this.openCollection,
+    this.horizontalPadding = EdgeInsets.zero,
     super.key,
   });
 
@@ -23,6 +23,7 @@ class HomeContent extends StatelessWidget {
   final VoidCallback openHistory;
   final VoidCallback openSeason;
   final ShowCollection openCollection;
+  final EdgeInsets horizontalPadding;
 
   String _collectionTitle(AnimeCollection collection) =>
       collection.id == 'expiring-all'
@@ -40,6 +41,11 @@ class HomeContent extends StatelessWidget {
     return '$count';
   }
 
+  EdgeInsets get _hInset => EdgeInsets.only(
+    left: horizontalPadding.left,
+    right: horizontalPadding.right,
+  );
+
   @override
   Widget build(BuildContext context) {
     final feed = store.homeFeed;
@@ -52,11 +58,14 @@ class HomeContent extends StatelessWidget {
       slivers: [
         if (feed.heroItems.isNotEmpty)
           SliverToBoxAdapter(
-            child: FeaturedCarousel<HomeHeroItem>(
-              key: const ValueKey('home-featured-carousel'),
-              items: feed.heroItems,
-              keyIdOf: (entry) => entry.keyId,
-              itemBuilder: _heroCard,
+            child: Padding(
+              padding: _hInset,
+              child: FeaturedCarousel<HomeHeroItem>(
+                key: const ValueKey('home-featured-carousel'),
+                items: feed.heroItems,
+                keyIdOf: (entry) => entry.keyId,
+                itemBuilder: _heroCard,
+              ),
             ),
           ),
         if (store.history.isNotEmpty)
@@ -66,13 +75,15 @@ class HomeContent extends StatelessWidget {
               child: _ContinueWatchingSection(
                 store: store,
                 openHistory: openHistory,
+                openDetail: openDetail,
+                horizontalPadding: _hInset,
               ),
             ),
           ),
         if (feed.recentUpdates.isNotEmpty)
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.only(top: 28),
+              padding: _hInset.copyWith(top: 28),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -94,13 +105,16 @@ class HomeContent extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SectionHeading(
-                    store.t('newlyAdded'),
-                    onTap: () => openCollection(
-                      AnimeCollection(
-                        id: 'new-added',
-                        title: store.t('newlyAdded'),
-                        items: store.newAdded,
+                  Padding(
+                    padding: _hInset,
+                    child: SectionHeading(
+                      store.t('newlyAdded'),
+                      onTap: () => openCollection(
+                        AnimeCollection(
+                          id: 'new-added',
+                          title: store.t('newlyAdded'),
+                          items: store.newAdded,
+                        ),
                       ),
                     ),
                   ),
@@ -108,6 +122,7 @@ class HomeContent extends StatelessWidget {
                   _NewAddedPosterRail(
                     items: feed.newAdded,
                     openDetail: openDetail,
+                    horizontalPadding: _hInset,
                   ),
                 ],
               ),
@@ -120,13 +135,17 @@ class HomeContent extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SectionHeading(store.t('curatedCollections')),
+                  Padding(
+                    padding: _hInset,
+                    child: SectionHeading(store.t('curatedCollections')),
+                  ),
                   const SizedBox(height: 14),
                   _TopicsRail(
                     store: store,
                     collections: feed.topics,
                     titleFor: _collectionTitle,
                     openCollection: openCollection,
+                    horizontalPadding: _hInset,
                   ),
                 ],
               ),
@@ -135,7 +154,7 @@ class HomeContent extends StatelessWidget {
         if (popular.isNotEmpty)
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.only(top: 28),
+              padding: _hInset.copyWith(top: 28),
               child: _PopularLibraryCard(store: store, popular: popular),
             ),
           ),
@@ -229,7 +248,7 @@ class HomeContent extends StatelessWidget {
           ? const Color(0xe81a0d02)
           : const Color(0xe8090b16),
       title: _collectionTitle(collection),
-      titleFontSize: 25,
+      titleFontSize: 24,
       metaTitle: previewLine,
       metaSubtitle: count,
       ctaLabel: store.t(expiring ? 'viewAction' : 'exploreAction'),
@@ -257,7 +276,7 @@ class _HeroCardShell extends StatelessWidget {
     required this.footerLeading,
     this.tintColor = const Color(0x22000000),
     this.scrimEndColor = const Color(0xe2000000),
-    this.titleFontSize = 26,
+    this.titleFontSize = 25,
   });
 
   final String Function(bool wideBanner) artworkUrl;
@@ -278,14 +297,16 @@ class _HeroCardShell extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, bounds) {
       final wideBanner = bounds.maxWidth > 540;
+      final textScaler = MediaQuery.textScalerOf(context);
+      final largeText = textScaler.scale(16) > 20;
       final height = bounds.hasBoundedHeight
           ? bounds.maxHeight
-          : math.min(bounds.maxWidth * 1.28, 510.0);
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
+          : math.min(bounds.maxWidth * 1.06, 420.0);
+      return PressableSurface(
+        pressedScale: 0.985,
         onTap: onTapCard,
         child: ClipRSuperellipse(
-          borderRadius: BorderRadius.circular(27),
+          borderRadius: BorderRadius.circular(BahaRadius.hero),
           child: SizedBox(
             height: height,
             child: Stack(
@@ -303,27 +324,30 @@ class _HeroCardShell extends StatelessWidget {
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.all(22),
+                  padding: const EdgeInsets.all(20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _HeroKindChip(label: badge, dotColor: dotColor),
                       const Spacer(),
-                      Semantics(
-                        button: true,
-                        child: Text(
-                          title,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: titleFontSize,
-                            fontWeight: FontWeight.w800,
-                            height: 1.26,
+                      Flexible(
+                        flex: 0,
+                        child: Semantics(
+                          button: true,
+                          child: Text(
+                            title,
+                            maxLines: largeText ? 2 : 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: titleFontSize,
+                              fontWeight: FontWeight.w800,
+                              height: 1.24,
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 16),
                       Row(
                         children: [
                           footerLeading(wideBanner),
@@ -331,6 +355,7 @@ class _HeroCardShell extends StatelessWidget {
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
                                   metaTitle,
@@ -358,24 +383,15 @@ class _HeroCardShell extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 10),
-                          GlassButton.custom(
-                            shape: const LiquidRoundedSuperellipse(
-                              borderRadius: 19,
-                            ),
+                          GlassActionPill(
                             useOwnLayer: true,
                             settings: mediaGlass,
+                            foregroundColor: Colors.white,
                             label: ctaLabel,
                             onTap: onTapCta,
-                            width: 76,
+                            minWidth: 74,
                             height: 38,
-                            child: Text(
-                              ctaLabel,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            horizontalPadding: 14,
                           ),
                         ],
                       ),
@@ -439,34 +455,55 @@ class _ContinueWatchingSection extends StatelessWidget {
   const _ContinueWatchingSection({
     required this.store,
     required this.openHistory,
+    required this.openDetail,
+    required this.horizontalPadding,
   });
 
   final AppStore store;
   final VoidCallback openHistory;
+  final ShowAnime openDetail;
+  final EdgeInsets horizontalPadding;
 
   @override
   Widget build(BuildContext context) {
     final cardWidth = AppLayout.of(context).isWide ? 340.0 : 310.0;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final rowHeight = math.max(
+      122.0,
+      46.0 +
+          textScaler.scale(16 * 1.35) +
+          textScaler.scale(12 * 1.35) +
+          textScaler.scale(10 * 1.35) +
+          28.0,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SectionHeading(store.t('history'), onTap: openHistory),
+        Padding(
+          padding: horizontalPadding,
+          child: SectionHeading(store.t('history'), onTap: openHistory),
+        ),
         const SizedBox(height: 12),
         SizedBox(
-          height: 112,
+          height: rowHeight,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
+            padding: horizontalPadding.copyWith(top: 2, bottom: 10),
             itemCount: math.min(store.history.length, 8),
             separatorBuilder: (_, index) => const SizedBox(width: 12),
-            itemBuilder: (_, index) => SizedBox(
-              width: cardWidth,
-              child: ContinueCard(
-                store: store,
-                entry: store.history[index],
-                compact: true,
-              ),
-            ),
+            itemBuilder: (_, index) {
+              final entry = store.history[index];
+              return SizedBox(
+                width: cardWidth,
+                child: ContinueCard(
+                  store: store,
+                  entry: entry,
+                  compact: true,
+                  onOpenDetail: () => openDetail(entry.anime),
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -526,31 +563,38 @@ class _RecentUpdatesGrid extends StatelessWidget {
 }
 
 class _NewAddedPosterRail extends StatelessWidget {
-  const _NewAddedPosterRail({required this.items, required this.openDetail});
+  const _NewAddedPosterRail({
+    required this.items,
+    required this.openDetail,
+    required this.horizontalPadding,
+  });
 
   final List<Anime> items;
   final ShowAnime openDetail;
+  final EdgeInsets horizontalPadding;
 
   @override
   Widget build(BuildContext context) {
     final wide = AppLayout.of(context).isWide;
     final cardWidth = wide ? 136.0 : 120.0;
     final posterHeight = cardWidth / 0.72;
-    final textHeight = MediaQuery.textScalerOf(context).scale(58);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final textHeight =
+        textScaler.scale(13.5 * 1.38 * 2 + 11 * 1.35) + 18.0;
     return SizedBox(
-      height: posterHeight + textHeight + 14,
+      height: posterHeight + textHeight,
       child: ListView.separated(
         key: const ValueKey('home-new-added-rail'),
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
+        padding: horizontalPadding,
         itemCount: math.min(items.length, 12),
         separatorBuilder: (_, index) => const SizedBox(width: 12),
         itemBuilder: (context, index) {
           final anime = items[index];
           return SizedBox(
             width: cardWidth,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
+            child: PressableSurface(
               onTap: () => openDetail(anime),
               child: Semantics(
                 button: true,
@@ -566,7 +610,7 @@ class _NewAddedPosterRail extends StatelessWidget {
                         fit: StackFit.expand,
                         children: [
                           ClipRSuperellipse(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(BahaRadius.tile),
                             child: Artwork(anime.artwork),
                           ),
                           if (anime.addedDate != null)
@@ -578,6 +622,10 @@ class _NewAddedPosterRail extends StatelessWidget {
                                   color: const Color(0x88000000),
                                   shape: RoundedSuperellipseBorder(
                                     borderRadius: BorderRadius.circular(10),
+                                    side: const BorderSide(
+                                      color: Color(0x28ffffff),
+                                      width: 0.5,
+                                    ),
                                   ),
                                 ),
                                 child: Padding(
@@ -633,22 +681,30 @@ class _TopicsRail extends StatelessWidget {
     required this.collections,
     required this.titleFor,
     required this.openCollection,
+    required this.horizontalPadding,
   });
 
   final AppStore store;
   final List<AnimeCollection> collections;
   final String Function(AnimeCollection) titleFor;
   final ShowCollection openCollection;
+  final EdgeInsets horizontalPadding;
 
   @override
   Widget build(BuildContext context) {
     final cardWidth = AppLayout.of(context).isWide ? 248.0 : 224.0;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final railHeight = math.max(
+      116.0,
+      36.0 + textScaler.scale(11 * 1.35 + 14.5 * 1.35 * 2) + 20.0,
+    );
     return SizedBox(
-      height: 114,
+      height: railHeight,
       child: ListView.separated(
         key: const ValueKey('home-topics-rail'),
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
+        padding: horizontalPadding,
         itemCount: collections.length,
         separatorBuilder: (_, index) => const SizedBox(width: 12),
         itemBuilder: (context, index) {
@@ -659,12 +715,11 @@ class _TopicsRail extends StatelessWidget {
               .replaceAll('{n}', '${collection.items.length}');
           return SizedBox(
             width: cardWidth,
-            child: GestureDetector(
+            child: PressableSurface(
               key: ValueKey('home-topic-${collection.id}'),
-              behavior: HitTestBehavior.opaque,
               onTap: () => openCollection(collection),
               child: ClipRSuperellipse(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(BahaRadius.card),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -737,20 +792,18 @@ class _PopularLibraryCard extends StatelessWidget {
     final hint = store
         .t('popularEntryHint')
         .replaceAll('{n}', '${popular.length}');
-    return GestureDetector(
+    return PressableSurface(
       key: const ValueKey('home-popular-entry'),
-      behavior: HitTestBehavior.opaque,
+      pressedScale: 0.985,
       onTap: () => store.selectTab(2, filter: 'hot'),
       child: Semantics(
         button: true,
         label: store.t('popular'),
         child: Container(
           padding: const EdgeInsets.all(16),
-          decoration: ShapeDecoration(
-            color: secondary(context).withValues(alpha: .06),
-            shape: RoundedSuperellipseBorder(
-              borderRadius: BorderRadius.circular(22),
-            ),
+          decoration: bahaCardDecoration(
+            context,
+            borderRadius: BahaRadius.card,
           ),
           child: Row(
             children: [
@@ -910,16 +963,18 @@ class _FeaturedCarouselState<T> extends State<FeaturedCarousel<T>> {
       final wide = bounds.maxWidth >= 560;
       final singleWide = wide && widget.items.length == 1;
       final reduceMotion = MediaQuery.disableAnimationsOf(context);
+      final textScaler = MediaQuery.textScalerOf(context);
+      final extraTextHeight = math.max(0.0, textScaler.scale(16) - 16) * 4.5;
       final double fraction;
       final double height;
       final int visibleCount;
       if (!wide) {
-        fraction = .96;
-        height = math.min(bounds.maxWidth * 1.28, 510.0);
+        fraction = .95;
+        height = math.min(bounds.maxWidth * 1.06 + extraTextHeight, 440.0);
         visibleCount = 1;
       } else if (singleWide) {
         fraction = 1.0;
-        height = math.min(bounds.maxWidth * .54, 440.0);
+        height = math.min(bounds.maxWidth * .50 + extraTextHeight, 440.0);
         visibleCount = 1;
       } else if (bounds.maxWidth >= 960) {
         visibleCount = math.min(3, widget.items.length);
@@ -927,11 +982,11 @@ class _FeaturedCarouselState<T> extends State<FeaturedCarousel<T>> {
         // right edge while preserving the 16px inter-card gap.
         fraction = (bounds.maxWidth + 16.0) / (visibleCount * bounds.maxWidth);
         final cardWidth = bounds.maxWidth * fraction - 16.0;
-        height = math.min(cardWidth * 1.28, 480.0);
+        height = math.min(cardWidth * 1.18 + extraTextHeight, 460.0);
       } else {
         const targetCardWidth = 350.0;
         fraction = (targetCardWidth / bounds.maxWidth).clamp(.42, .54);
-        height = math.min(targetCardWidth * 1.28, 480.0);
+        height = math.min(targetCardWidth * 1.18 + extraTextHeight, 460.0);
         visibleCount = (1 / fraction).floor().clamp(1, widget.items.length);
       }
       final controller = _controllerFor(fraction);
@@ -943,6 +998,7 @@ class _FeaturedCarouselState<T> extends State<FeaturedCarousel<T>> {
             child: PageView.builder(
               key: const PageStorageKey('featured-carousel-pages'),
               controller: controller,
+              clipBehavior: Clip.none,
               padEnds: false,
               allowImplicitScrolling: true,
               physics: const BouncingScrollPhysics(),

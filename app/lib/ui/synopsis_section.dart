@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -38,11 +39,13 @@ class SynopsisSection extends StatelessWidget {
         ),
         if (truncated) ...[
           const SizedBox(height: 12),
-          GlassButton.custom(
+          GlassActionPill(
             key: const ValueKey('open-full-synopsis'),
-            shape: const LiquidRoundedSuperellipse(borderRadius: 21),
-            width: 180,
+            label: store.t('fullSynopsis'),
+            trailingIcon: CupertinoIcons.chevron_right,
             height: 42,
+            fontSize: 13.5,
+            minWidth: 156,
             onTap: () => Navigator.push<void>(
               context,
               SecondaryPageRoute(
@@ -53,21 +56,6 @@ class SynopsisSection extends StatelessWidget {
                   description: description,
                 ),
               ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  store.t('fullSynopsis'),
-                  style: const TextStyle(fontSize: 13, color: brandBlue),
-                ),
-                const SizedBox(width: 7),
-                const Icon(
-                  CupertinoIcons.chevron_right,
-                  size: 12,
-                  color: brandBlue,
-                ),
-              ],
             ),
           ),
         ],
@@ -88,19 +76,29 @@ class SynopsisPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hPad = AppLayout.of(context).pageHorizontalPadding(maxWidth: 720);
+    final layout = AppLayout.of(context);
+    final hPad = layout.pageHorizontalPadding(maxWidth: 720);
     final safe = MediaQuery.paddingOf(context);
     return GlassScaffold(
       key: const ValueKey('full-synopsis-page'),
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      statusBarStyle: GlassStatusBarStyle.auto,
       topEdgeFadeExtent: 44,
       appBar: GlassAppBar(
         title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),
-        leading: GlassIconButton(
-          semanticLabel: store.t('close'),
-          icon: const Icon(CupertinoIcons.xmark),
-          onPressed: () => Navigator.pop(context),
-        ),
+        padding: layout.isCompact
+            ? const EdgeInsets.symmetric(horizontal: 8)
+            : EdgeInsets.only(
+                left: math.max(8.0, hPad.left - 8),
+                right: math.max(8.0, hPad.right - 8),
+              ),
+        actions: [
+          GlassIconButton(
+            semanticLabel: store.t('close'),
+            icon: const Icon(CupertinoIcons.xmark),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         physics: const BouncingScrollPhysics(
@@ -108,7 +106,7 @@ class SynopsisPage extends StatelessWidget {
         ),
         padding: EdgeInsets.fromLTRB(
           hPad.left,
-          safe.top + 64,
+          safe.top + 56,
           hPad.right,
           safe.bottom + 32,
         ),
