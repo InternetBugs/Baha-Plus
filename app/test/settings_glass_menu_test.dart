@@ -1,8 +1,10 @@
+import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/chrome.dart';
 import 'package:baha_plus/ui/glass_alert.dart';
+import 'package:baha_plus/ui/glass_settings_menu.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -444,4 +446,126 @@ void main() {
     expect(store.skipAgeConfirmation, isFalse);
     expect(await store.storage.read(key), '0');
   });
+
+  testWidgets(
+    'GlassSettingsRow right-aligns trailing value and chevron with rows without values',
+    (tester) async {
+      final store = await launch(tester);
+      store.updates
+        ..cancelCheck()
+        ..currentVersion = '0.5.15';
+      store
+        ..accountSynced = true
+        ..favorites = [
+          for (var i = 1; i <= 30; i++)
+            Anime(
+              id: '$i',
+              title: '測試動畫 $i',
+              cover: 'https://p2.bahamut.com.tw/$i.jpg',
+            ),
+        ];
+      await openAccount(tester);
+
+      Finder rowByTitle(String title) => find.ancestor(
+        of: find.text(title),
+        matching: find.byType(GlassSettingsRow),
+      );
+
+      double chevronRight(String title) => tester
+          .getRect(
+            find.descendant(
+              of: rowByTitle(title),
+              matching: find.byIcon(CupertinoIcons.chevron_right),
+            ),
+          )
+          .right;
+
+      final notificationsTitle = store.t('notifications');
+      final favoritesTitle = store.t('favorites');
+      final checkUpdatesTitle = store.t('checkUpdates');
+      final diagnosticsTitle = store.t('diagnosticsTitle');
+
+      expect(find.text('30'), findsOneWidget);
+      final notificationsRight = chevronRight(notificationsTitle);
+      final favoritesRight = chevronRight(favoritesTitle);
+      expect(favoritesRight, closeTo(notificationsRight, 0.5));
+
+      await tester.scrollUntilVisible(
+        find.text(diagnosticsTitle),
+        200,
+        scrollable: find.descendant(
+          of: find.byType(AccountPage),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await frames(tester);
+
+      expect(find.text('0.5.15'), findsOneWidget);
+      final checkUpdatesRight = chevronRight(checkUpdatesTitle);
+      final diagnosticsRight = chevronRight(diagnosticsTitle);
+      expect(checkUpdatesRight, closeTo(diagnosticsRight, 0.5));
+      expect(checkUpdatesRight, closeTo(notificationsRight, 0.5));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'GlassSettingsRow keeps chevron right-aligned without overflow for long values on narrow viewports',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(320, 640),
+              textScaler: TextScaler.linear(1.8),
+            ),
+            child: Scaffold(
+              body: SizedBox(
+                width: 280,
+                child: GlassSettingsGroup(
+                  children: [
+                    GlassSettingsRow(
+                      key: const ValueKey('row-plain'),
+                      title: '通知',
+                      icon: CupertinoIcons.bell,
+                      onTap: () {},
+                    ),
+                    GlassSettingsRow(
+                      key: const ValueKey('row-short-value'),
+                      title: '我的追番',
+                      icon: CupertinoIcons.bookmark,
+                      value: '30',
+                      onTap: () {},
+                    ),
+                    GlassSettingsRow(
+                      key: const ValueKey('row-long-value'),
+                      title: '检查更新与非常长的标题',
+                      icon: CupertinoIcons.arrow_clockwise,
+                      value: '0.5.15-beta.20261128.very.long.version',
+                      onTap: () {},
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      double chevronRight(String key) => tester
+          .getRect(
+            find.descendant(
+              of: find.byKey(ValueKey(key)),
+              matching: find.byIcon(CupertinoIcons.chevron_right),
+            ),
+          )
+          .right;
+
+      final plainRight = chevronRight('row-plain');
+      expect(chevronRight('row-short-value'), closeTo(plainRight, 0.5));
+      expect(chevronRight('row-long-value'), closeTo(plainRight, 0.5));
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

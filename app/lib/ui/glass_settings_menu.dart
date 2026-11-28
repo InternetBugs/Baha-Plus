@@ -684,46 +684,60 @@ class GlassSettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = destructive ? CupertinoColors.systemRed : brandBlue;
+    final hasValue = value != null && value!.isNotEmpty;
     return GlassSettingsHighlight(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-        child: Row(
-          children: [
-            Icon(icon, color: accent, size: 22),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: destructive ? CupertinoColors.systemRed : null,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final maxValueWidth = constraints.hasBoundedWidth
+                ? math.max(
+                    0.0,
+                    math.min(
+                      constraints.maxWidth * 0.45,
+                      constraints.maxWidth - 110.0,
+                    ),
+                  )
+                : 168.0;
+            return Row(
+              children: [
+                Icon(icon, color: accent, size: 22),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: destructive ? CupertinoColors.systemRed : null,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            if (value != null) ...[
-              const SizedBox(width: 8),
-              Flexible(
-                fit: FlexFit.loose,
-                child: Text(
-                  value!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                  style: TextStyle(color: secondary(context), fontSize: 14),
-                ),
-              ),
-              const SizedBox(width: 8),
-            ],
-            if (busy)
-              const CupertinoActivityIndicator(radius: 7)
-            else if (!destructive)
-              Icon(
-                CupertinoIcons.chevron_right,
-                color: secondary(context),
-                size: 13,
-              ),
-          ],
+                if (hasValue) ...[
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxValueWidth),
+                    child: Text(
+                      value!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                      style: TextStyle(color: secondary(context), fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                if (busy)
+                  const CupertinoActivityIndicator(radius: 7)
+                else if (!destructive)
+                  Icon(
+                    CupertinoIcons.chevron_right,
+                    color: secondary(context),
+                    size: 13,
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
