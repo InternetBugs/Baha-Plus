@@ -27,6 +27,38 @@ class DetailPage extends StatelessWidget {
     return null;
   }
 
+  Episode? _resumeEpisode(WatchEntry? watched, AnimeDetail? detail) {
+    if (watched == null) return null;
+    final rawWatched = watched.episodeLabel.trim();
+    if (detail != null) {
+      for (final episode in detail.episodes) {
+        if (episode.id == watched.videoId) {
+          return episode.label.trim().isNotEmpty || rawWatched.isEmpty
+              ? episode
+              : Episode(id: episode.id, label: rawWatched);
+        }
+      }
+    }
+    return Episode(id: watched.videoId, label: rawWatched);
+  }
+
+  Episode? _primaryPlayEpisode(WatchEntry? watched, AnimeDetail? detail) {
+    if (watched != null) return _resumeEpisode(watched, detail);
+    return detail?.episodes.firstOrNull;
+  }
+
+  String _primaryPlayLabel(Episode? resumeEpisode) {
+    if (resumeEpisode != null) {
+      final raw = resumeEpisode.label.trim();
+      if (raw.isEmpty) return store.t('continuePlayback');
+      final formatted = formatEpisodeNumberLabel(store, raw);
+      return store
+          .t('continuePlaybackEpisode')
+          .replaceAll('{episode}', formatted);
+    }
+    return store.t('play');
+  }
+
   String? _commentVideoId(AnimeDetail detail) {
     final watched = _watchEntry()?.videoId;
     if (watched != null && detail.episodes.any((e) => e.id == watched)) {
@@ -50,6 +82,8 @@ class DetailPage extends StatelessWidget {
         final detail = store.detail;
         final watched = _watchEntry();
         final watchedVideoId = watched?.videoId;
+        final resumeEpisode = _resumeEpisode(watched, detail);
+        final primaryEpisode = _primaryPlayEpisode(watched, detail);
         final canSplit =
             split &&
             detail != null &&
@@ -85,12 +119,17 @@ class DetailPage extends StatelessWidget {
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(
                   hPad.left,
-                  safe.top + 56,
+                  12,
                   hPad.right,
                   0,
                 ),
                 sliver: SliverToBoxAdapter(
-                  child: _hero(context, wide: layout.width >= 720),
+                  child: _hero(
+                    context,
+                    wide: layout.width >= 720,
+                    resumeEpisode: resumeEpisode,
+                    primaryEpisode: primaryEpisode,
+                  ),
                 ),
               ),
               if (store.detailLoading)
@@ -178,7 +217,12 @@ class DetailPage extends StatelessWidget {
     );
   }
 
-  Widget _hero(BuildContext context, {required bool wide}) {
+  Widget _hero(
+    BuildContext context, {
+    required bool wide,
+    required Episode? resumeEpisode,
+    required Episode? primaryEpisode,
+  }) {
     final textScaler = MediaQuery.textScalerOf(context);
     final showPoster = wide && anime.poster != null;
     final titleFontSize = wide ? 30.0 : 25.0;
@@ -187,6 +231,10 @@ class DetailPage extends StatelessWidget {
       190.0 + textScaler.scale(titleFontSize * 1.3 * 3 + 32.0),
     );
     final playButtonHeight = (textScaler.scale(16) + 26).clamp(48.0, 62.0);
+    final subtitle = [
+      anime.year,
+      anime.episodeLabel,
+    ].whereType<String>().where((item) => item.isNotEmpty).join(' · ');
     final info = Column(
       mainAxisAlignment: MainAxisAlignment.end,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -202,30 +250,31 @@ class DetailPage extends StatelessWidget {
             height: 1.28,
           ),
         ),
-        const SizedBox(height: 12),
-        Text(
-          [anime.year, anime.episodeLabel].whereType<String>().join(' · '),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: Color(0xbbffffff), fontSize: 12),
-        ),
+        if (subtitle.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Color(0xbbffffff), fontSize: 12),
+          ),
+        ],
         const SizedBox(height: 20),
         Row(
           children: [
             Flexible(
               child: GlassActionPill(
+                key: const ValueKey('detail-primary-play'),
                 useOwnLayer: true,
                 settings: mediaGlass,
                 foregroundColor: Colors.white,
                 icon: CupertinoIcons.play_fill,
-                label: store.t(
-                  anime.latestVideoId == null ? 'play' : 'playLatest',
-                ),
+                label: _primaryPlayLabel(resumeEpisode),
                 minWidth: 168,
                 height: playButtonHeight,
                 fontSize: 16,
                 horizontalPadding: 20,
-                onTap: () => _play(context),
+                onTap: () => _play(context, episode: primaryEpisode),
               ),
             ),
             const SizedBox(width: 14),
@@ -249,6 +298,7 @@ class DetailPage extends StatelessWidget {
       ],
     );
     return ClipRSuperellipse(
+      key: const ValueKey('detail-hero'),
       borderRadius: BorderRadius.circular(BahaRadius.hero),
       child: SizedBox(
         height: heroHeight,

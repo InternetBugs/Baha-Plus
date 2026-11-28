@@ -15,6 +15,8 @@
   "featured": "本季注目",
   "playLatest": "播放最新一集",
   "play": "开始观看",
+  "continuePlayback": "继续观看",
+  "continuePlaybackEpisode": "继续观看 · {episode}",
   "details": "作品详情",
   "save": "加入追番",
   "saved": "已追番",

@@ -689,4 +689,164 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'DetailPage from watch history avoids double top spacing, shows resume episode CTA, and keeps highlighted episode chip tappable',
+    (tester) async {
+      const topSafe = 59.0;
+      final (store, _) = await createApp(
+        tester,
+        size: const Size(390, 844),
+        padding: const EdgeInsets.only(top: topSafe, bottom: 34),
+        language: 'zh-Hans',
+      );
+
+      // Simulate an anime opened from watch history (no latestVideoId, year, or episodeLabel).
+      const historyAnime = Anime(
+        id: '88',
+        title: '世界最強的魔女，就此開始',
+        cover: 'https://p2.bahamut.com.tw/cover-88.jpg',
+        poster: 'https://p2.bahamut.com.tw/cover-88.jpg',
+      );
+      store
+        ..selectedAnime = historyAnime
+        ..detail = AnimeDetail.fromJson({
+          'title': historyAnime.title,
+          'description': '少女羅娜的故事簡介。',
+          'episodes': [
+            for (var i = 1; i <= 8; i++) {'id': '${200 + i}', 'label': '$i'},
+          ],
+          'metadata': <Json>[],
+        })
+        ..history = [
+          WatchEntry.fromJson({
+            'anime': historyAnime.toJson(),
+            'videoId': '208',
+            'episodeLabel': '8',
+            'progress': .7,
+            'progressLabel': '16:20',
+          }),
+        ];
+
+      Future<void> mountDetail({required String language}) async {
+        await store.setLanguage(language);
+        await tester.pumpWidget(
+          LiquidGlassWidgets.wrap(
+            brightnessResolver: Theme.maybeBrightnessOf,
+            theme: GlassThemeData.simple(quality: GlassQuality.standard),
+            child: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(390, 844),
+                padding: EdgeInsets.only(top: topSafe, bottom: 34),
+                viewPadding: EdgeInsets.only(top: topSafe, bottom: 34),
+              ),
+              child: MaterialApp(
+                home: DetailPage(store: store, anime: historyAnime),
+              ),
+            ),
+          ),
+        );
+        await frames(tester);
+      }
+
+      await mountDetail(language: 'zh-Hans');
+
+      // Hero sits cleanly 12pt below GlassAppBar (safe.top + 44), not double-padded.
+      final heroRect = tester.getRect(find.byKey(const ValueKey('detail-hero')));
+      expect(heroRect.top, closeTo(topSafe + 56, 1.0));
+
+      // Primary CTA displays "继续观看 · 第 8 集" in Simplified Chinese.
+      final primaryCta = find.byKey(const ValueKey('detail-primary-play'));
+      expect(
+        find.descendant(of: primaryCta, matching: find.text('继续观看 · 第 8 集')),
+        findsOneWidget,
+      );
+
+      // Tapping primary CTA plays episode 8 (videoId 208), not episode 1.
+      await tester.tap(primaryCta);
+      await frames(tester);
+      expect(store.playingVideoId, '208');
+
+      // Reset playback state and verify tapping the highlighted episode 8 chip works.
+      await tester.runAsync(store.closeBrowser);
+      await mountDetail(language: 'zh-Hant');
+      expect(
+        find.descendant(of: primaryCta, matching: find.text('繼續觀看 · 第 8 集')),
+        findsOneWidget,
+      );
+
+      final ep8Chip = find.ancestor(
+        of: find.text('8'),
+        matching: find.byType(EpisodeChipButton),
+      );
+      expect(tester.widget<EpisodeChipButton>(ep8Chip).selected, isTrue);
+      await tester.tap(ep8Chip);
+      await frames(tester);
+      expect(store.playingVideoId, '208');
+
+      // Non-numeric episode label & empty episode label fallbacks.
+      await tester.runAsync(store.closeBrowser);
+      store.history = [
+        WatchEntry.fromJson({
+          'anime': historyAnime.toJson(),
+          'videoId': '209',
+          'episodeLabel': '特別篇',
+        }),
+      ];
+      await mountDetail(language: 'zh-Hans');
+      expect(
+        find.descendant(of: primaryCta, matching: find.text('继续观看 · 特別篇')),
+        findsOneWidget,
+      );
+
+      store.history = [
+        WatchEntry.fromJson({
+          'anime': historyAnime.toJson(),
+          'videoId': '209',
+          'episodeLabel': '',
+        }),
+      ];
+      await mountDetail(language: 'zh-Hans');
+      expect(
+        find.descendant(of: primaryCta, matching: find.text('继续观看')),
+        findsOneWidget,
+      );
+
+      // Without watch history, DetailPage shows "开始观看" and plays episode 1
+      // even when latestVideoId points to a later episode.
+      store.history = [];
+      const unwatchedWithLatest = Anime(
+        id: '88',
+        title: '世界最強的魔女，就此開始',
+        cover: 'https://p2.bahamut.com.tw/cover-88.jpg',
+        poster: 'https://p2.bahamut.com.tw/cover-88.jpg',
+        latestVideoId: '208',
+      );
+      await tester.pumpWidget(
+        LiquidGlassWidgets.wrap(
+          brightnessResolver: Theme.maybeBrightnessOf,
+          theme: GlassThemeData.simple(quality: GlassQuality.standard),
+          child: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(390, 844),
+              padding: EdgeInsets.only(top: topSafe, bottom: 34),
+              viewPadding: EdgeInsets.only(top: topSafe, bottom: 34),
+            ),
+            child: MaterialApp(
+              home: DetailPage(store: store, anime: unwatchedWithLatest),
+            ),
+          ),
+        ),
+      );
+      await frames(tester);
+      expect(
+        find.descendant(of: primaryCta, matching: find.text(store.t('play'))),
+        findsOneWidget,
+      );
+      await tester.tap(primaryCta);
+      await frames(tester);
+      expect(store.playingVideoId, '201');
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

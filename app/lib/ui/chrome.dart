@@ -950,12 +950,18 @@ class _EpisodeChipButtonState extends State<EpisodeChipButton> {
   bool _pressed = false;
 
   @override
+  void didUpdateWidget(covariant EpisodeChipButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.onTap == null && _pressed) _pressed = false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final enabled = !widget.selected && widget.onTap != null;
+    final enabled = widget.onTap != null;
     final fill = widget.selected
-        ? brandBlue
+        ? (_pressed ? brandBlue.withValues(alpha: .84) : brandBlue)
         : _pressed
         ? (dark ? const Color(0x28ffffff) : const Color(0x1a000000))
         : secondary(context).withValues(alpha: .08);

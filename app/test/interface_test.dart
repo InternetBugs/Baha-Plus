@@ -624,7 +624,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('timeline-1')));
       await frames(tester);
       expect(find.byType(DetailPage), findsOneWidget);
-      await tester.tap(find.text(store.t('playLatest')));
+      await tester.tap(find.text(store.t('play')));
       await frames(tester);
       expect(find.byType(DetailPage), findsNothing);
       expect(find.byType(SeasonalPage), findsNothing);
