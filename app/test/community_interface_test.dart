@@ -1,8 +1,10 @@
 import 'fake_playback.dart';
 import 'fake_metadata.dart';
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:io';
 import 'dart:convert';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -400,9 +402,13 @@ void main() {
         canvas.drawColor(const Color(0xff67b8d3), ui.BlendMode.src);
         final picture = recorder.endRecording();
         final decoded = await picture.toImage(64, 64);
-        for (final url in [avatar, image]) {
+        for (final provider in <ImageProvider>[
+          const CachedNetworkImageProvider(avatar, maxWidth: 36, maxHeight: 36),
+          const CachedNetworkImageProvider(image, maxWidth: 56, maxHeight: 56),
+          const CachedNetworkImageProvider(image),
+        ]) {
           PaintingBinding.instance.imageCache.putIfAbsent(
-            NetworkImage(url),
+            provider,
             () => OneFrameImageStreamCompleter(
               Future.value(ImageInfo(image: decoded.clone())),
             ),
@@ -472,7 +478,7 @@ void main() {
       final openAll = find.byKey(const ValueKey('open-full-comments'));
       expect(tester.getSize(list).height, lessThan(330));
       expect(
-        tester.widget<SingleChildScrollView>(list).scrollDirection,
+        tester.widget<ListView>(list).scrollDirection,
         Axis.horizontal,
       );
       expect(
@@ -499,14 +505,18 @@ void main() {
       expect(find.byKey(const ValueKey('preview-comment-25')), findsOneWidget);
       expect(find.byKey(const ValueKey('preview-comment-77')), findsNothing);
       expect(find.byKey(const ValueKey('preview-comment-88')), findsNothing);
-      expect(tester.widget(openAll), isA<GlassButton>());
+      expect(
+        find.descendant(of: openAll, matching: find.byType(GlassButton)),
+        findsOneWidget,
+      );
       expect(portal.communityRequests.length, 1);
       expect(portal.communityRequests.single['order'], 1);
       expect(portal.communityRequests.single['page'], 0);
       await tester.tap(openAll);
       await frames(tester);
       expect(find.byKey(const ValueKey('comments-page')), findsOneWidget);
-      expect(portal.communityRequests.length, 2);
+      expect(find.byKey(const ValueKey('comment-8')), findsOneWidget);
+      expect(portal.communityRequests.length, 1);
       expect(portal.communityRequests.last['order'], 1);
       expect(tester.takeException(), isNull);
     },
@@ -575,7 +585,8 @@ void main() {
     expect(tester.widget<Text>(find.text(longText)).maxLines, 3);
     await tester.tap(expand);
     await frames(tester);
-    expect(find.widgetWithText(SelectableText, longText), findsOneWidget);
+    expect(find.byType(SelectionArea), findsOneWidget);
+    expect(tester.widget<Text>(find.text(longText)).maxLines, isNull);
     expect(toggle('2', 'showMore'), findsOneWidget);
     await tester.tap(toggle('1', 'showLess'));
     await frames(tester);
@@ -583,6 +594,415 @@ void main() {
     expect(expand, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'unfolding a long folded comment keeps folded and text-collapse states separate',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      const longFolded = '一\n二\n三\n四';
+      portal.communityResponse = {
+        ...commentPageJson(),
+        'comments': [
+          {...commentJson('1'), 'text': longFolded, 'folded': true},
+        ],
+      };
+      await mount(
+        tester,
+        CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+      );
+      expect(find.text(store.t('foldedComment')), findsOneWidget);
+      expect(find.text(longFolded), findsNothing);
+
+      await tester.tap(find.text(store.t('foldedComment')));
+      await frames(tester);
+      expect(find.text(store.t('foldedComment')), findsNothing);
+      expect(tester.widget<Text>(find.text(longFolded)).maxLines, 3);
+      expect(find.text(store.t('showMore')), findsOneWidget);
+
+      await tester.tap(find.text(store.t('showMore')));
+      await frames(tester);
+      expect(tester.widget<Text>(find.text(longFolded)).maxLines, isNull);
+      expect(find.text(store.t('showLess')), findsOneWidget);
+
+      await tester.tap(find.text(store.t('showLess')));
+      await frames(tester);
+      expect(find.text(store.t('foldedComment')), findsNothing);
+      expect(tester.widget<Text>(find.text(longFolded)).maxLines, 3);
+      expect(find.text(store.t('showMore')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'refresh clears in-flight reply loading and never deadlocks the reply button',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      final pendingReply = Completer<Json>();
+      portal.communityHandler = (action, args) {
+        if (action == 'replies') return pendingReply.future;
+        return Future.value({
+          ...commentPageJson(),
+          'comments': [
+            {...commentJson('1'), 'replies': 2},
+          ],
+        });
+      };
+      await mount(
+        tester,
+        CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+      );
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-1')),
+          matching: find.byType(CupertinoActivityIndicator),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.bySemanticsLabel(store.t('refresh')));
+      await frames(tester);
+      pendingReply.complete({
+        'ok': true,
+        'comments': [commentJson('2')],
+      });
+      await frames(tester);
+
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-1')),
+          matching: find.byType(CupertinoActivityIndicator),
+        ),
+        findsNothing,
+      );
+      portal.communityHandler = (action, args) async => action == 'replies'
+          ? {
+              'ok': true,
+              'comments': [commentJson('2'), commentJson('3')],
+            }
+          : {
+              ...commentPageJson(),
+              'comments': [
+                {...commentJson('1'), 'replies': 2},
+              ],
+            };
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('comment-3')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'pagination errors stay at the bottom and single-page refresh retries refresh',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      var failPage2 = true;
+      portal.communityHandler = (action, args) async {
+        if (args['page'] == 2) {
+          if (failPage2) return {'ok': false, 'code': 'network'};
+          return commentPageJson(id: '2', nextPage: 0);
+        }
+        return commentPageJson(id: '1', nextPage: 2);
+      };
+      await mount(
+        tester,
+        CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+      );
+      await tester.tap(find.byKey(const ValueKey('comments-more')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comments-more-error')), findsOneWidget);
+      expect(find.byKey(const ValueKey('comments-retry')), findsNothing);
+      expect(find.byKey(const ValueKey('comment-1')), findsOneWidget);
+
+      failPage2 = false;
+      await tester.tap(find.byKey(const ValueKey('comments-more-retry')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comments-more-error')), findsNothing);
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+
+      var failRefresh = true;
+      portal.communityHandler = (action, args) async {
+        if (failRefresh) return {'ok': false, 'code': 'network'};
+        return commentPageJson(id: '3', nextPage: 0);
+      };
+      await tester.tap(find.bySemanticsLabel(store.t('refresh')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comments-retry')), findsOneWidget);
+      expect(find.byKey(const ValueKey('comment-1')), findsOneWidget);
+
+      failRefresh = false;
+      await tester.tap(find.byKey(const ValueKey('comments-retry')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comments-retry')), findsNothing);
+      expect(find.byKey(const ValueKey('comment-3')), findsOneWidget);
+      expect(portal.communityRequests.last['page'], 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'voting updates in place across pages and replies without reloading the board',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      portal.communityHandler = (action, args) async {
+        if (action == 'comment-vote') return {'ok': true};
+        if (action == 'replies') {
+          return {
+            'ok': true,
+            'comments': [
+              {...commentJson('10'), 'likes': 1, 'vote': 0},
+            ],
+          };
+        }
+        if (args['page'] == 2) {
+          return {
+            ...commentPageJson(id: '2', nextPage: 0),
+            'comments': [
+              {...commentJson('2'), 'likes': 5, 'vote': 0},
+            ],
+          };
+        }
+        return {
+          ...commentPageJson(id: '1', nextPage: 2),
+          'comments': [
+            {...commentJson('1'), 'likes': 3, 'replies': 1, 'vote': 0},
+          ],
+        };
+      };
+      await mount(
+        tester,
+        CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+      );
+      await tester.tap(find.byKey(const ValueKey('comments-more')));
+      await frames(tester);
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('comment-10')), findsOneWidget);
+
+      final readsBefore = portal.communityRequests
+          .where((r) => r['action'] == 'comments')
+          .length;
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-2')),
+          matching: find.byIcon(CupertinoIcons.arrow_up),
+        ),
+      );
+      await frames(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-10')),
+          matching: find.byIcon(CupertinoIcons.arrow_up),
+        ),
+      );
+      await frames(tester);
+
+      expect(
+        portal.communityRequests.where((r) => r['action'] == 'comments').length,
+        readsBefore,
+      );
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('comment-10')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-2')),
+          matching: find.text('6'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-10')),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'replies toggle expand/collapse from cache and sub-replying targets author while syncing parent count',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      var replyList = <Json>[
+        {...commentJson('2'), 'name': '子樓作者'},
+      ];
+      portal.communityHandler = (action, args) async {
+        if (action == 'replies') {
+          return {'ok': true, 'comments': replyList};
+        }
+        if (action == 'comment-send') {
+          replyList = [
+            ...replyList,
+            {...commentJson('3'), 'name': '我', 'text': args['text']},
+          ];
+          return {'ok': true, 'id': '3'};
+        }
+        return {
+          ...commentPageJson(),
+          'comments': [
+            {...commentJson('1'), 'name': '樓主', 'replies': 1},
+          ],
+        };
+      };
+      await mount(
+        tester,
+        CommentsPage(store: store, videoId: '20', title: '測試動畫'),
+      );
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+      expect(
+        portal.communityRequests.where((r) => r['action'] == 'replies').length,
+        1,
+      );
+
+      // Second tap collapses without re-fetching.
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comment-2')), findsNothing);
+      expect(
+        portal.communityRequests.where((r) => r['action'] == 'replies').length,
+        1,
+      );
+
+      // Third tap expands again from memory without re-fetching.
+      await tester.tap(find.byIcon(CupertinoIcons.chat_bubble));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('comment-2')), findsOneWidget);
+      expect(
+        portal.communityRequests.where((r) => r['action'] == 'replies').length,
+        1,
+      );
+
+      // Replying to a sub-reply shows the sub-reply author in composer but submits parent commentId.
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-2')),
+          matching: find.byIcon(CupertinoIcons.arrowshape_turn_up_left),
+        ),
+      );
+      await frames(tester);
+      expect(
+        find.text(store.t('replyingTo').replaceAll('{name}', '子樓作者')),
+        findsOneWidget,
+      );
+      await tester.enterText(find.byType(TextField), '同意你的看法');
+      await frames(tester);
+      await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
+      await frames(tester);
+
+      final sendReq = portal.communityRequests.lastWhere(
+        (r) => r['action'] == 'comment-send',
+      );
+      expect(sendReq['commentId'], '1');
+      expect(find.byKey(const ValueKey('comment-3')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('comment-1')),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+      expect(store.notice, store.t('replySent'));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'draft survives closing comments page, login error shows shortcut, and rune limit is enforced',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      portal.communityHandler = (action, args) async => action == 'comment-send'
+          ? {'ok': false, 'code': 'login'}
+          : commentPageJson();
+      await mount(
+        tester,
+        CompactCommentsPreview(store: store, videoId: '20', title: '測試動畫'),
+      );
+      await tester.tap(find.byKey(const ValueKey('open-full-comments')));
+      await frames(tester);
+
+      await tester.enterText(find.byType(TextField), '未登入草稿');
+      await frames(tester);
+      await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
+      await frames(tester);
+      expect(
+        find.byKey(const ValueKey('composer-login-action')),
+        findsOneWidget,
+      );
+
+      // Closing and reopening restores the saved draft from AppStore.
+      await tester.tap(find.bySemanticsLabel(store.t('close')));
+      await frames(tester);
+      await tester.tap(find.byKey(const ValueKey('open-full-comments')));
+      await frames(tester);
+      expect(find.text('未登入草稿'), findsOneWidget);
+
+      // Exceeding 2000 runes shows the counter and disables send.
+      await tester.enterText(find.byType(TextField), '🧑‍🚀' * 700);
+      await frames(tester);
+      expect(
+        find.byKey(const ValueKey('community-rune-counter')),
+        findsOneWidget,
+      );
+      final sendRequests = portal.communityRequests
+          .where((r) => r['action'] == 'comment-send')
+          .length;
+      await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
+      await frames(tester);
+      expect(
+        portal.communityRequests
+            .where((r) => r['action'] == 'comment-send')
+            .length,
+        sendRequests,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'image-only comment shows placeholder text in preview and syncs after posting in full board',
+    (tester) async {
+      final (store, portal) = await setup(tester);
+      const image = 'https://wall.bahamut.com.tw/only-image.png';
+      var comments = <Json>[
+        {...commentJson('1'), 'text': '', 'image': image},
+      ];
+      portal.communityHandler = (action, args) async {
+        if (action == 'comment-send') {
+          comments = [
+            {...commentJson('9'), 'text': '全新留言'},
+            ...comments,
+          ];
+          return {'ok': true, 'id': '9'};
+        }
+        return {...commentPageJson(), 'comments': comments};
+      };
+      await mount(
+        tester,
+        CompactCommentsPreview(store: store, videoId: '20', title: '測試動畫'),
+      );
+      expect(find.text(store.t('commentImageOnly')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('open-full-comments')));
+      await frames(tester);
+      await tester.enterText(find.byType(TextField), '全新留言');
+      await frames(tester);
+      await tester.tap(find.byIcon(CupertinoIcons.arrow_up_circle_fill));
+      await frames(tester);
+      await tester.tap(find.bySemanticsLabel(store.t('close')));
+      await frames(tester);
+
+      expect(find.byKey(const ValueKey('preview-comment-9')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'notification center shows subscribed updates and supports read filtering',

@@ -873,6 +873,29 @@ void main() {
       api.logoutHandler = () => pendingLogout.future;
       await tester.tap(logout);
       await frames(tester);
+      // Destructive confirmation dialog guards against accidental logout.
+      expect(find.byType(GlassAlert), findsOneWidget);
+      expect(api.logoutCalls, 0);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(GlassAlert),
+          matching: find.text(store.t('cancel')),
+        ),
+      );
+      await frames(tester);
+      expect(api.logoutCalls, 0);
+      expect(store.accountProfile?.id, 'fixture-user');
+      await tester.tap(logout);
+      await frames(tester);
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(GlassAlert),
+              matching: find.text(store.t('logout')),
+            )
+            .last,
+      );
+      await frames(tester);
       expect(api.logoutCalls, 1);
       expect(portal.visited.length, navigations);
       expect(store.loggingOut, isTrue);
@@ -912,6 +935,16 @@ void main() {
       await frames(tester);
       expect(find.text(store.t('connectAccount')), findsNothing);
       await tester.tap(find.text(store.t('logout')));
+      await frames(tester);
+      expect(find.byType(GlassAlert), findsOneWidget);
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(GlassAlert),
+              matching: find.text(store.t('logout')),
+            )
+            .last,
+      );
       await frames(tester);
       expect(find.text(store.t('logoutFailed')), findsOneWidget);
       expect(store.accountProfile, isNull);

@@ -3,11 +3,46 @@
 #import <AVFAudio/AVFAudio.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AVKit/AVKit.h>
+#import <ImageIO/ImageIO.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <math.h>
 
 static void *PictureInPicturePossible = &PictureInPicturePossible;
 static void *PictureInPicturePlayback = &PictureInPicturePlayback;
+static NSString *const RetiredLegacyHlsDownloadsKey = @"baha.retiredLegacyHlsDownloads.v1";
+static const NSUInteger PictureInPictureLayerRetries = 20;
+
+static NSURL *PlaybackArtworkURL(id value) {
+  if (![value isKindOfClass:NSString.class] || [value length] == 0 ||
+      [value length] > 4096) return nil;
+  NSURLComponents *parts = [NSURLComponents componentsWithString:value];
+  NSString *host = parts.host.lowercaseString;
+  if (![parts.scheme isEqualToString:@"https"] ||
+      (parts.port && parts.port.integerValue != 443) ||
+      parts.user || parts.password || parts.fragment ||
+      !([host isEqualToString:@"bahamut.com.tw"] || [host hasSuffix:@".bahamut.com.tw"])) {
+    return nil;
+  }
+  return parts.URL;
+}
+
+static MPMediaItemArtwork *DecodePlaybackArtwork(NSData *data) {
+  NSDictionary *options = @{
+    (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+    (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+    (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @512,
+  };
+  CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+  if (!source) return nil;
+  CGImageRef thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0,
+      (__bridge CFDictionaryRef)options);
+  CFRelease(source);
+  if (!thumbnail) return nil;
+  UIImage *image = [UIImage imageWithCGImage:thumbnail];
+  CGImageRelease(thumbnail);
+  return [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size
+       requestHandler:^UIImage *(CGSize size) { return image; }];
+}
 
 static AVPlayerLayer *PlaybackLayerForSource(UIView *view, NSURL *source) {
   if (view.hidden || view.alpha == 0) return nil;
@@ -38,7 +73,7 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
   return nil;
 }
 
-@interface AppDelegate () <NSURLSessionDelegate, AVPictureInPictureControllerDelegate>
+@interface AppDelegate () <NSURLSessionTaskDelegate, AVPictureInPictureControllerDelegate>
 @property(nonatomic, strong) FlutterMethodChannel *mediaSessionChannel;
 @property(nonatomic, strong) NSURLSession *retiredPlaybackDownloads;
 @property(nonatomic, copy) void (^retiredPlaybackCompletion)(void);
@@ -64,6 +99,12 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
 @property(nonatomic, assign) BOOL playbackDiagnosticsEnabled;
 @property(nonatomic, assign) NSUInteger playbackCommandSequence;
 @property(nonatomic, assign) NSUInteger playbackControlGeneration;
+@property(nonatomic, copy) NSDictionary *nowPlayingFields;
+@property(nonatomic, copy) NSDictionary *lastNowPlayingInfo;
+@property(nonatomic, copy) NSURL *nowPlayingArtworkURL;
+@property(nonatomic, strong) NSCache<NSURL *, MPMediaItemArtwork *> *playbackArtworkCache;
+@property(nonatomic, strong) NSURLSession *playbackArtworkSession;
+@property(nonatomic, strong) NSURLSessionDataTask *playbackArtworkTask;
 @end
 
 @implementation AppDelegate
@@ -123,7 +164,12 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
       return;
     }
     NSString *document = [arguments[@"document"] isKindOfClass:NSString.class] ? arguments[@"document"] : nil;
-    if (![owner.playbackDocument isEqualToString:document]) owner.playbackControlGeneration++;
+    if (![owner.playbackDocument isEqualToString:document]) {
+      owner.playbackControlGeneration++;
+      [owner.playbackArtworkTask cancel];
+      owner.playbackArtworkTask = nil;
+      owner.nowPlayingArtworkURL = nil;
+    }
     owner.playbackDocument = document;
     owner.nativePlayback = [arguments[@"native"] boolValue];
     [owner installPlaybackControls];
@@ -132,13 +178,15 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
     if (commands.changePlaybackPositionCommand.enabled != seekEnabled) {
       commands.changePlaybackPositionCommand.enabled = seekEnabled;
     }
-    MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = @{
+    owner.nowPlayingFields = @{
       MPMediaItemPropertyTitle: arguments[@"title"] ?: @"Baha Plus",
       MPMediaItemPropertyAlbumTitle: arguments[@"episode"] ?: @"",
       MPMediaItemPropertyPlaybackDuration: arguments[@"duration"] ?: @0,
       MPNowPlayingInfoPropertyElapsedPlaybackTime: arguments[@"position"] ?: @0,
       MPNowPlayingInfoPropertyPlaybackRate: [arguments[@"playing"] boolValue] ? arguments[@"rate"] ?: @1 : @0
     };
+    [owner updatePlaybackArtwork:PlaybackArtworkURL(arguments[@"artwork"])];
+    [owner publishNowPlayingInfo];
     result(nil);
   }];
   self.mediaSessionChannel =
@@ -153,7 +201,6 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
     // Deactivate only on exit, never on a normal pause or quality change.
     [weakSelf stopPictureInPicture];
     [weakSelf clearPlaybackControls];
-    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nil;
     NSError *error = nil;
     BOOL released = [[AVAudioSession sharedInstance]
         setActive:NO
@@ -167,6 +214,68 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
     }
     result(nil);
   }];
+}
+
+- (void)publishNowPlayingInfo {
+  NSMutableDictionary *snapshot = [self.nowPlayingFields mutableCopy];
+  NSURL *url = self.nowPlayingArtworkURL;
+  if (url) {
+    MPMediaItemArtwork *artwork = [self.playbackArtworkCache objectForKey:url];
+    if (artwork) snapshot[MPMediaItemPropertyArtwork] = artwork;
+  }
+  if (snapshot == self.lastNowPlayingInfo ||
+      [snapshot isEqualToDictionary:self.lastNowPlayingInfo]) return;
+  self.lastNowPlayingInfo = snapshot;
+  MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = snapshot;
+}
+
+- (void)updatePlaybackArtwork:(NSURL *)url {
+  if (url == self.nowPlayingArtworkURL || [url isEqual:self.nowPlayingArtworkURL]) return;
+  self.nowPlayingArtworkURL = url;
+  [self.playbackArtworkTask cancel];
+  self.playbackArtworkTask = nil;
+  if (!url || !self.playbackDocument.length) return;
+  if (!self.playbackArtworkCache) {
+    self.playbackArtworkCache = [[NSCache alloc] init];
+    self.playbackArtworkCache.countLimit = 8;
+  }
+  if ([self.playbackArtworkCache objectForKey:url]) return;
+  if (!self.playbackArtworkSession) {
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.timeoutIntervalForRequest = 5;
+    configuration.timeoutIntervalForResource = 10;
+    self.playbackArtworkSession = [NSURLSession sessionWithConfiguration:configuration
+                                                               delegate:self delegateQueue:nil];
+  }
+  NSString *document = self.playbackDocument;
+  NSUInteger generation = self.playbackControlGeneration;
+  __weak AppDelegate *weakSelf = self;
+  self.playbackArtworkTask = [self.playbackArtworkSession dataTaskWithURL:url
+      completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    const NSUInteger limit = 4 * 1024 * 1024;
+    if (error || ![response isKindOfClass:NSHTTPURLResponse.class] ||
+        ((NSHTTPURLResponse *)response).statusCode != 200 ||
+        data.length == 0 || data.length > limit) return;
+    MPMediaItemArtwork *artwork = DecodePlaybackArtwork(data);
+    if (!artwork) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AppDelegate *owner = weakSelf;
+      if (owner.playbackControlGeneration != generation ||
+          ![owner.playbackDocument isEqualToString:document] ||
+          ![owner.nowPlayingArtworkURL isEqual:url]) return;
+      [owner.playbackArtworkCache setObject:artwork forKey:url];
+      owner.playbackArtworkTask = nil;
+      [owner publishNowPlayingInfo];
+    });
+  }];
+  [self.playbackArtworkTask resume];
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+    newRequest:(NSURLRequest *)request
+    completionHandler:(void (^)(NSURLRequest *))completionHandler {
+  completionHandler(nil);
 }
 
 - (void)handlePictureInPictureCall:(FlutterMethodCall *)call result:(FlutterResult)result {
@@ -196,12 +305,22 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
   self.pictureInPictureRequest = request;
   self.pictureInPictureDocument = document;
   result(@YES);
-  [self preparePictureInPictureForSource:source request:request retriesRemaining:20];
+  [self preparePictureInPictureForSource:source request:request
+                        retriesRemaining:PictureInPictureLayerRetries];
 }
 
 - (void)preparePictureInPictureForSource:(NSURL *)source request:(NSString *)request
                        retriesRemaining:(NSUInteger)retriesRemaining {
   if (![request isEqualToString:self.pictureInPictureRequest]) return;
+  if (retriesRemaining == PictureInPictureLayerRetries) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+        dispatch_get_main_queue(), ^{
+          if ([request isEqualToString:self.pictureInPictureRequest] &&
+              !self.pictureInPictureController.isPictureInPictureActive) {
+            [self stopPictureInPictureWithReason:@"pip-timeout"];
+          }
+        });
+  }
   AVPlayerLayer *layer = ForegroundPlaybackLayerForSource(source);
   if (!layer) {
     if (retriesRemaining == 0) {
@@ -294,9 +413,14 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
 }
 
 - (void)stopPictureInPicture {
+  [self stopPictureInPictureWithReason:@"cancelled"];
+}
+
+- (void)stopPictureInPictureWithReason:(NSString *)reason {
   AVPictureInPictureController *controller = self.pictureInPictureController;
-  if (self.pictureInPictureStarting) [controller stopPictureInPicture];
-  [self finishPictureInPictureWithReason:@"cancelled" error:nil];
+  BOOL starting = self.pictureInPictureStarting;
+  [self finishPictureInPictureWithReason:reason error:nil];
+  if (starting) [controller stopPictureInPicture];
   self.pictureInPictureController = nil;
 }
 
@@ -582,7 +706,11 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
   self.remoteToggleTarget = nil;
   self.remoteSeekTarget = nil;
   commands.changePlaybackPositionCommand.enabled = NO;
-  if (self.playbackDocument) MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = nil;
+  [self.playbackArtworkTask cancel];
+  self.playbackArtworkTask = nil;
+  self.nowPlayingArtworkURL = nil;
+  self.nowPlayingFields = nil;
+  [self publishNowPlayingInfo];
   self.playbackControlGeneration++;
   self.playbackDocument = nil;
   self.nativePlayback = NO;
@@ -591,6 +719,8 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
 // Cancel downloads left by releases that used the retired WebView cache.
 - (void)retirePlaybackDownloads {
   if (self.retiredPlaybackDownloads) return;
+  if (!self.retiredPlaybackCompletion &&
+      [NSUserDefaults.standardUserDefaults boolForKey:RetiredLegacyHlsDownloadsKey]) return;
   NSURLSessionConfiguration *configuration =
       [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:
           @"app.bahaplus.mobile.hls-cache"];
@@ -604,6 +734,9 @@ static AVPlayerLayer *ForegroundPlaybackLayerForSource(NSURL *source) {
   dispatch_async(dispatch_get_main_queue(), ^{
     if (session != self.retiredPlaybackDownloads) return;
     self.retiredPlaybackDownloads = nil;
+    if (!error) {
+      [NSUserDefaults.standardUserDefaults setBool:YES forKey:RetiredLegacyHlsDownloadsKey];
+    }
     void (^completion)(void) = self.retiredPlaybackCompletion;
     self.retiredPlaybackCompletion = nil;
     if (completion) completion();

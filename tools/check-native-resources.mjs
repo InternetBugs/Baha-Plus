@@ -28,9 +28,5 @@ for (const filename of fs.readdirSync('app/assets/adapters').filter(name => name
     .replaceAll('__BAHA_WATCH_ACCOUNT__', 'false');
   assert.doesNotThrow(() => new vm.Script(script, { filename }));
 }
-assert.ok(fs.existsSync('app/assets/fonts/NotoSansTC.ttf'));
-assert.ok(fs.existsSync('app/assets/fonts/NotoSansSC.ttf'));
-assert.ok(fs.existsSync('app/assets/fonts/OFL.txt'));
-assert.ok(fs.existsSync('app/assets/fonts/OFL-SC.txt'));
 assert.ok(!fs.readdirSync('app/assets/data').some(name => /account|history|favorites|snapshot/.test(name)));
 console.log(`Validated ${Object.keys(traditional).length} bilingual messages, Flutter assets and official page adapters.`);

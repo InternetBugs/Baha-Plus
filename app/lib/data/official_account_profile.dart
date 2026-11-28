@@ -1,11 +1,23 @@
+import 'dart:isolate';
+
 import 'package:html/dom.dart';
+import 'package:html/parser.dart' show parse;
 
 import '../core/community.dart';
 import '../core/models.dart';
 
+final _ownerId = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
+final _publicId = RegExp(r'^ID[：:]\s*([A-Za-z0-9_-]{1,64})$');
+
+Future<Document> parseOfficialHtml(String html) async =>
+    html.length < 32768 ? parse(html) : Isolate.run(() => parse(html));
+
+Json? officialAccountProfile(Document page) =>
+    parseOfficialAccountProfile(page)?.toJson();
+
 /// Reads server-rendered identity without running the site's user-menu script.
 /// An absent menu alone is not evidence that the session is a guest.
-Json? officialAccountProfile(Document page) {
+AccountProfile? parseOfficialAccountProfile(Document page) {
   final user = page.querySelector('a.user-info');
   final menuId = user?.querySelector('.user-id')?.text.trim();
   final guest =
@@ -61,25 +73,27 @@ Json? officialAccountProfile(Document page) {
         avatar.port == 443)
       'avatar': avatar.toString(),
   };
-  AccountProfile.fromJson(profile);
-  return profile;
+  return AccountProfile.fromJson(profile);
 }
 
 bool _validOwner(String id) =>
-    RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(id) &&
-    id.toLowerCase() != 'guest';
+    _ownerId.hasMatch(id) && id.toLowerCase() != 'guest';
 
 /// The public profile contains current display data even when the Anime menu
 /// is rendered by JavaScript or the login's nickname cookie is out of date.
-Json officialPublicAccountProfile(Document page, {required String owner}) {
+Json officialPublicAccountProfile(Document page, {required String owner}) =>
+    parseOfficialPublicAccountProfile(page, owner: owner).toJson();
+
+AccountProfile parseOfficialPublicAccountProfile(
+  Document page, {
+  required String owner,
+}) {
   final header = page.querySelector('.main-container_header_info');
   final identity = header
       ?.querySelector('.header_info-small small')
       ?.text
       .trim();
-  final id = RegExp(
-    r'^ID[：:]\s*([A-Za-z0-9_-]{1,64})$',
-  ).firstMatch(identity ?? '')?[1];
+  final id = _publicId.firstMatch(identity ?? '')?[1];
   if (id == null || !_validOwner(id)) {
     throw const CommunityException('format');
   }
@@ -97,6 +111,5 @@ Json officialPublicAccountProfile(Document page, {required String owner}) {
     'displayName': name,
     'avatar': Uri.https('home.gamer.com.tw', '/').resolve(raw).toString(),
   };
-  AccountProfile.fromJson(profile);
-  return profile;
+  return AccountProfile.fromJson(profile);
 }

@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -42,19 +42,25 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   final _position = ValueNotifier<double>(0);
   final _text = <String, TextPainter>{};
   final _retained = <String>{};
+  final _activeIds = <String>{};
+  final _candidates = <NativeDanmaku>[];
+  final _skippedRolling = <String, double>{};
   final _sprites = _DanmakuRasterCache();
   final _lanes = StableDanmakuLanes();
   double _pixelRatio = 1;
   late final DanmakuAnimationClock _animationClock;
   late final Stopwatch _elapsed;
-  Timer? _frameTimer, _boundaryTimer;
+  Timer? _boundaryTimer;
   Duration? _lastPresentedAt;
+  Duration? _scheduledBoundaryAt;
+  double? _scheduledBoundaryWakePos;
+  double? _scheduledBoundaryRate;
   int? _seekRevision;
   List<NativeDanmaku> _enabledItems = const [];
   bool _hadVisibleItems = false;
-  // Request a single engine frame per interval instead of keeping a ticker
-  // scheduling frames at the display's (potentially 120 Hz) refresh rate.
-  static const _frameInterval = Duration(microseconds: 16667);
+  // Pace vsync-aligned ticker updates to at most 60 Hz (skipping alternate
+  // 120 Hz frames while avoiding 60 Hz Timer/vsync beat judder).
+  static const _minFrameGap = Duration(microseconds: 15000);
   static const _diagnostics = bool.fromEnvironment('BAHA_DIAGNOSTICS');
   int? _firstTimedFrame, _lastTimedFrame;
   int _timedFrames = 0, _slowBuilds = 0, _slowRasters = 0;
@@ -69,7 +75,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   @visibleForTesting
   double get presentedDanmakuPosition => _position.value;
   @visibleForTesting
-  bool get danmakuAnimationActive => _frameTimer != null;
+  bool get danmakuAnimationActive => _ticker.isActive;
 
   @override
   void initState() {
@@ -81,10 +87,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     if (_diagnostics) {
       SchedulerBinding.instance.addTimingsCallback(_recordTimings);
     }
-    _ticker = createTicker((_) {
-      _ticker.stop();
-      _presentPosition();
-    });
+    _ticker = createTicker((_) => _presentPosition());
     _updateEnabledItems();
     widget.playback.addListener(_changed);
     _changed();
@@ -103,22 +106,33 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   @override
   void didUpdateWidget(covariant NativeVideoSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final visualChange =
-        oldWidget.settings != widget.settings ||
+    final playbackChanged = oldWidget.playback != widget.playback;
+    final filterChanged =
         oldWidget.danmaku != widget.danmaku ||
-        oldWidget.playback != widget.playback;
-    if (oldWidget.playback != widget.playback) {
+        oldWidget.settings.enabled != widget.settings.enabled ||
+        oldWidget.settings.rolling != widget.settings.rolling ||
+        oldWidget.settings.top != widget.settings.top ||
+        oldWidget.settings.bottom != widget.settings.bottom;
+    final layoutChanged =
+        playbackChanged ||
+        !widget.settings.enabled ||
+        oldWidget.settings.scale != widget.settings.scale;
+    final visualChange =
+        playbackChanged ||
+        filterChanged ||
+        oldWidget.settings != widget.settings;
+    if (playbackChanged) {
       oldWidget.playback.removeListener(_changed);
       widget.playback.addListener(_changed);
       _seekRevision = null;
     }
-    if (oldWidget.playback != widget.playback ||
-        !widget.settings.enabled ||
-        oldWidget.settings.opacity != widget.settings.opacity ||
-        oldWidget.settings.scale != widget.settings.scale) {
+    if (layoutChanged) {
       _clearText();
     }
-    if (visualChange) _updateEnabledItems();
+    if (filterChanged) {
+      _updateEnabledItems();
+      _cancelBoundaryTimer();
+    }
     _syncPlayback(forceRedraw: visualChange);
   }
 
@@ -130,7 +144,11 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     final seekRevision = widget.playback.seekRevision;
     final discontinuity = _seekRevision != seekRevision;
     _seekRevision = seekRevision;
-    if (discontinuity) _lanes.clear();
+    if (discontinuity) {
+      _lanes.clear();
+      _skippedRolling.clear();
+      _cancelBoundaryTimer();
+    }
     final running = !state.paused && !state.buffering;
     _animationClock.update(
       position: state.position,
@@ -170,10 +188,9 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   void _presentPosition({bool force = false}) {
     final now = _elapsed.elapsed;
     final last = _lastPresentedAt;
-    // Allow one microsecond for integer timestamp rounding at 60/120 Hz.
     if (!force &&
         last != null &&
-        (now - last).inMicroseconds < _frameInterval.inMicroseconds - 1) {
+        (now - last).inMicroseconds < _minFrameGap.inMicroseconds) {
       return;
     }
     _lastPresentedAt = now;
@@ -183,19 +200,21 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     );
     if (_position.value != position) {
       _position.value = position;
-      if (_diagnostics && _frameTimer != null) _animatedUpdates++;
+      if (_diagnostics && _ticker.isActive) _animatedUpdates++;
     }
   }
 
-  void _requestFrame() {
-    if (mounted && !_ticker.isActive) _ticker.start();
+  void _stopAnimation() {
+    if (_ticker.isActive) _ticker.stop();
+    _lastPresentedAt = null;
   }
 
-  void _stopAnimation() {
-    _frameTimer?.cancel();
-    _frameTimer = null;
-    _ticker.stop();
-    _lastPresentedAt = null;
+  void _cancelBoundaryTimer() {
+    _boundaryTimer?.cancel();
+    _boundaryTimer = null;
+    _scheduledBoundaryAt = null;
+    _scheduledBoundaryWakePos = null;
+    _scheduledBoundaryRate = null;
   }
 
   void _scheduleDrawing({
@@ -203,8 +222,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     bool atBoundary = false,
     PlaybackState? currentState,
   }) {
-    _boundaryTimer?.cancel();
-    _boundaryTimer = null;
+    if (atBoundary) _cancelBoundaryTimer();
     final state = currentState ?? widget.playback.state;
     final position = math.min(state.duration, _animationClock.position);
     // Items are sorted by media time, as required by the painter below.
@@ -240,38 +258,54 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     if (rolling) nextBoundary = rollingEnd;
     if (forceRedraw ||
         visible != _hadVisibleItems ||
-        (atBoundary && (!rolling || _frameTimer == null))) {
+        (atBoundary && (!rolling || !_ticker.isActive))) {
       _presentPosition(force: true);
     }
     _hadVisibleItems = visible;
     final running =
         !state.paused && !state.buffering && position < state.duration;
     if (running && rolling) {
-      if (_frameTimer == null) {
-        _frameTimer = Timer.periodic(_frameInterval, (_) => _requestFrame());
-        _requestFrame();
-      }
+      if (!_ticker.isActive) _ticker.start();
     } else {
       _stopAnimation();
     }
     if (running && nextBoundary != null) {
       // Static messages only need frames when they appear or disappear.
-      // Empty intervals sleep until the next enabled message. Native samples
-      // can reschedule this wake when the media clock or playback rate changes.
+      // Empty intervals sleep until the next enabled message. Reuse an active
+      // timer when the wake target and rate match to avoid 10 Hz timer churn.
       final wakePosition = math.min(nextBoundary, state.duration);
-      final delayUs = ((wakePosition - position) / state.rate * 1e6).ceil();
-      _boundaryTimer = Timer(
-        Duration(microseconds: math.max(1000, delayUs)),
-        () {
-          if (mounted) _scheduleDrawing(atBoundary: true);
-        },
+      final delayUs = math.max(
+        1000,
+        ((wakePosition - position) / state.rate * 1e6).ceil(),
       );
+      final desiredAt = _elapsed.elapsed + Duration(microseconds: delayUs);
+      final canReuse =
+          _boundaryTimer != null &&
+          _boundaryTimer!.isActive &&
+          _scheduledBoundaryRate == state.rate &&
+          _scheduledBoundaryWakePos == wakePosition &&
+          _scheduledBoundaryAt != null &&
+          (desiredAt - _scheduledBoundaryAt!).inMilliseconds.abs() < 25;
+      if (!canReuse) {
+        _cancelBoundaryTimer();
+        _scheduledBoundaryWakePos = wakePosition;
+        _scheduledBoundaryRate = state.rate;
+        _scheduledBoundaryAt = desiredAt;
+        _boundaryTimer = Timer(Duration(microseconds: delayUs), () {
+          if (mounted) _scheduleDrawing(atBoundary: true);
+        });
+      }
+    } else {
+      _cancelBoundaryTimer();
     }
   }
 
   void _clearText() {
     _lanes.clear();
     _retained.clear();
+    _activeIds.clear();
+    _candidates.clear();
+    _skippedRolling.clear();
     _sprites.clear();
     for (final painter in _text.values) {
       painter.dispose();
@@ -280,7 +314,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
   }
 
   void _recordTimings(List<ui.FrameTiming> timings) {
-    if (!mounted || _frameTimer == null || widget.playback.isPaused) {
+    if (!mounted || !_ticker.isActive || widget.playback.isPaused) {
       _resetTimings();
       return;
     }
@@ -338,6 +372,9 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
                 lanes: _lanes,
                 sprites: _sprites,
                 retained: _retained,
+                activeIds: _activeIds,
+                candidates: _candidates,
+                skippedRolling: _skippedRolling,
                 pixelRatio: _pixelRatio,
               ),
             ),
@@ -380,8 +417,7 @@ class NativeVideoSurfaceState extends State<NativeVideoSurface>
     if (_diagnostics) {
       SchedulerBinding.instance.removeTimingsCallback(_recordTimings);
     }
-    _frameTimer?.cancel();
-    _boundaryTimer?.cancel();
+    _cancelBoundaryTimer();
     _ticker.dispose();
     _elapsed.stop();
     _position.dispose();
@@ -474,6 +510,9 @@ class _DanmakuPainter extends CustomPainter {
     required this.lanes,
     required this.sprites,
     required this.retained,
+    required this.activeIds,
+    required this.candidates,
+    required this.skippedRolling,
     required this.pixelRatio,
   }) : super(repaint: position);
   final ValueNotifier<double> position;
@@ -483,12 +522,54 @@ class _DanmakuPainter extends CustomPainter {
   final StableDanmakuLanes lanes;
   final _DanmakuRasterCache sprites;
   final Set<String> retained;
+  final Set<String> activeIds;
+  final List<NativeDanmaku> candidates;
+  final Map<String, double> skippedRolling;
   final double pixelRatio;
   static final _spritePaint = Paint()..filterQuality = FilterQuality.low;
+  static final _fallbackOpacityPaint = Paint();
+
+  static TextPainter _createTextPainter(NativeDanmaku item, double scale) =>
+      TextPainter(
+        text: TextSpan(
+          text: item.text,
+          style: TextStyle(
+            color: item.color,
+            fontSize: item.size * scale,
+            fontWeight: FontWeight.w600,
+            shadows: const [Shadow(color: Colors.black, blurRadius: 2)],
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+
+  void _pruneExcept(Set<String> keep) {
+    if (text.length <= keep.length) return;
+    if (keep.isEmpty) {
+      for (final painter in text.values) {
+        painter.dispose();
+      }
+      text.clear();
+      sprites.clear();
+      return;
+    }
+    final expired = <String>[
+      for (final id in text.keys)
+        if (!keep.contains(id)) id,
+    ];
+    for (var i = 0; i < expired.length; i++) {
+      final id = expired[i];
+      text.remove(id)!.dispose();
+      sprites.remove(id);
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     retained.clear();
+    activeIds.clear();
+    candidates.clear();
     if (settings.enabled && items.isNotEmpty && size.width > 0 && size.height > 0) {
       final now = position.value;
       var low = 0, high = items.length;
@@ -500,48 +581,79 @@ class _DanmakuPainter extends CustomPainter {
           high = middle;
         }
       }
-      final lineHeight = 26 * settings.scale;
-      final laneCount = math.max(1, (size.height * .65 / lineHeight).floor());
-      lanes.prepare(position: now, laneCount: laneCount);
       var considered = 0;
-      canvas.save();
-      canvas.clipRect(Offset.zero & size);
       for (
         var index = low;
-        index < items.length &&
-            items[index].time <= now &&
-            retained.length < NativeVideoSurfaceState.maximumTextPainters &&
-            considered < 256;
+        index < items.length && items[index].time <= now && considered < 256;
         index++
       ) {
         considered++;
         final item = items[index];
+        if (now >= item.time + item.duration) continue;
+        candidates.add(item);
+        activeIds.add(item.id);
+      }
+      // Evict expired painters and raster sprites before allocating new ones so
+      // leaving messages never starve incoming messages of cache budget.
+      _pruneExcept(activeIds);
+      if (skippedRolling.isNotEmpty) {
+        skippedRolling.removeWhere((_, end) => end <= now);
+      }
+      final lineHeight = 26 * settings.scale;
+      final laneCount = math.max(1, (size.height * .65 / lineHeight).floor());
+      final previousDecisions = lanes.decisionCount;
+      lanes.prepare(position: now, laneCount: laneCount);
+      if (lanes.decisionCount == 0 && previousDecisions > 0) {
+        skippedRolling.clear();
+      }
+      final opacity = settings.opacity.clamp(0.0, 1.0);
+      _spritePaint.color = Color.fromRGBO(255, 255, 255, opacity);
+      canvas.save();
+      canvas.clipRect(Offset.zero & size);
+      for (
+        var index = 0;
+        index < candidates.length &&
+            retained.length < NativeVideoSurfaceState.maximumTextPainters;
+        index++
+      ) {
+        final item = candidates[index];
         final duration = item.duration;
         final end = item.time + duration;
-        if (now >= end) continue;
-        final lane = lanes.assign(
-          id: item.id,
-          mode: item.mode,
-          start: item.time,
-          end: end,
-        );
-        if (lane == null) continue;
-        final painter = text.putIfAbsent(
-          item.id,
-          () => TextPainter(
-            text: TextSpan(
-              text: item.text,
-              style: TextStyle(
-                color: item.color.withValues(alpha: settings.opacity),
-                fontSize: item.size * settings.scale,
-                fontWeight: FontWeight.w600,
-                shadows: const [Shadow(color: Colors.black, blurRadius: 2)],
-              ),
-            ),
-            textDirection: TextDirection.ltr,
-            maxLines: 1,
-          )..layout(),
-        );
+        final TextPainter painter;
+        final int? lane;
+        if (item.isRolling) {
+          if (skippedRolling.containsKey(item.id)) continue;
+          final cached = text[item.id];
+          final laidOut =
+              cached ?? _createTextPainter(item, settings.scale);
+          lane = lanes.assign(
+            id: item.id,
+            mode: item.mode,
+            start: item.time,
+            end: end,
+            width: laidOut.width,
+            viewportWidth: size.width,
+          );
+          if (lane == null) {
+            if (cached == null) laidOut.dispose();
+            skippedRolling[item.id] = end;
+            continue;
+          }
+          if (cached == null) text[item.id] = laidOut;
+          painter = laidOut;
+        } else {
+          lane = lanes.assign(
+            id: item.id,
+            mode: item.mode,
+            start: item.time,
+            end: end,
+          );
+          if (lane == null) continue;
+          painter = text.putIfAbsent(
+            item.id,
+            () => _createTextPainter(item, settings.scale),
+          );
+        }
         retained.add(item.id);
         final progress = (now - item.time) / duration;
         final x = item.isRolling
@@ -552,7 +664,22 @@ class _DanmakuPainter extends CustomPainter {
             : lane * lineHeight + 5;
         final sprite = sprites.obtain(item.id, painter, pixelRatio);
         if (sprite == null) {
-          painter.paint(canvas, Offset(x, y));
+          if (opacity < 0.999) {
+            _fallbackOpacityPaint.color = Color.fromRGBO(
+              255,
+              255,
+              255,
+              opacity,
+            );
+            canvas.saveLayer(
+              Rect.fromLTWH(x - 4, y - 4, painter.width + 8, painter.height + 8),
+              _fallbackOpacityPaint,
+            );
+            painter.paint(canvas, Offset(x, y));
+            canvas.restore();
+          } else {
+            painter.paint(canvas, Offset(x, y));
+          }
         } else {
           canvas.drawImageRect(
             sprite.image,
@@ -570,26 +697,9 @@ class _DanmakuPainter extends CustomPainter {
       canvas.restore();
     } else {
       lanes.clear();
+      skippedRolling.clear();
     }
-    if (text.length > retained.length) {
-      if (retained.isEmpty) {
-        for (final painter in text.values) {
-          painter.dispose();
-        }
-        text.clear();
-        sprites.clear();
-      } else {
-        final expired = <String>[
-          for (final id in text.keys)
-            if (!retained.contains(id)) id,
-        ];
-        for (var i = 0; i < expired.length; i++) {
-          final id = expired[i];
-          text.remove(id)!.dispose();
-          sprites.remove(id);
-        }
-      }
-    }
+    _pruneExcept(retained);
   }
 
   @override

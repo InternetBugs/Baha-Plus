@@ -3,12 +3,34 @@ import 'dart:math' as math;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'glass_alert.dart';
 
 const brandBlue = Color(0xff007aff);
+
+/// Platform-native CJK font fallback chain ordered by script so Simplified and
+/// Traditional Chinese render with proper regional glyphs without bundling
+/// multi-megabyte font files.
+List<String> bahaFontFallback({required bool simplified}) => simplified
+    ? const [
+        'PingFang SC',
+        'Noto Sans CJK SC',
+        'Source Han Sans SC',
+        'Microsoft YaHei',
+      ]
+    : const [
+        'PingFang TC',
+        'Noto Sans CJK TC',
+        'Source Han Sans TC',
+        'Microsoft JhengHei',
+      ];
+
+List<String> bahaFontFallbackOf(BuildContext context) => bahaFontFallback(
+  simplified: Localizations.maybeLocaleOf(context)?.scriptCode == 'Hans',
+);
 const mediaGlass = LiquidGlassSettings(
   bodyMode: GlassBodyMode.clear,
   glassColor: Color(0x35ffffff),
@@ -36,6 +58,7 @@ ShapeDecoration bahaCardDecoration(
   double borderRadius = BahaRadius.card,
   double tintAlpha = .055,
   bool elevated = true,
+  bool community = false,
   Color? color,
 }) {
   final theme = Theme.of(context);
@@ -58,21 +81,26 @@ ShapeDecoration bahaCardDecoration(
     shadows: elevated
         ? [
             BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? .28 : .06),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
+              color: Colors.black.withValues(
+                alpha: community ? (dark ? .32 : .10) : (dark ? .28 : .06),
+              ),
+              blurRadius: community ? 20 : 16,
+              offset: Offset(0, community ? 8 : 6),
             ),
             BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? .16 : .03),
-              blurRadius: 3,
-              offset: const Offset(0, 1),
+              color: Colors.black.withValues(
+                alpha: community ? (dark ? .20 : .06) : (dark ? .16 : .03),
+              ),
+              blurRadius: community ? 4 : 3,
+              offset: Offset(0, community ? 2 : 1),
             ),
           ]
         : null,
   );
 }
 
-/// Tactile press-scale and pointer-hover feedback for interactive cards & rows.
+/// Tactile press-scale, keyboard focus, and pointer-hover feedback for
+/// interactive cards & rows.
 class PressableSurface extends StatefulWidget {
   const PressableSurface({
     required this.onTap,
@@ -101,21 +129,42 @@ class _PressableSurfaceState extends State<PressableSurface> {
   Widget build(BuildContext context) {
     final enabled = widget.onTap != null;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: enabled ? (_) => _setPressed(true) : null,
-        onTapUp: enabled ? (_) => _setPressed(false) : null,
-        onTapCancel: enabled ? () => _setPressed(false) : null,
-        onTap: widget.onTap,
-        child: AnimatedScale(
-          scale: !reduceMotion && _pressed ? widget.pressedScale : 1.0,
-          duration: reduceMotion
-              ? Duration.zero
-              : const Duration(milliseconds: 110),
-          curve: Curves.easeOutCubic,
-          child: widget.child,
+    return Focus(
+      canRequestFocus: enabled,
+      child: Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        child: Actions(
+          actions: {
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                widget.onTap?.call();
+                return null;
+              },
+            ),
+          },
+          child: MouseRegion(
+            cursor: enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: enabled ? (_) => _setPressed(true) : null,
+              onTapUp: enabled ? (_) => _setPressed(false) : null,
+              onTapCancel: enabled ? () => _setPressed(false) : null,
+              onTap: widget.onTap,
+              child: AnimatedScale(
+                scale: !reduceMotion && _pressed ? widget.pressedScale : 1.0,
+                duration: reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 110),
+                curve: Curves.easeOutCubic,
+                child: widget.child,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -189,16 +238,15 @@ class BahaSegmentedControl extends StatelessWidget {
     final indicatorColor = insideGlassContainer
         ? (dark ? const Color(0x3affffff) : Colors.white)
         : (dark ? const Color(0x30ffffff) : Colors.white);
+    final fallback = bahaFontFallbackOf(context);
     final selectedStyle = TextStyle(
-      fontFamily: 'BahaSans',
-      fontFamilyFallback: const ['BahaSansSC'],
+      fontFamilyFallback: fallback,
       fontSize: fontSize,
       fontWeight: FontWeight.w600,
       color: dark ? Colors.white : brandBlue,
     );
     final unselectedStyle = TextStyle(
-      fontFamily: 'BahaSans',
-      fontFamilyFallback: const ['BahaSansSC'],
+      fontFamilyFallback: fallback,
       fontSize: fontSize,
       fontWeight: FontWeight.w500,
       color: secondary(context),
@@ -291,15 +339,22 @@ class _GlassNoticeToastState extends State<GlassNoticeToast> {
       _message = text;
       _visible = true;
     });
-    _hideTimer = Timer(const Duration(milliseconds: 2600), () {
-      if (mounted) setState(() => _visible = false);
+    _hideTimer = Timer(const Duration(milliseconds: 2600), _hide);
+  }
+
+  void _hide() {
+    if (!mounted) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    setState(() {
+      _visible = false;
+      if (reduceMotion) _message = null;
     });
   }
 
   void _dismiss() {
     _hideTimer?.cancel();
     _hideTimer = null;
-    if (_visible && mounted) setState(() => _visible = false);
+    if (_visible && mounted) _hide();
   }
 
   @override
@@ -313,7 +368,9 @@ class _GlassNoticeToastState extends State<GlassNoticeToast> {
     final store = widget.store;
     return text == store.t('added') ||
         text == store.t('removed') ||
-        text == store.t('historyCleared');
+        text == store.t('historyCleared') ||
+        text == store.t('commentSent') ||
+        text == store.t('replySent');
   }
 
   @override
@@ -343,6 +400,11 @@ class _GlassNoticeToastState extends State<GlassNoticeToast> {
               duration: reduceMotion
                   ? Duration.zero
                   : const Duration(milliseconds: 180),
+              onEnd: () {
+                if (!_visible && _message != null && mounted) {
+                  setState(() => _message = null);
+                }
+              },
               child: Semantics(
                 liveRegion: true,
                 label: text,
@@ -462,32 +524,54 @@ class _PipIconPainter extends CustomPainter {
 }
 
 class Artwork extends StatelessWidget {
-  const Artwork(this.url, {this.width, this.height, super.key});
+  const Artwork(
+    this.url, {
+    this.width,
+    this.height,
+    this.minDecodeHeight,
+    super.key,
+  });
   final String? url;
-  final double? width, height;
+  final double? width, height, minDecodeHeight;
   @override
   Widget build(BuildContext context) {
     if (url == null) {
       return SizedBox(width: width, height: height, child: _placeholder(context));
     }
-    Widget image(double? displayWidth) => CachedNetworkImage(
-      imageUrl: url!,
-      width: width,
-      height: height,
-      memCacheWidth: displayWidth == null
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    Widget image(double? displayWidth, double? displayHeight) {
+      final effectiveHeight = minDecodeHeight ?? displayHeight;
+      final bool tallCover =
+          displayWidth != null &&
+          effectiveHeight != null &&
+          effectiveHeight > displayWidth * 0.65;
+      // Avoid upscaling blur when a 16:9 cover fills a tall portrait hero box.
+      final targetWidth = displayWidth == null
           ? null
-          : (displayWidth * MediaQuery.devicePixelRatioOf(context))
-                .ceil()
-                .clamp(1, 2048),
-      fit: BoxFit.cover,
-      fadeInDuration: const Duration(milliseconds: 180),
-      placeholder: (context, url) => _placeholder(context),
-      errorWidget: (context, url, error) => _placeholder(context),
-    );
-    if (width != null) return image(width);
+          : tallCover
+          ? math.max(displayWidth, effectiveHeight * (16 / 9))
+          : displayWidth;
+      return CachedNetworkImage(
+        imageUrl: url!,
+        width: width,
+        height: height,
+        memCacheWidth: targetWidth == null
+            ? null
+            : (targetWidth * dpr).ceil().clamp(1, 2048),
+        fit: BoxFit.cover,
+        fadeInDuration: const Duration(milliseconds: 180),
+        fadeOutDuration: Duration.zero,
+        placeholder: (context, url) => _placeholder(context),
+        errorWidget: (context, url, error) => _placeholder(context),
+      );
+    }
+
+    if (width != null) return image(width, height);
     return LayoutBuilder(
-      builder: (context, constraints) =>
-          image(constraints.hasBoundedWidth ? constraints.maxWidth : null),
+      builder: (context, constraints) => image(
+        constraints.hasBoundedWidth ? constraints.maxWidth : null,
+        constraints.hasBoundedHeight ? constraints.maxHeight : height,
+      ),
     );
   }
 
@@ -548,9 +632,16 @@ class AccountPortrait extends StatelessWidget {
     );
     final avatar = profile?.avatar;
     if (avatar == null) return fallback;
+    final cacheSize = (size * MediaQuery.devicePixelRatioOf(context))
+        .ceil()
+        .clamp(32, 256);
     return ClipOval(
       child: Image(
-        image: CachedNetworkImageProvider(avatar),
+        image: CachedNetworkImageProvider(
+          avatar,
+          maxWidth: cacheSize,
+          maxHeight: cacheSize,
+        ),
         key: ValueKey((profile!.id, cacheVersion)),
         width: size,
         height: size,
@@ -566,9 +657,10 @@ class AccountPortrait extends StatelessWidget {
 }
 
 class SectionHeading extends StatelessWidget {
-  const SectionHeading(this.title, {this.onTap, super.key});
+  const SectionHeading(this.title, {this.onTap, this.actionLabel, super.key});
   final String title;
   final VoidCallback? onTap;
+  final String? actionLabel;
   @override
   Widget build(BuildContext context) => Row(
     children: [
@@ -579,11 +671,17 @@ class SectionHeading extends StatelessWidget {
         ),
       ),
       if (onTap != null)
-        CupertinoButton(
-          padding: const EdgeInsets.only(left: 12),
-          minimumSize: const Size(44, 44),
-          onPressed: onTap,
-          child: const Icon(CupertinoIcons.chevron_right, size: 17),
+        Semantics(
+          button: true,
+          label: actionLabel ?? title,
+          excludeSemantics: true,
+          onTap: onTap,
+          child: CupertinoButton(
+            padding: const EdgeInsets.only(left: 12),
+            minimumSize: const Size(44, 44),
+            onPressed: onTap,
+            child: const Icon(CupertinoIcons.chevron_right, size: 17),
+          ),
         ),
     ],
   );
@@ -606,55 +704,64 @@ class AnimeTile extends StatelessWidget {
   final int titleLines;
   final bool showUpdateTime;
   @override
-  Widget build(BuildContext context) => PressableSurface(
-    onTap: onTap,
-    child: Semantics(
-      button: true,
-      label: anime.title,
-      excludeSemantics: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          AspectRatio(
-            aspectRatio: poster ? .72 : 16 / 9,
-            child: ClipRSuperellipse(
-              borderRadius: BorderRadius.circular(BahaRadius.tile),
-              child: Artwork(poster ? anime.poster : anime.cover),
-            ),
-          ),
-          const SizedBox(height: 9),
-          Text(
-            anime.title,
-            maxLines: titleLines,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  [
-                    if (showUpdateTime) anime.updateTime,
-                    anime.episodeLabel ?? anime.year,
-                  ].whereType<String>().where((e) => e.isNotEmpty).join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11, color: secondary(context)),
-                ),
+  Widget build(BuildContext context) {
+    final subtitle = [
+      if (showUpdateTime) anime.updateTime,
+      anime.episodeLabel ?? anime.year,
+    ].whereType<String>().where((e) => e.isNotEmpty).join(' · ');
+    final favorite = store.isFavorite(anime);
+    final semanticLabel = [
+      anime.title,
+      if (subtitle.isNotEmpty) subtitle,
+      if (favorite) store.t('saved'),
+    ].join(', ');
+    return PressableSurface(
+      onTap: onTap,
+      child: Semantics(
+        button: true,
+        label: semanticLabel,
+        excludeSemantics: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: poster ? .72 : 16 / 9,
+              child: ClipRSuperellipse(
+                borderRadius: BorderRadius.circular(BahaRadius.tile),
+                child: Artwork(poster ? anime.artwork : anime.cover),
               ),
-              if (store.isFavorite(anime))
-                const Icon(
-                  CupertinoIcons.bookmark_fill,
-                  color: brandBlue,
-                  size: 12,
+            ),
+            const SizedBox(height: 9),
+            Text(
+              anime.title,
+              maxLines: titleLines,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: secondary(context)),
+                  ),
                 ),
-            ],
-          ),
-        ],
+                if (favorite)
+                  const Icon(
+                    CupertinoIcons.bookmark_fill,
+                    color: brandBlue,
+                    size: 12,
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class AnimeRow extends StatelessWidget {
@@ -864,47 +971,82 @@ class _EpisodeChipButtonState extends State<EpisodeChipButton> {
       enabled: enabled,
       label: widget.label,
       onTap: enabled ? widget.onTap : null,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        excludeFromSemantics: true,
-        onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
-        onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
-        onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
-        onTap: enabled ? widget.onTap : null,
-        child: AnimatedScale(
-          scale: !reduceMotion && _pressed ? 0.96 : 1.0,
-          duration: reduceMotion
-              ? Duration.zero
-              : const Duration(milliseconds: 110),
-          curve: Curves.easeOutCubic,
-          child: AnimatedContainer(
-            duration: reduceMotion || _pressed
-                ? Duration.zero
-                : const Duration(milliseconds: 140),
-            curve: Curves.easeOutCubic,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-            decoration: ShapeDecoration(
-              color: fill,
-              shape: shape,
-              shadows: widget.selected
-                  ? [
-                      BoxShadow(
-                        color: brandBlue.withValues(alpha: dark ? .32 : .22),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
+      child: Focus(
+        canRequestFocus: enabled,
+        child: Shortcuts(
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          },
+          child: Actions(
+            actions: {
+              ActivateIntent: CallbackAction<ActivateIntent>(
+                onInvoke: (_) {
+                  if (enabled) widget.onTap?.call();
+                  return null;
+                },
+              ),
+            },
+            child: MouseRegion(
+              cursor: enabled
+                  ? SystemMouseCursors.click
+                  : SystemMouseCursors.basic,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                excludeFromSemantics: true,
+                onTapDown: enabled
+                    ? (_) => setState(() => _pressed = true)
+                    : null,
+                onTapUp: enabled
+                    ? (_) => setState(() => _pressed = false)
+                    : null,
+                onTapCancel: enabled
+                    ? () => setState(() => _pressed = false)
+                    : null,
+                onTap: enabled ? widget.onTap : null,
+                child: AnimatedScale(
+                  scale: !reduceMotion && _pressed ? 0.96 : 1.0,
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 110),
+                  curve: Curves.easeOutCubic,
+                  child: AnimatedContainer(
+                    duration: reduceMotion || _pressed
+                        ? Duration.zero
+                        : const Duration(milliseconds: 140),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 12,
+                      horizontal: 4,
+                    ),
+                    decoration: ShapeDecoration(
+                      color: fill,
+                      shape: shape,
+                      shadows: widget.selected
+                          ? [
+                              BoxShadow(
+                                color: brandBlue.withValues(
+                                  alpha: dark ? .32 : .22,
+                                ),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ]
+                          : null,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        color: widget.selected ? Colors.white : brandBlue,
+                        fontWeight: FontWeight.w600,
                       ),
-                    ]
-                  : null,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              widget.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: widget.selected ? Colors.white : brandBlue,
-                fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),

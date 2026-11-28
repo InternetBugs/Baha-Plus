@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -12,10 +11,10 @@ import 'chrome.dart';
 import 'collection_page.dart';
 import 'detail_page.dart';
 import 'layout.dart';
-import 'official_browser.dart';
 import 'native_http_player.dart';
-import 'seasonal_page.dart';
 import 'notifications_page.dart';
+import 'official_browser.dart';
+import 'seasonal_page.dart';
 import 'update_dialog.dart';
 
 class AppRoot extends StatefulWidget {
@@ -40,6 +39,8 @@ class _AppRootState extends State<AppRoot>
   late final AnimationController _tabAnimation;
   late int _lastTab;
   int _lastBrowseTab = 0;
+  late String _lastLibraryFilter;
+  late Listenable _layerListenable;
   late PlaybackEnvironment _playbackEnvironment;
   bool _foreground = true;
   final _officialSessionKey = GlobalKey(debugLabel: 'official-session');
@@ -47,6 +48,8 @@ class _AppRootState extends State<AppRoot>
   Route<void>? _favoritePortalRoute;
   Map<ScrollController, double>? _favoriteScrollOffsets;
   bool _favoritePresentationScheduled = false;
+  bool _lastFavoriteLoginPending = false;
+  bool _lastFavoritePortalVisible = false;
   bool _updateCheckInProgress = false;
   double _tabDirection = 1;
   static final _tabBarSettingsDark = LiquidGlassSettings.ios27Dark.copyWith(
@@ -59,19 +62,39 @@ class _AppRootState extends State<AppRoot>
   bool get _favoritePortalVisible =>
       widget.mountPortal && store.browserVisible && store.favoriteLoginPending;
 
+  void _attachStoreListeners(AppStore target) {
+    _layerListenable = Listenable.merge([
+      target.browserNotifier,
+      target.detailNotifier,
+    ]);
+    target.addListener(_tabChanged);
+    target.browserNotifier.addListener(_favoritePresentationChanged);
+    target.searchNotifier.addListener(_syncSearchController);
+    target.libraryFilterNotifier.addListener(_syncLibraryController);
+  }
+
+  void _detachStoreListeners(AppStore target) {
+    target.removeListener(_tabChanged);
+    target.browserNotifier.removeListener(_favoritePresentationChanged);
+    target.searchNotifier.removeListener(_syncSearchController);
+    target.libraryFilterNotifier.removeListener(_syncLibraryController);
+  }
+
   @override
   void initState() {
     super.initState();
     store.setPortalHostActive(widget.mountPortal);
     _lastTab = store.tab;
     _lastBrowseTab = store.tab < 4 ? store.tab : 0;
+    _lastLibraryFilter = store.libraryFilter;
     _tabAnimation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 280),
       value: 1,
     );
-    store.addListener(_tabChanged);
-    store.addListener(_favoritePresentationChanged);
+    _syncSearchController();
+    _syncLibraryController();
+    _attachStoreListeners(store);
     _favoritePresentationChanged();
     _playbackEnvironment = PlaybackEnvironment(store);
     _playbackEnvironment.pictureInPicture.addListener(_syncPlaybackActivity);
@@ -82,6 +105,31 @@ class _AppRootState extends State<AppRoot>
     _scheduleCatalogRefresh();
     _scheduleProfileRefresh();
     _scheduleNotificationsRefresh();
+  }
+
+  void _syncSearchController() {
+    if (_search.text != store.query) {
+      _search.value = TextEditingValue(
+        text: store.query,
+        selection: TextSelection.collapsed(offset: store.query.length),
+      );
+    }
+  }
+
+  void _syncLibraryController() {
+    if (_librarySearch.text != store.libraryQuery) {
+      _librarySearch.value = TextEditingValue(
+        text: store.libraryQuery,
+        selection: TextSelection.collapsed(offset: store.libraryQuery.length),
+      );
+    }
+    if (_lastLibraryFilter != store.libraryFilter) {
+      _lastLibraryFilter = store.libraryFilter;
+      final scroll = _titles[2].scrollController;
+      if (scroll.hasClients && scroll.offset > 0) {
+        scroll.jumpTo(0);
+      }
+    }
   }
 
   Future<void>? _profileRefresh;
@@ -114,7 +162,7 @@ class _AppRootState extends State<AppRoot>
   void _scheduleCatalogRefresh() =>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !store.catalogLoading) {
-          unawaited(store.refreshCatalog());
+          unawaited(store.refreshCatalog(force: false));
         }
       });
 
@@ -188,27 +236,40 @@ class _AppRootState extends State<AppRoot>
   );
 
   void _favoritePresentationChanged() {
-    if (store.favoriteLoginPending) {
+    final pending = store.favoriteLoginPending;
+    final visible = _favoritePortalVisible;
+    if (pending) {
       _favoriteScrollOffsets ??= {
         for (final title in _titles)
           if (title.scrollController.hasClients)
             title.scrollController: title.scrollController.offset,
       };
     }
-    if (_favoritePresentationScheduled) return;
+    final needsRestore = _favoriteScrollOffsets != null && !pending && !store.busy;
+    final needsRouteUpdate =
+        (visible && _favoritePortalRoute == null) ||
+        (!visible && _favoritePortalRoute != null);
+    final changed =
+        pending != _lastFavoriteLoginPending ||
+        visible != _lastFavoritePortalVisible ||
+        needsRestore ||
+        needsRouteUpdate;
+    _lastFavoriteLoginPending = pending;
+    _lastFavoritePortalVisible = visible;
+    if (!changed || _favoritePresentationScheduled) return;
     _favoritePresentationScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _favoritePresentationScheduled = false;
       if (!mounted) return;
       final navigator = Navigator.of(context);
       final overlay = navigator.overlay!;
-      if (widget.mountPortal && _favoritePortalEntry == null) {
+      if (_favoritePortalVisible && _favoritePortalEntry == null) {
         // Reparent the existing official session in the same frame as the
         // root rebuild. A second WebView would lose the authenticated session.
         _favoritePortalEntry = OverlayEntry(
           maintainState: true,
           builder: (context) => ListenableBuilder(
-            listenable: store,
+            listenable: store.browserNotifier,
             builder: (context, child) => _favoritePortalVisible
                 ? Positioned.fill(child: _officialPortal(context))
                 : const SizedBox.shrink(),
@@ -281,23 +342,26 @@ class _AppRootState extends State<AppRoot>
       _playbackEnvironment = PlaybackEnvironment(store);
       _playbackEnvironment.pictureInPicture.addListener(_syncPlaybackActivity);
       _syncPlaybackActivity();
-      oldWidget.store.removeListener(_tabChanged);
-      oldWidget.store.removeListener(_favoritePresentationChanged);
-      store.addListener(_tabChanged);
-      store.addListener(_favoritePresentationChanged);
+      _detachStoreListeners(oldWidget.store);
+      _attachStoreListeners(store);
       _lastTab = store.tab;
       _lastBrowseTab = store.tab < 4 ? store.tab : 0;
+      _lastLibraryFilter = store.libraryFilter;
       _tabAnimation.value = 1;
+      _syncSearchController();
+      _syncLibraryController();
       _scheduleUpdateCheck();
       _scheduleCatalogRefresh();
       _scheduleProfileRefresh();
       _scheduleNotificationsRefresh();
     }
-    // The persistent entry belongs to the Navigator's overlay, which is
-    // outside this subtree while a theme or language change rebuilds us.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _favoritePortalEntry?.markNeedsBuild();
-    });
+    if (_favoritePortalEntry != null) {
+      // The persistent entry belongs to the Navigator's overlay, which is
+      // outside this subtree while a theme or language change rebuilds us.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _favoritePortalEntry?.markNeedsBuild();
+      });
+    }
     _favoritePresentationChanged();
   }
 
@@ -406,26 +470,15 @@ class _AppRootState extends State<AppRoot>
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store,
+    listenable: _layerListenable,
     builder: (context, child) {
-      if (_search.text != store.query) {
-        _search.value = TextEditingValue(
-          text: store.query,
-          selection: TextSelection.collapsed(offset: store.query.length),
-        );
-      }
-      if (_librarySearch.text != store.libraryQuery) {
-        _librarySearch.value = TextEditingValue(
-          text: store.libraryQuery,
-          selection: TextSelection.collapsed(offset: store.libraryQuery.length),
-        );
-      }
+      final nativeVisible = !widget.mountPortal || !store.browserVisible;
       final nativeLayer = Positioned.fill(
         key: const ValueKey('native-layer'),
-        // Keep tab state, but stop painting and animating its glass while the
-        // full-screen browser or player covers it.
+        // Keep tab state, but stop painting, animating, and rebuilding its
+        // glass while the full-screen browser or player covers it.
         child: Visibility(
-          visible: !widget.mountPortal || !store.browserVisible,
+          visible: nativeVisible,
           maintainState: true,
           child: ExcludeSemantics(
             excluding: store.browserVisible,
@@ -433,7 +486,11 @@ class _AppRootState extends State<AppRoot>
               ignoring: store.browserVisible,
               child: ColoredBox(
                 color: Theme.of(context).scaffoldBackgroundColor,
-                child: _native(context),
+                child: _ActiveGatedSubtree(
+                  active: nativeVisible,
+                  listenable: store,
+                  builder: _native,
+                ),
               ),
             ),
           ),
@@ -524,6 +581,7 @@ class _AppRootState extends State<AppRoot>
     final body = CustomScrollView(
       key: PageStorageKey('catalog-tab-${store.tab}'),
       controller: controller.scrollController,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
@@ -543,14 +601,21 @@ class _AppRootState extends State<AppRoot>
           padding: EdgeInsets.fromLTRB(hPad.left, 4, hPad.right, 16),
           trailing: _accountActions(),
         ),
-        if (store.tab == 0 ||
-            store.tab == 1 ||
-            (store.tab == 2 &&
-                store.libraryQuery.isEmpty &&
-                store.libraryFilter != 'favorites'))
+        if (store.tab == 0 || store.tab == 1)
           CatalogStatus(
             store: store,
             padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
+          )
+        else if (store.tab == 2)
+          ListenableBuilder(
+            listenable: store.libraryFilterNotifier,
+            builder: (context, _) =>
+                store.libraryQuery.isEmpty && store.libraryFilter != 'favorites'
+                ? CatalogStatus(
+                    store: store,
+                    padding: EdgeInsets.fromLTRB(hPad.left, 0, hPad.right, 20),
+                  )
+                : const SliverToBoxAdapter(child: SizedBox.shrink()),
           ),
         if (store.tab == 2 || (store.tab == 4 && useRail))
           SliverToBoxAdapter(
@@ -585,13 +650,20 @@ class _AppRootState extends State<AppRoot>
             sliver: store.tab == 3
                 ? HistoryContent(store: store, openDetail: _detail)
                 : store.tab == 2
-                ? LibraryContent(
-                    store: store,
-                    openDetail: _detail,
-                    connectAccount: store.connectAccount,
+                ? ListenableBuilder(
+                    listenable: store.libraryFilterNotifier,
+                    builder: (context, _) => LibraryContent(
+                      store: store,
+                      openDetail: _detail,
+                      connectAccount: store.connectAccount,
+                    ),
                   )
                 : store.tab == 4
-                ? SearchContent(store: store, openDetail: _detail)
+                ? ListenableBuilder(
+                    listenable: store.searchNotifier,
+                    builder: (context, _) =>
+                        SearchContent(store: store, openDetail: _detail),
+                  )
                 : SliverToBoxAdapter(
                     child: switch (store.tab) {
                       1 => ScheduleContent(store: store, openDetail: _detail),
@@ -609,12 +681,7 @@ class _AppRootState extends State<AppRoot>
     final appBar = GlassAppBar(
       title: Text(title),
       largeTitleController: controller,
-      padding: layout.isCompact
-          ? const EdgeInsets.symmetric(horizontal: 8)
-          : EdgeInsets.only(
-              left: math.max(8.0, hPad.left - 8),
-              right: math.max(8.0, hPad.right - 8),
-            ),
+      padding: layout.appBarPadding(hPad),
       actions: [
         AnimatedBuilder(
           animation: controller,
@@ -769,8 +836,7 @@ class _AppRootState extends State<AppRoot>
     _playbackEnvironment.pictureInPicture.removeListener(_syncPlaybackActivity);
     _playbackEnvironment.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    store.removeListener(_tabChanged);
-    store.removeListener(_favoritePresentationChanged);
+    _detachStoreListeners(store);
     final route = _favoritePortalRoute;
     _favoritePortalRoute = null;
     if (route != null) {
@@ -789,5 +855,65 @@ class _AppRootState extends State<AppRoot>
       title.dispose();
     }
     super.dispose();
+  }
+}
+
+/// Suspends listening to [listenable] while [active] is false so hidden tabs
+/// do not rebuild behind a full-screen player or official browser overlay.
+class _ActiveGatedSubtree extends StatefulWidget {
+  const _ActiveGatedSubtree({
+    required this.active,
+    required this.listenable,
+    required this.builder,
+  });
+
+  final bool active;
+  final Listenable listenable;
+  final WidgetBuilder builder;
+
+  @override
+  State<_ActiveGatedSubtree> createState() => _ActiveGatedSubtreeState();
+}
+
+class _ActiveGatedSubtreeState extends State<_ActiveGatedSubtree> {
+  Widget? _cached;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) widget.listenable.addListener(_onChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ActiveGatedSubtree oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.listenable != widget.listenable) {
+      if (oldWidget.active) oldWidget.listenable.removeListener(_onChanged);
+      if (widget.active) widget.listenable.addListener(_onChanged);
+      _cached = null;
+    } else if (oldWidget.active != widget.active) {
+      if (widget.active) {
+        widget.listenable.addListener(_onChanged);
+        _cached = null;
+      } else {
+        widget.listenable.removeListener(_onChanged);
+      }
+    }
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() => _cached = null);
+  }
+
+  @override
+  void dispose() {
+    if (widget.active) widget.listenable.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active && _cached != null) return _cached!;
+    return _cached = widget.builder(context);
   }
 }

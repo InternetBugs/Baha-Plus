@@ -3,8 +3,10 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'chrome.dart';
+import 'glass_alert.dart';
 
 const _lightMenuShadow = [
   BoxShadow(color: Color(0x16000000), blurRadius: 1, spreadRadius: 0.5),
@@ -12,10 +14,8 @@ const _lightMenuShadow = [
   BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2)),
 ];
 
-const _settingsTextStyle = TextStyle(
-  fontFamily: 'BahaSans',
-  fontFamilyFallback: ['BahaSansSC'],
-);
+TextStyle _settingsTextStyle(BuildContext context) =>
+    TextStyle(fontFamilyFallback: bahaFontFallbackOf(context));
 
 /// A selectable option displayed inside a floating Liquid Glass settings card.
 class GlassSettingsOption<T> {
@@ -111,12 +111,7 @@ LiquidGlassSettings glassSettingsMenuSettings(
           );
   }
 
-  final adaptiveQuality = GlassAdaptiveScopeData.maybeOf(
-    context,
-  )?.effectiveQuality;
-  final themeQuality = GlassThemeData.of(context).qualityFor(context);
-  final effectiveQuality =
-      adaptiveQuality ?? themeQuality ?? GlassQuality.standard;
+  final effectiveQuality = resolveGlassAlertQuality(context);
   final useNativeFrost =
       ui.ImageFilter.isShaderFilterSupported &&
       effectiveQuality == GlassQuality.premium;
@@ -173,10 +168,14 @@ GlassMenuItem glassSettingsOptionItem(
   bool forceDark = false,
 }) {
   final ink = glassSettingsMenuInkColor(context, forceDark: forceDark);
+  final itemHeight = (MediaQuery.textScalerOf(context).scale(16) + 28).clamp(
+    44.0,
+    68.0,
+  );
   return GlassMenuItem(
     key: key,
     title: title,
-    height: 44,
+    height: itemHeight,
     iconSize: 16,
     iconColor: ink,
     icon: SizedBox(
@@ -185,7 +184,7 @@ GlassMenuItem glassSettingsOptionItem(
           ? const Center(child: Icon(CupertinoIcons.checkmark, size: 15))
           : null,
     ),
-    titleStyle: _settingsTextStyle.copyWith(
+    titleStyle: _settingsTextStyle(context).copyWith(
       color: ink,
       fontSize: 16,
       fontWeight: FontWeight.w400,
@@ -204,14 +203,18 @@ GlassMenuItem glassSettingsActionItem(
   bool forceDark = false,
 }) {
   final ink = glassSettingsMenuInkColor(context, forceDark: forceDark);
+  final itemHeight = (MediaQuery.textScalerOf(context).scale(16) + 30).clamp(
+    46.0,
+    70.0,
+  );
   return GlassMenuItem(
     key: key,
     title: title,
-    height: 46,
+    height: itemHeight,
     iconSize: 18,
     iconColor: ink,
     icon: icon == null ? null : Icon(icon, size: 18),
-    titleStyle: _settingsTextStyle.copyWith(
+    titleStyle: _settingsTextStyle(context).copyWith(
       color: ink,
       fontSize: 16,
       fontWeight: FontWeight.w400,
@@ -232,14 +235,18 @@ GlassMenuItem glassSettingsSubmenuItem(
 }) {
   final ink = glassSettingsMenuInkColor(context, forceDark: forceDark);
   final muted = glassSettingsMenuMutedColor(context, forceDark: forceDark);
+  final itemHeight = (MediaQuery.textScalerOf(context).scale(16) + 30).clamp(
+    46.0,
+    70.0,
+  );
   return GlassMenuItem(
     key: key,
     title: title,
-    height: 46,
+    height: itemHeight,
     iconSize: 18,
     iconColor: ink,
     icon: icon == null ? null : Icon(icon, size: 18),
-    titleStyle: _settingsTextStyle.copyWith(
+    titleStyle: _settingsTextStyle(context).copyWith(
       color: ink,
       fontSize: 16,
       fontWeight: FontWeight.w400,
@@ -254,7 +261,10 @@ GlassMenuItem glassSettingsSubmenuItem(
               value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: _settingsTextStyle.copyWith(color: muted, fontSize: 14),
+              style: _settingsTextStyle(context).copyWith(
+                color: muted,
+                fontSize: 14,
+              ),
             ),
           ),
           const SizedBox(width: 4),
@@ -529,7 +539,8 @@ class GlassSettingsGroup extends StatelessWidget {
   final double dividerIndent;
   final Color? color;
 
-  static const _shape = LiquidRoundedSuperellipse(borderRadius: 26);
+  static const _radius = BorderRadius.all(Radius.circular(26));
+  static const _shape = RoundedSuperellipseBorder(borderRadius: _radius);
 
   @override
   Widget build(BuildContext context) {
@@ -540,8 +551,8 @@ class GlassSettingsGroup extends StatelessWidget {
         color: color ?? Theme.of(context).colorScheme.surface,
         shape: _shape,
       ),
-      child: ClipPath(
-        clipper: const ShapeBorderClipper(shape: _shape),
+      child: ClipRSuperellipse(
+        borderRadius: _radius,
         child: Column(
           children: [
             for (var index = 0; index < children.length; index++) ...[
@@ -582,6 +593,8 @@ class GlassSettingsHighlight extends StatefulWidget {
 
 class _GlassSettingsHighlightState extends State<GlassSettingsHighlight> {
   bool _pressed = false;
+  bool _hovered = false;
+  bool _focused = false;
 
   void _setPressed(bool value) {
     if (_pressed == value) return;
@@ -592,11 +605,18 @@ class _GlassSettingsHighlightState extends State<GlassSettingsHighlight> {
   Widget build(BuildContext context) {
     final enabled = widget.onTap != null;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final highlight = _pressed && enabled
-        ? (dark ? const Color(0x12ffffff) : const Color(0x0b000000))
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final highlight = !enabled
+        ? Colors.transparent
+        : _pressed
+        ? (dark ? const Color(0x16ffffff) : const Color(0x0f000000))
+        : (_hovered || _focused)
+        ? (dark ? const Color(0x0cffffff) : const Color(0x07000000))
         : Colors.transparent;
     Widget content = AnimatedContainer(
-      duration: _pressed ? Duration.zero : const Duration(milliseconds: 140),
+      duration: reduceMotion || _pressed
+          ? Duration.zero
+          : const Duration(milliseconds: 140),
       curve: Curves.easeOutCubic,
       color: highlight,
       child: widget.child,
@@ -604,13 +624,40 @@ class _GlassSettingsHighlightState extends State<GlassSettingsHighlight> {
     if (widget.semanticButton) {
       content = Semantics(button: true, enabled: enabled, child: content);
     }
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: enabled ? (_) => _setPressed(true) : null,
-      onTapUp: enabled ? (_) => _setPressed(false) : null,
-      onTapCancel: enabled ? () => _setPressed(false) : null,
-      onTap: widget.onTap,
-      child: content,
+    return Focus(
+      canRequestFocus: enabled,
+      onFocusChange: (focused) => setState(() => _focused = focused),
+      child: Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        child: Actions(
+          actions: {
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                widget.onTap?.call();
+                return null;
+              },
+            ),
+          },
+          child: MouseRegion(
+            cursor: enabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
+            onEnter: enabled ? (_) => setState(() => _hovered = true) : null,
+            onExit: enabled ? (_) => setState(() => _hovered = false) : null,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: enabled ? (_) => _setPressed(true) : null,
+              onTapUp: enabled ? (_) => _setPressed(false) : null,
+              onTapCancel: enabled ? () => _setPressed(false) : null,
+              onTap: widget.onTap,
+              child: content,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -623,6 +670,7 @@ class GlassSettingsRow extends StatelessWidget {
     this.onTap,
     this.value,
     this.busy = false,
+    this.destructive = false,
     super.key,
   });
 
@@ -631,37 +679,55 @@ class GlassSettingsRow extends StatelessWidget {
   final VoidCallback? onTap;
   final String? value;
   final bool busy;
+  final bool destructive;
 
   @override
-  Widget build(BuildContext context) => GlassSettingsHighlight(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-      child: Row(
-        children: [
-          Icon(icon, color: brandBlue, size: 22),
-          const SizedBox(width: 14),
-          Expanded(child: Text(title, style: const TextStyle(fontSize: 15))),
-          if (value != null) ...[
-            const SizedBox(width: 8),
-            Text(
-              value!,
-              style: TextStyle(color: secondary(context), fontSize: 14),
+  Widget build(BuildContext context) {
+    final accent = destructive ? CupertinoColors.systemRed : brandBlue;
+    return GlassSettingsHighlight(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+        child: Row(
+          children: [
+            Icon(icon, color: accent, size: 22),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: destructive ? CupertinoColors.systemRed : null,
+                ),
+              ),
             ),
-            const SizedBox(width: 8),
+            if (value != null) ...[
+              const SizedBox(width: 8),
+              Flexible(
+                fit: FlexFit.loose,
+                child: Text(
+                  value!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(color: secondary(context), fontSize: 14),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            if (busy)
+              const CupertinoActivityIndicator(radius: 7)
+            else if (!destructive)
+              Icon(
+                CupertinoIcons.chevron_right,
+                color: secondary(context),
+                size: 13,
+              ),
           ],
-          if (busy)
-            const CupertinoActivityIndicator(radius: 7)
-          else
-            Icon(
-              CupertinoIcons.chevron_right,
-              color: secondary(context),
-              size: 13,
-            ),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Settings row with a trailing iOS switch. Tapping anywhere on the row
@@ -771,32 +837,35 @@ class _GlassSettingsPickerRowState<T> extends State<GlassSettingsPickerRow<T>> {
             Expanded(
               child: Text(widget.title, style: const TextStyle(fontSize: 15)),
             ),
-            const SizedBox(width: 8),
-            GlassSettingsMenu(
-              controller: _menuController,
-              menuWidth: widget.menuWidth,
-              menuAlignment: GlassMenuAlignment.topRight,
-              items: [
-                for (final option in widget.options)
-                  glassSettingsOptionItem(
-                    context,
-                    key: option.key,
-                    title: option.label,
-                    selected: option.value == widget.selectedValue,
-                    onTap: () => widget.onSelected(option.value),
-                  ),
-              ],
-              triggerBuilder: (context, toggleMenu) => GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: toggleMenu,
-                child: Padding(
+            const SizedBox(width: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 168),
+              child: GlassSettingsMenu(
+                controller: _menuController,
+                menuWidth: widget.menuWidth,
+                menuAlignment: GlassMenuAlignment.topRight,
+                items: [
+                  for (final option in widget.options)
+                    glassSettingsOptionItem(
+                      context,
+                      key: option.key,
+                      title: option.label,
+                      selected: option.value == widget.selectedValue,
+                      onTap: () => widget.onSelected(option.value),
+                    ),
+                ],
+                triggerBuilder: (context, _) => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        widget.valueLabel,
-                        style: TextStyle(color: muted, fontSize: 14),
+                      Flexible(
+                        child: Text(
+                          widget.valueLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: muted, fontSize: 14),
+                        ),
                       ),
                       const SizedBox(width: 6),
                       Icon(

@@ -83,6 +83,7 @@ void main() {
       );
       expect(await local.read(parts[0]), 'segment-data');
       expect(await local.read(parts[2]), 'segment-data');
+      await cache.pendingWrites;
       final populated = cache.bufferedRanges(master);
       expect(populated, [(start: 0.0, end: 10.0), (start: 20.0, end: 30.0)]);
       expect(identical(cache.bufferedRanges(master), populated), isTrue);
@@ -124,6 +125,54 @@ void main() {
   });
 
   test(
+    'seeded master and media playlists skip both upstream transfers',
+    () async {
+      const entry = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n360.m3u8\n';
+      cache.seedPlaylist(master, entry);
+      cache.seedPlaylist(master.resolve('360.m3u8'), media);
+      final variant = mediaUris(
+        await local.read(cache.playlist(master)),
+      ).single;
+      final parts = mediaUris(await local.read(variant));
+      expect(parts, hasLength(3));
+      expect(requests, isEmpty);
+      expect(cache.downloadedBytes, 0);
+      expect(await local.read(parts.first), 'segment-data');
+      expect(requests.single.url, master.resolve('first.ts?token=private'));
+    },
+  );
+
+  test('closing cancels a request stalled before its response', () async {
+    await cache.close();
+    directory = await Directory.systemTemp.createTemp('baha-cache-test-');
+    final client = _StalledCacheClient();
+    cache = NativeHlsCache(
+      headers: const {},
+      client: client,
+      createDirectory: () async => directory,
+    )..seedPlaylist(master, media);
+    await cache.start();
+    final part = mediaUris(await local.read(cache.playlist(master))).first;
+    final response = local
+        .get(part)
+        .then<int?>(
+          (result) => result.statusCode,
+          onError: (Object error) {
+            if (error is http.ClientException) return null;
+            throw error;
+          },
+        );
+    final request = await client.started.future;
+    expect(request, isA<http.AbortableRequest>());
+    final aborted = (request as http.AbortableRequest).abortTrigger!;
+    await cache.close().timeout(const Duration(seconds: 2));
+    await aborted;
+    expect(await response, anyOf(isNull, HttpStatus.serviceUnavailable));
+    expect(await directory.exists(), isFalse);
+    client.response.complete(http.StreamedResponse(const Stream.empty(), 200));
+  });
+
+  test(
     'failed transfers are never advertised as cached and can retry',
     () async {
       final parts = mediaUris(await local.read(cache.playlist(master)));
@@ -132,6 +181,7 @@ void main() {
       expect(cache.bufferedRanges(master), isEmpty);
       handle = (_) async => http.Response('complete', 200);
       expect(await local.read(parts.first), 'complete');
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
     },
   );
@@ -163,6 +213,7 @@ void main() {
       expect(await directory.list().isEmpty, isTrue);
       truncated = false;
       expect((await local.get(part)).bodyBytes, [1, 2, 3, 4]);
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
     },
   );
@@ -173,6 +224,7 @@ void main() {
     expect(partial.statusCode, 206);
     expect(partial.body, 'gmen');
     expect(partial.headers['content-range'], 'bytes 2-5/12');
+    await cache.pendingWrites;
     final suffix = await local.get(part, headers: {'Range': 'bytes=-4'});
     expect(suffix.body, 'data');
     final head = await local.head(part);
@@ -215,8 +267,10 @@ second.ts
       await local.read(key);
       expect(cache.bufferedRanges(master), isEmpty);
       await local.read(attributeUri(playlist, '#EXT-X-MAP:'));
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
       await local.read(parts[1]);
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 20.0)]);
       final files = await directory
           .list()
@@ -264,6 +318,7 @@ combined.mp4
       expect(await local.read(parts[1]), 'ijkl');
       expect(cache.bufferedRanges(master), isEmpty);
       expect(await local.read(attributeUri(playlist, '#EXT-X-MAP:')), 'abcd');
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 20.0)]);
       expect(requests.skip(1).map((request) => request.headers['Range']), [
         'bytes=4-7',
@@ -294,10 +349,12 @@ combined.mp4
       final variants = mediaUris(await local.read(cache.playlist(master)));
       final low = mediaUris(await local.read(variants[0]));
       await local.read(low[0]);
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
       final high = mediaUris(await local.read(variants[1]));
       expect(cache.bufferedRanges(master), isEmpty);
       await local.read(high[2]);
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 20.0, end: 30.0)]);
       await local.read(variants[0]);
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
@@ -322,8 +379,10 @@ combined.mp4
     final parts = mediaUris(await local.read(cache.playlist(master)));
     await local.read(parts[0]);
     await local.read(parts[1]);
+    await cache.pendingWrites;
     await local.read(parts[0]); // Keep the first segment most recently used.
     await local.read(parts[2]);
+    await cache.pendingWrites;
     expect(cache.bufferedRanges(master), [
       (start: 0.0, end: 10.0),
       (start: 20.0, end: 30.0),
@@ -336,6 +395,7 @@ combined.mp4
     () async {
       final part = mediaUris(await local.read(cache.playlist(master))).first;
       await local.read(part);
+      await cache.pendingWrites;
       await for (final file in directory.list()) {
         await file.delete();
       }
@@ -473,9 +533,21 @@ https://other.invalid/private.ts
       expect(persistent, [true, false, false]);
       expect(created, 3);
       expect(closed, 2);
+      await cache.pendingWrites;
       expect(cache.bufferedRanges(master), [(start: 0.0, end: 10.0)]);
     },
   );
+}
+
+class _StalledCacheClient extends http.BaseClient {
+  final started = Completer<http.BaseRequest>();
+  final response = Completer<http.StreamedResponse>();
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    started.complete(request);
+    return response.future;
+  }
 }
 
 class _TrackedCacheClient extends http.BaseClient {

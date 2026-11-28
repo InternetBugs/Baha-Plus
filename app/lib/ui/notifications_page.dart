@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import '../core/community.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
 import 'community_widgets.dart';
@@ -42,6 +42,7 @@ class _NotificationsPageState extends State<NotificationsPage>
   final _title = GlassLargeTitleController();
   AppStore get store => widget.store;
   bool _unreadOnly = false;
+  String? _openingId;
   Timer? _refresh;
 
   @override
@@ -59,8 +60,21 @@ class _NotificationsPageState extends State<NotificationsPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed &&
+        mounted &&
+        ModalRoute.of(context)?.isCurrent == true) {
       unawaited(store.refreshNotifications());
+    }
+  }
+
+  Future<void> _openItem(AnimeNotification item) async {
+    if (_openingId != null) return;
+    setState(() => _openingId = item.id);
+    try {
+      await store.openNotification(item);
+      if (mounted && store.browserVisible) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _openingId = null);
     }
   }
 
@@ -85,12 +99,7 @@ class _NotificationsPageState extends State<NotificationsPage>
           appBar: GlassAppBar(
             title: Text(store.t('notifications')),
             largeTitleController: _title,
-            padding: layout.isCompact
-                ? const EdgeInsets.symmetric(horizontal: 8)
-                : EdgeInsets.only(
-                    left: math.max(8.0, hPad.left - 8),
-                    right: math.max(8.0, hPad.right - 8),
-                  ),
+            padding: layout.appBarPadding(hPad),
             leading: GlassIconButton(
               semanticLabel: store.t('back'),
               icon: const Icon(CupertinoIcons.chevron_back),
@@ -220,16 +229,17 @@ class _NotificationsPageState extends State<NotificationsPage>
                       }
                       final item = items[cursor];
                       final read = store.notificationRead(item);
+                      final opening = _openingId == item.id;
                       return Semantics(
+                        key: ValueKey('notification-item-${item.id}'),
                         button: true,
                         label: '${item.title}, ${item.time}',
                         child: PressableSurface(
                           key: ValueKey('notification-${item.videoId}'),
                           pressedScale: 0.985,
-                          onTap: () {
-                            Navigator.pop(context);
-                            unawaited(store.openNotification(item));
-                          },
+                          onTap: _openingId == null
+                              ? () => unawaited(_openItem(item))
+                              : null,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             child: Row(
@@ -275,15 +285,19 @@ class _NotificationsPageState extends State<NotificationsPage>
                                 const SizedBox(width: 10),
                                 Padding(
                                   padding: const EdgeInsets.only(top: 8),
-                                  child: Icon(
-                                    read
-                                        ? CupertinoIcons.chevron_right
-                                        : CupertinoIcons.circle_fill,
-                                    size: read ? 13 : 7,
-                                    color: read
-                                        ? secondary(context)
-                                        : brandBlue,
-                                  ),
+                                  child: opening
+                                      ? const CupertinoActivityIndicator(
+                                          radius: 7,
+                                        )
+                                      : Icon(
+                                          read
+                                              ? CupertinoIcons.chevron_right
+                                              : CupertinoIcons.circle_fill,
+                                          size: read ? 13 : 7,
+                                          color: read
+                                              ? secondary(context)
+                                              : brandBlue,
+                                        ),
                                 ),
                               ],
                             ),

@@ -19,6 +19,7 @@ abstract final class OfficialUserAgent {
 
   static String? _device;
   static String? _value;
+  static Future<void>? _resolution;
 
   /// The WebView's own agent. Android WebView reports `wv` and `Mobile`
   /// markers, so playback and official requests use [value] instead.
@@ -27,8 +28,8 @@ abstract final class OfficialUserAgent {
   /// Exactly what this app's WebView presents: Android keeps the desktop
   /// presentation used for the player pages; iOS keeps its real Safari agent.
   /// Every official HTTP request and the native media backend send this.
-  static String get value => _value ??=
-      Platform.isAndroid ? desktopChromiumUserAgent(device) : device;
+  static String get value =>
+      _value ??= Platform.isAndroid ? desktopChromiumUserAgent(device) : device;
 
   /// The identity media CDN requests use. On iOS it stays the desktop Chromium
   /// presentation: 0.5.5 played there with it, and 0.5.6 failed at decoder
@@ -39,7 +40,11 @@ abstract final class OfficialUserAgent {
   /// Reads the installed engine once. Failure keeps [fallback] rather than
   /// letting a partial agent split the identity across requests. Hosts with
   /// no mobile WebView (the Windows debug build) never attempt it.
-  static Future<void> resolve() async {
+  static Future<void> resolve() => ensureResolved();
+
+  static Future<void> ensureResolved() => _resolution ??= _resolve();
+
+  static Future<void> _resolve() async {
     if (_device != null) return;
     if (!Platform.isAndroid && !Platform.isIOS) return;
     try {

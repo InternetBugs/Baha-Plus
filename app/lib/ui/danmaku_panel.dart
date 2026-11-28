@@ -45,61 +45,61 @@ Color _cardSurfaceColor(BuildContext context) =>
     ? const Color(0xff1c1c1e)
     : Colors.white;
 
-void showDanmakuPanel(BuildContext context, AppStore store) {
-  showAdaptiveGlassSheet<void>(
-    context: context,
-    fullSize: .88,
-    topBorderRadius: 32,
-    expandedColor: const Color(0xfff2f2f7),
-    expandedDarkColor: const Color(0xff111113),
-    tabletMaxWidth: 780,
-    tabletMaxHeightFraction: .78,
-    tabletMaxHeight: 560,
-    sheetAnimationStyle: _playerSheetAnimation,
-    builder: (_) => DanmakuPanel(store: store),
-  );
-}
+Future<void> showDanmakuPanel(BuildContext context, AppStore store) =>
+    showAdaptiveGlassSheet<void>(
+      context: context,
+      fullSize: .88,
+      topBorderRadius: 32,
+      expandedColor: const Color(0xfff2f2f7),
+      expandedDarkColor: const Color(0xff111113),
+      tabletMaxWidth: 780,
+      tabletMaxHeightFraction: .78,
+      tabletMaxHeight: 560,
+      sheetAnimationStyle: _playerSheetAnimation,
+      builder: (_) => DanmakuPanel(store: store),
+    );
 
-void showDanmakuComposer(BuildContext context, AppStore store) {
-  showGeneralDialog<void>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: CupertinoLocalizations.of(context).modalBarrierDismissLabel,
-    barrierColor: const Color(0x8a000000),
-    transitionDuration: _composerTransitionDuration,
-    pageBuilder: (dialogContext, _, _) {
-      final media = MediaQuery.of(dialogContext);
-      final viewInsets = media.viewInsets;
-      final safe = media.padding;
-      final availableHeight = math.max(
-        160.0,
-        media.size.height - viewInsets.bottom - safe.top,
-      );
-      final compact = availableHeight < 460;
-      final radius = compact ? 26.0 : 30.0;
-      final bottomMargin = viewInsets.bottom > 0
-          ? 8.0
-          : math.max(12.0, safe.bottom);
-      final horizontalMargin = math.max(
-        12.0,
-        math.max(safe.left, safe.right) + 8.0,
-      );
-      final needsNotice =
-          store.accountProfile == null ||
-          !store.danmakuSettings.enabled ||
-          !store.playback.value.canControl;
-      final portraitCap = needsNotice ? 464.0 : 418.0;
-      final maxHeight = math.min(
-        compact ? 352.0 : portraitCap,
-        math.max(160.0, availableHeight - bottomMargin - 12.0),
-      );
-      final dark = Theme.of(dialogContext).brightness == Brightness.dark;
-      final shape = LiquidRoundedSuperellipse(borderRadius: radius);
-      return AnimatedPadding(
-        padding: EdgeInsets.only(bottom: viewInsets.bottom),
-        duration: media.disableAnimations
-            ? Duration.zero
-            : const Duration(milliseconds: 120),
+Future<void> showDanmakuComposer(BuildContext context, AppStore store) =>
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: CupertinoLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: const Color(0x8a000000),
+      transitionDuration: _composerTransitionDuration,
+      pageBuilder: (dialogContext, _, _) {
+        final viewInsets = MediaQuery.viewInsetsOf(dialogContext);
+        final safe = MediaQuery.paddingOf(dialogContext);
+        final size = MediaQuery.sizeOf(dialogContext);
+        final disableAnimations = MediaQuery.disableAnimationsOf(dialogContext);
+        final availableHeight = math.max(
+          160.0,
+          size.height - viewInsets.bottom - safe.top,
+        );
+        final compact = availableHeight < 460;
+        final radius = compact ? 26.0 : 30.0;
+        final bottomMargin = viewInsets.bottom > 0
+            ? 8.0
+            : math.max(12.0, safe.bottom);
+        final horizontalMargin = math.max(
+          12.0,
+          math.max(safe.left, safe.right) + 8.0,
+        );
+        final needsNotice =
+            store.accountProfile == null ||
+            !store.danmakuSettings.enabled ||
+            !store.playback.value.canControl;
+        final portraitCap = needsNotice ? 464.0 : 418.0;
+        final maxHeight = math.min(
+          compact ? 352.0 : portraitCap,
+          math.max(160.0, availableHeight - bottomMargin - 12.0),
+        );
+        final dark = Theme.of(dialogContext).brightness == Brightness.dark;
+        final shape = LiquidRoundedSuperellipse(borderRadius: radius);
+        return AnimatedPadding(
+          padding: EdgeInsets.only(bottom: viewInsets.bottom),
+          duration: disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 120),
         curve: Curves.easeOutCubic,
         child: Align(
           alignment: Alignment.bottomCenter,
@@ -181,7 +181,6 @@ void showDanmakuComposer(BuildContext context, AppStore store) {
       );
     },
   );
-}
 
 class DanmakuPanel extends StatefulWidget {
   const DanmakuPanel({
@@ -228,7 +227,23 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
   late final String? _videoId = widget.store.playingVideoId;
   late final String _document = widget.store.operation.id;
   late bool _canControl = widget.store.playback.value.canControl;
+  Listenable? _cachedListenable;
+  Listenable? _cachedPlaybackListenable;
   AppStore get store => widget.store;
+
+  Listenable _resolveListenable() {
+    final playback = widget.composerOnly ? null : store.nativeHttpPlayback;
+    if (_cachedListenable == null ||
+        !identical(_cachedPlaybackListenable, playback)) {
+      _cachedPlaybackListenable = playback;
+      _cachedListenable = Listenable.merge([
+        store.danmakuSettingsNotifier,
+        store,
+        ?playback,
+      ]);
+    }
+    return _cachedListenable!;
+  }
 
   @override
   void initState() {
@@ -243,6 +258,8 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.store != widget.store ||
         oldWidget.composerOnly != widget.composerOnly) {
+      _cachedListenable = null;
+      _cachedPlaybackListenable = null;
       if (oldWidget.composerOnly) {
         oldWidget.store.playback.removeListener(_onPlaybackChanged);
       }
@@ -298,9 +315,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: store.nativeHttpPlayback == null
-        ? store
-        : Listenable.merge([store, store.nativeHttpPlayback!]),
+    listenable: _resolveListenable(),
     builder: (context, _) {
       final settings = store.danmakuSettings;
       final canSend =
@@ -326,6 +341,7 @@ class _DanmakuPanelState extends State<DanmakuPanel> {
           widget.composerOnly ? 'danmaku-composer' : 'danmaku-panel',
         ),
         extendBody: false,
+        enableBackgroundSampling: false,
         backgroundColor: backdrop,
         statusBarStyle: GlassStatusBarStyle.auto,
         appBar: widget.composerOnly
@@ -1211,6 +1227,7 @@ class _DanmakuCinemaStage extends StatelessWidget {
               bottomText: store.t('danmakuPreviewBottom'),
               disabledHint: store.t('danmakuDisabledHint'),
               borderAlpha: dark ? .12 : .16,
+              simplified: store.simplified,
             ),
           ),
         ),
@@ -1228,6 +1245,7 @@ class _DanmakuStagePainter extends CustomPainter {
     required this.bottomText,
     required this.disabledHint,
     required this.borderAlpha,
+    required this.simplified,
   });
 
   final DanmakuSettings settings;
@@ -1237,6 +1255,7 @@ class _DanmakuStagePainter extends CustomPainter {
   final String bottomText;
   final String disabledHint;
   final double borderAlpha;
+  final bool simplified;
 
   static Size? _cachedBackdropSize;
   static final _skyPaint = Paint();
@@ -1371,8 +1390,7 @@ class _DanmakuStagePainter extends CustomPainter {
       text: TextSpan(
         text: text,
         style: TextStyle(
-          fontFamily: 'BahaSans',
-          fontFamilyFallback: const ['BahaSansSC'],
+          fontFamilyFallback: bahaFontFallback(simplified: simplified),
           color: color,
           fontSize: fontSize,
           fontWeight: FontWeight.w600,
@@ -1427,10 +1445,9 @@ class _DanmakuStagePainter extends CustomPainter {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
-        style: const TextStyle(
-          fontFamily: 'BahaSans',
-          fontFamilyFallback: ['BahaSansSC'],
-          color: Color(0xb8ffffff),
+        style: TextStyle(
+          fontFamilyFallback: bahaFontFallback(simplified: simplified),
+          color: const Color(0xb8ffffff),
           fontSize: 13,
           fontWeight: FontWeight.w500,
         ),
@@ -1477,5 +1494,6 @@ class _DanmakuStagePainter extends CustomPainter {
       oldDelegate.rollingText != rollingText ||
       oldDelegate.bottomText != bottomText ||
       oldDelegate.disabledHint != disabledHint ||
-      oldDelegate.borderAlpha != borderAlpha;
+      oldDelegate.borderAlpha != borderAlpha ||
+      oldDelegate.simplified != simplified;
 }

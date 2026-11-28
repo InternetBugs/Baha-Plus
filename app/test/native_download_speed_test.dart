@@ -137,6 +137,28 @@ void main() {
     expect(speeds, isEmpty);
   });
 
+  test('switching from cache to native counters resets the baseline', () async {
+    monitor.dispose();
+    monitor = NativeDownloadSpeed(
+      onSpeed: speeds.add,
+      elapsedMicroseconds: () => time,
+      counters: () => {'bytes': 64000, 'source': 0},
+    );
+    await start();
+    expect(calls, isEmpty);
+    bytes = 4096;
+    await monitor.usePlatformCounters('current', [
+      'https://bahamut.akamaized.net/master.m3u8',
+    ]);
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, ['start', 'sample']);
+    expect(speeds.last, 0);
+    bytes += 8192;
+    time += 1000000;
+    await monitor.sample();
+    expect(speeds.last, 8192);
+  });
+
   test(
     'cache counters measure upstream bytes without the native channel',
     () async {

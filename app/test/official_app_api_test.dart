@@ -230,10 +230,10 @@ void main() {
       expect(catalog.collections.first.expiring, isFalse);
       expect(catalog.collections.last.title, '12月份授權到期節目');
       expect(catalog.collections.last.expiring, isTrue);
-      expect(
-        catalog.collections.last.items.map((item) => item.id),
-        ['50', '51'],
-      );
+      expect(catalog.collections.last.items.map((item) => item.id), [
+        '50',
+        '51',
+      ]);
 
       final roundTripped = Catalog.fromJson(
         jsonDecode(catalog.encode()) as Json,
@@ -680,7 +680,7 @@ void main() {
   );
 
   test(
-    'catalog retries transient transport and 5xx errors with a fresh client',
+    'catalog rotates for transport errors and reuses the same client for 5xx',
     () async {
       var createdClients = 0;
       var closedClients = 0;
@@ -721,12 +721,12 @@ void main() {
 
       final catalog = await api.fetchCatalog();
       expect(catalog.items.single.id, '10');
-      expect(createdClients, 3);
-      expect(closedClients, 2);
+      expect(createdClients, 2);
+      expect(closedClients, 1);
       expect(attempts, [
         (client: 1, persistent: true),
         (client: 2, persistent: false),
-        (client: 3, persistent: false),
+        (client: 2, persistent: false),
       ]);
     },
   );
@@ -789,6 +789,94 @@ void main() {
     await expectLater(pending, throwsA(apiError('disposed')));
     expect(attempts, 1);
   });
+
+  test('request cancellation aborts detail transport', () async {
+    final started = Completer<void>();
+    final aborted = Completer<void>();
+    final cancel = Completer<void>();
+    final api = OfficialAppApi(
+      client: _StreamingClient((request) async {
+        started.complete();
+        await (request as http.Abortable).abortTrigger!;
+        aborted.complete();
+        throw http.RequestAbortedException(request.url);
+      }),
+    );
+    addTearDown(api.dispose);
+    final assertion = expectLater(
+      api.fetchDetail(animeId: '10', videoId: '20', cancel: cancel.future),
+      throwsA(apiError('cancelled')),
+    );
+    await started.future;
+    cancel.complete();
+    await assertion;
+    await aborted.future;
+  });
+
+  test(
+    '429 Retry-After takes precedence and retains the current client',
+    () async {
+      var attempts = 0;
+      var clients = 0;
+      final api = OfficialAppApi(
+        retryDelay: const Duration(seconds: 30),
+        clientFactory: () {
+          clients++;
+          return MockClient((_) async {
+            if (++attempts == 1) {
+              return http.Response('', 429, headers: {'retry-after': '0'});
+            }
+            return http.Response(
+              jsonEncode({'data': catalogJson()}),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          });
+        },
+      );
+      addTearDown(api.dispose);
+      expect(
+        (await api.fetchCatalog().timeout(const Duration(seconds: 2))).items,
+        isNotEmpty,
+      );
+      expect(attempts, 2);
+      expect(clients, 1);
+    },
+  );
+
+  test(
+    'library pagination maps public results and respects the last page',
+    () async {
+      final api = OfficialAppApi(
+        client: MockClient((request) async {
+          expect(request.url.path, '/anime/v1/anime_list.php');
+          expect(request.url.queryParameters, {'page': '3'});
+          expect(request.headers['cookie'], isNull);
+          return http.Response(
+            jsonEncode({
+              'data': {
+                'totalPage': 3,
+                'animeList': [
+                  {
+                    'animeSn': 10,
+                    'videoSn': 20,
+                    'title': 'Series',
+                    'cover': 'https://p2.bahamut.com.tw/cover.jpg',
+                  },
+                ],
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+      addTearDown(api.dispose);
+      final result = await api.fetchLibraryPage(3);
+      expect(result.items.single.id, '10');
+      expect(result.hasMore, isFalse);
+    },
+  );
 
   test(
     'catalog accepts optional empty popular, numeric volume, normalized times and null sections',

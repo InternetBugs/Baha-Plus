@@ -177,16 +177,12 @@ void main() {
       expect(find.byKey(const ValueKey('global-notice-toast')), findsOneWidget);
       expect(find.text(store.t('added')), findsOneWidget);
 
-      // Tap to dismiss immediately.
+      // Tap to dismiss immediately; once fade-out completes the toast unmounts
+      // so no invisible GlassContainer layer remains resident over the app.
       await tester.tap(find.byKey(const ValueKey('global-notice-toast')));
-      await frames(tester, count: 6);
-      final opacityAfterTap = tester.widget<AnimatedOpacity>(
-        find.ancestor(
-          of: find.byKey(const ValueKey('global-notice-toast')),
-          matching: find.byType(AnimatedOpacity),
-        ),
-      );
-      expect(opacityAfterTap.opacity, 0);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 260));
+      expect(find.byKey(const ValueKey('global-notice-toast')), findsNothing);
 
       // Trigger the exact same notice again and verify auto-dismiss after 2.6s.
       store.notice = store.t('added');
@@ -200,14 +196,8 @@ void main() {
       expect(opacityOnRepeat.opacity, 1);
 
       await tester.pump(const Duration(milliseconds: 2700));
-      await frames(tester, count: 6);
-      final opacityAfterTimeout = tester.widget<AnimatedOpacity>(
-        find.ancestor(
-          of: find.byKey(const ValueKey('global-notice-toast')),
-          matching: find.byType(AnimatedOpacity),
-        ),
-      );
-      expect(opacityAfterTimeout.opacity, 0);
+      await tester.pump(const Duration(milliseconds: 260));
+      expect(find.byKey(const ValueKey('global-notice-toast')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -566,6 +556,22 @@ void main() {
 
       final epBtn = find.byKey(const ValueKey('player-fullscreen-episodes'));
       expect(epBtn, findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('player-bottom-right-wing')),
+          matching: epBtn,
+        ),
+        findsOneWidget,
+      );
+
+      // The overflow settings menu does not duplicate the episodes action.
+      await tester.tap(find.bySemanticsLabel(store.t('playbackSettings')));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('player-menu-refresh')), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-menu-episodes')), findsNothing);
+      await tester.tapAt(const Offset(10, 100));
+      await frames(tester);
+
       await tester.tap(epBtn);
       await frames(tester);
       expect(
@@ -603,8 +609,83 @@ void main() {
       expect(nextPill, findsOneWidget);
       expect(find.textContaining(store.t('playNextEpisode')), findsOneWidget);
       await tester.tap(nextPill);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
       await frames(tester);
       expect(store.playingVideoId, '102');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'portrait player uses wider mobile media insets, 40pt top capsule, and separated time bar without overflow',
+    (tester) async {
+      final (store, _) = await createApp(
+        tester,
+        size: const Size(390, 844),
+        padding: const EdgeInsets.only(top: 44, bottom: 34),
+      );
+      final anime = store.catalog.items.first;
+      store
+        ..playingAnime = anime
+        ..playingVideoId = '101'
+        ..playerDetail = richDetail()
+        ..playback.value = const PlaybackState(
+          phase: PlaybackPhase.content,
+          surfaceReady: true,
+          paused: true,
+          duration: 1440,
+          position: 125,
+          hasDanmaku: true,
+        );
+
+      await tester.pumpWidget(
+        LiquidGlassWidgets.wrap(
+          brightnessResolver: Theme.maybeBrightnessOf,
+          theme: GlassThemeData.simple(quality: GlassQuality.standard),
+          child: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(390, 844),
+              padding: EdgeInsets.only(top: 44, bottom: 34),
+              viewPadding: EdgeInsets.only(top: 44, bottom: 34),
+            ),
+            child: MaterialApp(
+              home: PlayerPage(
+                store: store,
+                video: const ColoredBox(
+                  key: ValueKey('portrait-video-fixture'),
+                  color: Colors.black,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await frames(tester);
+
+      final videoRect = tester.getRect(
+        find.byKey(const ValueKey('portrait-video-fixture')),
+      );
+      final controlsRect = tester.getRect(
+        find.byKey(const ValueKey('video-glass-controls')),
+      );
+      final topCapsuleRect = tester.getRect(
+        find.byKey(const ValueKey('player-portrait-actions-capsule')),
+      );
+      final titleRect = tester.getRect(find.text(anime.title));
+
+      expect(videoRect.left, closeTo(12, .5));
+      expect(controlsRect.left, closeTo(12, .5));
+      expect(controlsRect.width, closeTo(videoRect.width, .5));
+      expect(titleRect.left, greaterThan(videoRect.left));
+      expect(topCapsuleRect.height, closeTo(40, 1));
+      expect(find.text('02:05'), findsOneWidget);
+      expect(find.text('24:00'), findsOneWidget);
+      expect(
+        tester.getSize(find.bySemanticsLabel(store.t('resumePlayback'))).height,
+        greaterThanOrEqualTo(44),
+      );
       expect(tester.takeException(), isNull);
     },
   );

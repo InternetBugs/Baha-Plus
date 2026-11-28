@@ -40,6 +40,7 @@ void main() {
       await diagnostics.initialize();
       expect(diagnostics.enabled, isFalse);
       expect(diagnostics.hasLogs, isFalse);
+      expect(await Directory('${root.path}/diagnostics').exists(), isFalse);
       diagnostics.record('before-consent');
       await diagnostics.start();
       diagnostics.record('reproduction', {'position': 42});
@@ -268,7 +269,9 @@ void main() {
         throwsA(isA<FileSystemException>()),
       );
       await retrying.initialize();
-      await Directory('${root.path}/diagnostics/current.jsonl').create();
+      await Directory(
+        '${root.path}/diagnostics/current.jsonl',
+      ).create(recursive: true);
       await expectLater(retrying.start(), throwsA(isA<FileSystemException>()));
       expect(retrying.writeFailed, isTrue);
       await Directory('${root.path}/diagnostics/current.jsonl').delete();

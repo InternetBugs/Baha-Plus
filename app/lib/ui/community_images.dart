@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -17,14 +18,21 @@ class CommentAvatar extends StatelessWidget {
       color: secondary(context),
       size: size,
     );
+    final cacheSize = (size * MediaQuery.devicePixelRatioOf(context))
+        .ceil()
+        .clamp(32, 512);
     return ClipOval(
       child: SizedBox(
         width: size,
         height: size,
         child: url == null
             ? fallback
-            : Image.network(
-                url!,
+            : Image(
+                image: CachedNetworkImageProvider(
+                  url!,
+                  maxWidth: cacheSize,
+                  maxHeight: cacheSize,
+                ),
                 key: ValueKey('comment-avatar-$url'),
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
@@ -50,46 +58,64 @@ class CommentAttachment extends StatelessWidget {
   final bool compact;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: store.t('viewAttachment'),
-    button: true,
-    child: GestureDetector(
-      key: ValueKey('comment-attachment-$url'),
-      onTap: () => Navigator.push<void>(
-        context,
-        SecondaryPageRoute(
-          keepsPlaybackVisible: store.showsPlayer,
-          builder: (_) => _AttachmentViewer(store: store, url: url),
-        ),
+  Widget build(BuildContext context) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    Widget buildImage({int? maxWidth, int? maxHeight}) => Image(
+      image: CachedNetworkImageProvider(
+        url,
+        maxWidth: maxWidth,
+        maxHeight: maxHeight,
       ),
-      child: ClipRSuperellipse(
-        borderRadius: BorderRadius.circular(16),
-        child: ConstrainedBox(
-          constraints: compact
-              ? const BoxConstraints.tightFor(width: 56, height: 56)
-              : const BoxConstraints(maxHeight: 260),
-          child: Image.network(
-            url,
-            fit: compact ? BoxFit.cover : BoxFit.contain,
-            gaplessPlayback: true,
-            alignment: Alignment.centerLeft,
-            loadingBuilder: (_, child, progress) => progress == null
-                ? child
-                : SizedBox(
-                    height: compact ? 56 : 160,
-                    child: const Center(child: CupertinoActivityIndicator()),
+      fit: compact ? BoxFit.cover : BoxFit.contain,
+      gaplessPlayback: true,
+      alignment: Alignment.centerLeft,
+      loadingBuilder: (_, child, progress) => progress == null
+          ? child
+          : SizedBox(
+              height: compact ? 56 : 160,
+              child: const Center(child: CupertinoActivityIndicator()),
+            ),
+      errorBuilder: (_, error, stack) => compact
+          ? Icon(
+              CupertinoIcons.photo,
+              semanticLabel: store.t('imageUnavailable'),
+            )
+          : _ImageUnavailable(store: store),
+    );
+    final compactCache = (56 * dpr).ceil().clamp(56, 512);
+    return Semantics(
+      label: store.t('viewAttachment'),
+      button: true,
+      child: GestureDetector(
+        key: ValueKey('comment-attachment-$url'),
+        onTap: () => Navigator.push<void>(
+          context,
+          SecondaryPageRoute(
+            keepsPlaybackVisible: store.showsPlayer,
+            builder: (_) => _AttachmentViewer(store: store, url: url),
+          ),
+        ),
+        child: ClipRSuperellipse(
+          borderRadius: BorderRadius.circular(16),
+          child: ConstrainedBox(
+            constraints: compact
+                ? const BoxConstraints.tightFor(width: 56, height: 56)
+                : const BoxConstraints(maxHeight: 260),
+            child: compact
+                ? buildImage(maxWidth: compactCache, maxHeight: compactCache)
+                : LayoutBuilder(
+                    builder: (context, constraints) => buildImage(
+                      maxWidth: constraints.hasBoundedWidth
+                          ? (constraints.maxWidth * dpr).ceil().clamp(1, 2048)
+                          : null,
+                      maxHeight: (260 * dpr).ceil().clamp(1, 2048),
+                    ),
                   ),
-            errorBuilder: (_, error, stack) => compact
-                ? Icon(
-                    CupertinoIcons.photo,
-                    semanticLabel: store.t('imageUnavailable'),
-                  )
-                : _ImageUnavailable(store: store),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _AttachmentViewer extends StatelessWidget {
@@ -101,6 +127,7 @@ class _AttachmentViewer extends StatelessWidget {
   Widget build(BuildContext context) => GlassScaffold(
     key: const ValueKey('comment-image-viewer'),
     edgeFade: false,
+    enableBackgroundSampling: false,
     backgroundColor: Colors.black,
     appBar: GlassAppBar(
       title: Text(
@@ -119,8 +146,8 @@ class _AttachmentViewer extends StatelessWidget {
       minScale: .5,
       maxScale: 5,
       child: Center(
-        child: Image.network(
-          url,
+        child: Image(
+          image: CachedNetworkImageProvider(url),
           fit: BoxFit.contain,
           gaplessPlayback: true,
           loadingBuilder: (_, child, progress) => progress == null

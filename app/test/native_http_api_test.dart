@@ -124,6 +124,77 @@ class HttpFixture {
 }
 
 void main() {
+  setUp(NativeHttpApi.clearAdCache);
+
+  test(
+    'metadata and policy are requested together after the device ID',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      final metadata = Completer<void>();
+      final policy = Completer<void>();
+      fixture.handler = (request) async {
+        if (request.url.path.endsWith('/video.php')) {
+          metadata.complete();
+          await policy.future;
+        }
+        if (request.url.path.endsWith('/token.php')) {
+          expect(request.url.queryParameters['device'], 'device-before-source');
+          policy.complete();
+          await metadata.future;
+        }
+        return fixture.response(request);
+      };
+      final api = fixture.api();
+      addTearDown(api.dispose);
+      expect((await api.prepare('40190')).ad, isNull);
+    },
+  );
+
+  test(
+    'parsed ad configuration is reused across episodes and can be cleared',
+    () async {
+      for (final (episode, count) in [
+        ('40190', 1),
+        ('40191', 0),
+        ('40192', 1),
+      ]) {
+        if (episode == '40192') NativeHttpApi.clearAdCache();
+        final fixture = HttpFixture();
+        final api = fixture.api();
+        addTearDown(api.dispose);
+        expect((await api.prepare(episode)).ad?.id, '123');
+        expect(fixture.count('animeVideo.js'), count);
+      }
+    },
+  );
+
+  test(
+    'large danmaku responses preserve entity decoding and sort order',
+    () async {
+      final fixture = HttpFixture(ads: false)
+        ..danmakuRows = [
+          for (var id = 600; id > 0; id--)
+            {
+              'sn': id,
+              'time': id,
+              'text':
+                  '&amp; &lt; &gt; &quot; &#39; &apos; &#x1f600;'
+                  '${id.isEven ? ' &copy;' : ''}',
+            },
+        ];
+      final api = fixture.api();
+      addTearDown(api.dispose);
+      await api.prepare('40190');
+      api.consent();
+      final items = await api.danmaku();
+      expect(items, hasLength(600));
+      expect(items.first.id, '1');
+      expect(items.first.text, '& < > " \' \' 😀');
+      expect(items[1].text, '& < > " \' \' 😀 ©');
+      expect(items.last.time, 60);
+    },
+  );
+
   for (final values in <(Object?, Object?, int)>[
     (3, 1, 3),
     (6, 1, 6),
@@ -507,6 +578,12 @@ void main() {
       expect(source.position, 10);
       expect(source.variants.keys, [360, 1080]);
       expect(source.variants[360]!.path, '/content/360.m3u8');
+      expect(source.seededPlaylists[source.master], masterPlaylist);
+      expect(
+        source.seededPlaylists[source.variants[360]],
+        contains('#EXTINF:1200'),
+      );
+      expect(source.seededPlaylists.keys, hasLength(2));
       expect(fixture.count('videoCastcishu.php'), 2);
       final policy = fixture.requests.firstWhere(
         (request) => request.url.path == '/ajax/token.php',

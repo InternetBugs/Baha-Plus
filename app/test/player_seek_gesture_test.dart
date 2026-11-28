@@ -1026,12 +1026,21 @@ void main() {
   );
 
   testSeekWidgets(
-    'fullscreen separates center transport controls from the slim bottom scrubber and adapts phone vs tablet sizing',
+    'fullscreen separates center transport controls from split-wing bottom controls and clears subtitles on phone and tablet',
     (tester) async {
       final portal = await launch(
         tester,
         size: const Size(844, 390),
         state: _playback(position: 125, duration: 1440),
+        detail: AnimeDetail.fromJson({
+          'title': 'Test Anime',
+          'description': 'Synopsis',
+          'episodes': [
+            {'id': '20', 'label': '1'},
+            {'id': '21', 'label': '2'},
+          ],
+          'metadata': [],
+        }),
       );
       final centerControls = find.byKey(
         const ValueKey('player-center-controls'),
@@ -1039,27 +1048,50 @@ void main() {
       final topCapsule = find.byKey(
         const ValueKey('player-top-actions-capsule'),
       );
+      final leftWing = find.byKey(const ValueKey('player-bottom-left-wing'));
+      final rightWing = find.byKey(const ValueKey('player-bottom-right-wing'));
+      final scrubber = find.byKey(const ValueKey('player-fullscreen-scrubber'));
       final closeBtn = find.byKey(const ValueKey('player-fullscreen-close'));
       final lockBtn = find.byKey(const ValueKey('player-lock'));
       final muteBtn = find.byKey(const ValueKey('player-mute-button'));
+      final episodesBtn = find.byKey(
+        const ValueKey('player-fullscreen-episodes'),
+      );
       final hitTarget = find.byKey(
         const ValueKey('player-scrubber-hit-target'),
       );
 
-      // Phone landscape: slim subtitle-clearing bottom bar + mute moved to top capsule.
+      // Phone landscape: full mobile-sized top/lock/center controls + split-wing bottom bar
+      // with a slim subtitle-clearing center scrubber.
       final phoneBar = tester.getRect(controls);
+      final phoneScrubber = tester.getRect(scrubber);
+      final phoneLeftWing = tester.getRect(leftWing);
+      final phoneRightWing = tester.getRect(rightWing);
       final phoneHitTarget = tester.getRect(hitTarget);
       final phoneCenter = tester.getRect(centerControls);
       final phoneTopCapsule = tester.getRect(topCapsule);
-      expect(phoneBar.height, closeTo(27, 1));
-      expect(390 - phoneBar.top, lessThanOrEqualTo(36));
-      expect(phoneHitTarget.height, greaterThanOrEqualTo(40));
+      expect(phoneScrubber.height, closeTo(27, 1));
+      expect(390 - phoneScrubber.top, lessThanOrEqualTo(36));
+      expect(phoneLeftWing.height, closeTo(38, 1));
+      expect(phoneRightWing.height, closeTo(38, 1));
+      expect(phoneBar.width, greaterThan(760));
+      expect(phoneHitTarget.height, greaterThanOrEqualTo(44));
       expect(phoneCenter.bottom, lessThan(phoneBar.top));
-      expect(tester.getSize(closeBtn), const Size(36, 36));
-      expect(tester.getSize(lockBtn), const Size(36, 36));
-      expect(phoneTopCapsule.height, closeTo(36, 1));
+      expect(phoneCenter.height, closeTo(64, 1));
+      expect(tester.getSize(closeBtn), const Size(44, 44));
+      expect(tester.getSize(lockBtn), const Size(44, 44));
+      expect(phoneTopCapsule.height, closeTo(44, 1));
+      expect(find.descendant(of: topCapsule, matching: muteBtn), findsNothing);
       expect(
-        find.descendant(of: topCapsule, matching: muteBtn),
+        find.descendant(of: topCapsule, matching: episodesBtn),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: rightWing, matching: muteBtn),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: rightWing, matching: episodesBtn),
         findsOneWidget,
       );
       expect(
@@ -1070,15 +1102,15 @@ void main() {
         findsNothing,
       );
       expect(
-        find.descendant(of: controls, matching: find.text('02:05')),
+        find.descendant(of: leftWing, matching: find.text('02:05')),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: controls, matching: find.text('24:00')),
+        find.descendant(of: rightWing, matching: find.text('24:00')),
         findsOneWidget,
       );
 
-      // Mute button in top capsule and center transport actions work as expected.
+      // Mute button in bottom-right wing and center transport actions work as expected.
       await tester.tap(muteBtn);
       await tester.pump();
       await tester.tap(find.byIcon(CupertinoIcons.gobackward_10));
@@ -1091,16 +1123,16 @@ void main() {
         ('pause', null),
       ]);
 
-      // iPhone landscape safe area keeps bottom footprint compact to clear hardcoded subtitles.
+      // iPhone landscape safe area keeps center scrubber compact to clear hardcoded subtitles.
       tester.view.padding = const FakeViewPadding(
         left: 59,
         right: 59,
         bottom: 21,
       );
       await tester.pump();
-      final iosSafeBar = tester.getRect(controls);
-      expect(iosSafeBar.height, closeTo(27, 1));
-      expect(390 - iosSafeBar.top, lessThanOrEqualTo(36));
+      final iosSafeScrubber = tester.getRect(scrubber);
+      expect(iosSafeScrubber.height, closeTo(27, 1));
+      expect(390 - iosSafeScrubber.top, lessThanOrEqualTo(36));
       tester.view.padding = FakeViewPadding.zero;
       await tester.pump();
 
@@ -1123,18 +1155,22 @@ void main() {
       await tester.pump();
       expect(centerControls, findsOneWidget);
 
-      // Tablet fullscreen scales up to 40pt top/lock controls and 32pt slim bottom pill.
+      // Tablet fullscreen keeps generous 44pt top/lock controls, 40pt wings, and 29pt center scrubber.
       tester.view.physicalSize = const Size(1180, 820);
       await tester.pump();
-      expect(tester.getRect(controls).height, closeTo(32, 1));
-      expect(tester.getSize(closeBtn), const Size(40, 40));
-      expect(tester.getSize(lockBtn), const Size(40, 40));
-      expect(tester.getRect(topCapsule).height, closeTo(40, 1));
+      expect(tester.getRect(scrubber).height, closeTo(29, 1));
+      expect(tester.getRect(leftWing).height, closeTo(40, 1));
+      expect(tester.getRect(rightWing).height, closeTo(40, 1));
+      expect(tester.getSize(closeBtn), const Size(44, 44));
+      expect(tester.getSize(lockBtn), const Size(44, 44));
+      expect(tester.getRect(topCapsule).height, closeTo(44, 1));
 
-      // Narrow Split View fullscreen stays overflow-free.
+      // Narrow Split View fullscreen collapses cleanly to a single bar and stays overflow-free.
       tester.view.physicalSize = const Size(320, 640);
       await tester.pump();
       expect(tester.getRect(controls).width, lessThanOrEqualTo(320));
+      expect(muteBtn, findsOneWidget);
+      expect(episodesBtn, findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

@@ -8,44 +8,28 @@ import 'chrome.dart';
 import 'glass_settings_menu.dart';
 
 const collapsedCommentLines = 3;
+final _numericEpisodeRe = RegExp(r'^\d+(?:\.\d+)?$');
+final _thousandsRe = RegExp(r'(?<!^)(?=(\d{3})+$)');
+
+/// Shared numeric episode label formatter used across watch history and
+/// community boards.
+String formatEpisodeNumberLabel(AppStore store, String rawLabel) =>
+    _numericEpisodeRe.hasMatch(rawLabel)
+    ? store.t('episodeNumber').replaceAll('{n}', rawLabel)
+    : rawLabel;
 
 ShapeDecoration communityCardDecoration(
   BuildContext context, {
   double borderRadius = BahaRadius.card,
   double tintAlpha = .05,
   Color? color,
-}) {
-  final theme = Theme.of(context);
-  final dark = theme.brightness == Brightness.dark;
-  return ShapeDecoration(
-    // Keep the surface opaque so its own shadow cannot darken the card body.
-    color:
-        color ??
-        Color.alphaBlend(
-          secondary(context).withValues(alpha: tintAlpha),
-          theme.scaffoldBackgroundColor,
-        ),
-    shape: RoundedSuperellipseBorder(
-      borderRadius: BorderRadius.circular(borderRadius),
-      side: BorderSide(
-        color: dark ? const Color(0x18ffffff) : const Color(0x0d000000),
-        width: 0.5,
-      ),
-    ),
-    shadows: [
-      BoxShadow(
-        color: Colors.black.withValues(alpha: dark ? .32 : .10),
-        blurRadius: 20,
-        offset: const Offset(0, 8),
-      ),
-      BoxShadow(
-        color: Colors.black.withValues(alpha: dark ? .20 : .06),
-        blurRadius: 4,
-        offset: const Offset(0, 2),
-      ),
-    ],
-  );
-}
+}) => bahaCardDecoration(
+  context,
+  borderRadius: borderRadius,
+  tintAlpha: tintAlpha,
+  community: true,
+  color: color,
+);
 
 String communityError(AppStore store, Object? error) {
   final code = error is CommunityException ? error.code : error;
@@ -72,90 +56,60 @@ String boardEpisodeLabel(
     }
   }
   if (label.isEmpty) return store.t('currentEpisode');
-  return RegExp(r'^\d+(?:\.\d+)?$').hasMatch(label)
-      ? store.t('episodeNumber').replaceAll('{n}', label)
-      : label;
+  return formatEpisodeNumberLabel(store, label);
 }
 
+/// Anchored Liquid Glass episode selector for switching episode comment boards.
 class BoardEpisodePicker extends StatelessWidget {
   const BoardEpisodePicker({
     required this.store,
     required this.videoId,
     required this.episodes,
     required this.onSelected,
-    this.label = '',
-    this.enabled = true,
+    this.fallbackLabel = '',
     super.key,
   });
+
   final AppStore store;
-  final String videoId, label;
+  final String videoId;
   final List<Episode> episodes;
   final ValueChanged<Episode> onSelected;
-  final bool enabled;
+  final String fallbackLabel;
 
   @override
   Widget build(BuildContext context) {
-    final title = boardEpisodeLabel(store, videoId, episodes, label: label);
-    if (episodes.length < 2) {
+    final currentLabel = boardEpisodeLabel(
+      store,
+      videoId,
+      episodes,
+      label: fallbackLabel,
+    );
+    if (episodes.length <= 1) {
       return Text(
-        title,
-        style: const TextStyle(color: brandBlue, fontSize: 13),
+        currentLabel,
+        style: TextStyle(color: secondary(context), fontSize: 13),
       );
     }
-    return Semantics(
-      label: store.t('selectBoardEpisode'),
-      button: true,
-      child: GlassSettingsMenu(
-        menuAlignment: GlassMenuAlignment.none,
-        items: [
-          for (final episode in episodes)
-            glassSettingsOptionItem(
-              context,
-              key: ValueKey('board-select-${episode.id}'),
-              title: boardEpisodeLabel(store, episode.id, episodes),
-              selected: episode.id == videoId,
-              onTap: () => onSelected(episode),
-            ),
-        ],
-        triggerBuilder: (context, toggleMenu) {
-          final pillHeight =
-              (MediaQuery.textScalerOf(context).scale(13) + 22).clamp(
-                38.0,
-                54.0,
-              );
-          return ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 120, maxWidth: 220),
-            child: GlassButton.custom(
-              key: const ValueKey('board-episode-selector'),
-              height: pillHeight,
-              shape: LiquidRoundedSuperellipse(borderRadius: pillHeight / 2),
-              onTap: enabled ? toggleMenu : () {},
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: brandBlue, fontSize: 13),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(
-                      CupertinoIcons.chevron_up_chevron_down,
-                      size: 12,
-                      color: brandBlue,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
+    return GlassSettingsMenu(
+      key: const ValueKey('board-episode-picker'),
+      menuAlignment: GlassMenuAlignment.topLeft,
+      items: [
+        for (final episode in episodes)
+          glassSettingsOptionItem(
+            context,
+            key: ValueKey('board-episode-${episode.id}'),
+            title: formatEpisodeNumberLabel(store, episode.label),
+            selected: episode.id == videoId,
+            onTap: () => onSelected(episode),
+          ),
+      ],
+      triggerBuilder: (context, toggle) => GlassActionPill(
+        label: currentLabel,
+        trailingIcon: CupertinoIcons.chevron_up_chevron_down,
+        height: 36,
+        fontSize: 13,
+        horizontalPadding: 14,
+        onTap: toggle,
       ),
     );
   }
@@ -206,63 +160,78 @@ class CommunityEmpty extends StatelessWidget {
 }
 
 class RatingSummaryCard extends StatelessWidget {
-  const RatingSummaryCard({required this.rating, super.key});
+  const RatingSummaryCard({required this.rating, this.store, super.key});
   final RatingSummary rating;
+  final AppStore? store;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: communityCardDecoration(
-      context,
-      borderRadius: 20,
-      tintAlpha: .06,
-    ),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 88, maxWidth: 132),
-            child: Column(
-              children: [
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    rating.value.toStringAsFixed(1),
-                    style: const TextStyle(
-                      fontSize: 38,
-                      height: 1,
-                      fontWeight: FontWeight.w700,
-                      color: brandBlue,
+  Widget build(BuildContext context) {
+    final formattedCount = _formatCount(rating.count);
+    final countSuffix =
+        store?.t(rating.count == 1 ? 'ratingSingular' : 'ratingPlural') ??
+        (Localizations.maybeLocaleOf(context)?.scriptCode == 'Hans'
+            ? '人评分'
+            : '人評分');
+    final countLabel = '$formattedCount$countSuffix';
+    return Semantics(
+      container: true,
+      label: '${rating.value.toStringAsFixed(1)} / 5.0, $countLabel',
+      excludeSemantics: true,
+      child: DecoratedBox(
+        decoration: communityCardDecoration(
+          context,
+          borderRadius: 20,
+          tintAlpha: .06,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 88, maxWidth: 132),
+                child: Column(
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        rating.value.toStringAsFixed(1),
+                        style: const TextStyle(
+                          fontSize: 38,
+                          height: 1,
+                          fontWeight: FontWeight.w700,
+                          color: brandBlue,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 7),
+                    Text(
+                      countLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: secondary(context), fontSize: 11),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 7),
-                Text(
-                  '${_formatCount(rating.count)}${Localizations.localeOf(context).scriptCode == 'Hans' ? '人评分' : '人評分'}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: secondary(context), fontSize: 11),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  children: [
+                    for (var star = 5; star >= 1; star--)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: _bar(context, star),
+                      ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              children: [
-                for (var star = 5; star >= 1; star--)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: _bar(context, star),
-                  ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _bar(BuildContext context, int star) {
     final count = rating.distribution[star - 1];
@@ -313,10 +282,8 @@ class RatingSummaryCard extends StatelessWidget {
     );
   }
 
-  String _formatCount(int value) => value.toString().replaceAllMapped(
-    RegExp(r'(?<!^)(?=(\d{3})+$)'),
-    (_) => ',',
-  );
+  String _formatCount(int value) =>
+      value.toString().replaceAllMapped(_thousandsRe, (_) => ',');
 }
 
 class CommunityComposer extends StatelessWidget {
@@ -327,7 +294,9 @@ class CommunityComposer extends StatelessWidget {
     required this.sending,
     required this.onSend,
     required this.maximum,
+    this.countRunes = false,
     this.error,
+    this.errorAction,
     this.replyName,
     this.cancelReply,
     this.focusNode,
@@ -340,7 +309,9 @@ class CommunityComposer extends StatelessWidget {
   final bool sending;
   final VoidCallback? onSend;
   final int maximum;
+  final bool countRunes;
   final String? error, replyName;
+  final Widget? errorAction;
   final VoidCallback? cancelReply;
   final FocusNode? focusNode;
   final bool embedded;
@@ -363,11 +334,20 @@ class CommunityComposer extends StatelessWidget {
                   style: const TextStyle(color: brandBlue, fontSize: 12),
                 ),
               ),
-              CupertinoButton(
-                padding: const EdgeInsets.all(4),
-                minimumSize: const Size(32, 32),
-                onPressed: cancelReply,
-                child: const Icon(CupertinoIcons.xmark_circle_fill, size: 18),
+              Semantics(
+                button: true,
+                label: store.t('cancelReply'),
+                excludeSemantics: true,
+                onTap: cancelReply,
+                child: CupertinoButton(
+                  padding: const EdgeInsets.all(4),
+                  minimumSize: const Size(32, 32),
+                  onPressed: cancelReply,
+                  child: const Icon(
+                    CupertinoIcons.xmark_circle_fill,
+                    size: 18,
+                  ),
+                ),
               ),
             ],
           ),
@@ -382,7 +362,7 @@ class CommunityComposer extends StatelessWidget {
                 enabled: !sending,
                 minLines: 1,
                 maxLines: 3,
-                maxLength: maximum,
+                maxLength: countRunes ? null : maximum,
                 style: const TextStyle(fontSize: 14, height: 1.5),
                 decoration: InputDecoration(
                   hintText: hint,
@@ -394,41 +374,84 @@ class CommunityComposer extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            ValueListenableBuilder(
+            ValueListenableBuilder<TextEditingValue>(
               valueListenable: controller,
-              builder: (context, value, child) => Semantics(
-                label: store.t('send'),
-                button: true,
-                child: CupertinoButton(
-                  minimumSize: const Size(44, 44),
-                  padding: EdgeInsets.zero,
-                  onPressed: sending || value.text.trim().isEmpty
-                      ? null
-                      : onSend,
-                  child: sending
-                      ? const CupertinoActivityIndicator()
-                      : Icon(
-                          CupertinoIcons.arrow_up_circle_fill,
-                          size: 34,
-                          color: onSend == null || value.text.trim().isEmpty
-                              ? secondary(context)
-                              : brandBlue,
-                        ),
-                ),
-              ),
+              builder: (context, value, child) {
+                final trimmed = value.text.trim();
+                final overLimit =
+                    countRunes && trimmed.runes.length > maximum;
+                final canSubmit =
+                    !sending &&
+                    onSend != null &&
+                    trimmed.isNotEmpty &&
+                    !overLimit;
+                return Semantics(
+                  label: store.t('send'),
+                  button: true,
+                  child: CupertinoButton(
+                    minimumSize: const Size(44, 44),
+                    padding: EdgeInsets.zero,
+                    onPressed: canSubmit ? onSend : null,
+                    child: sending
+                        ? const CupertinoActivityIndicator()
+                        : Icon(
+                            CupertinoIcons.arrow_up_circle_fill,
+                            size: 34,
+                            color: canSubmit ? brandBlue : secondary(context),
+                          ),
+                  ),
+                );
+              },
             ),
           ],
         ),
+        if (countRunes)
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final count = value.text.trim().runes.length;
+              final threshold = (maximum * 0.8).floor();
+              if (count < threshold) return const SizedBox.shrink();
+              final exceeded = count > maximum;
+              return Padding(
+                key: const ValueKey('community-rune-counter'),
+                padding: const EdgeInsets.only(right: 8, bottom: 4),
+                child: Text(
+                  exceeded
+                      ? '${store.t('commentLengthExceeded').replaceAll('{max}', '$maximum')} ($count / $maximum)'
+                      : '$count / $maximum',
+                  style: TextStyle(
+                    color: exceeded
+                        ? Theme.of(context).colorScheme.error
+                        : secondary(context),
+                    fontSize: 11.5,
+                    height: 1.4,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              );
+            },
+          ),
         if (error != null)
           Padding(
-            padding: const EdgeInsets.only(right: 8, bottom: 4),
-            child: Text(
-              error!,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontSize: 12,
-                height: 1.5,
-              ),
+            padding: const EdgeInsets.only(top: 2, right: 4, bottom: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+                if (errorAction != null) ...[
+                  const SizedBox(width: 8),
+                  errorAction!,
+                ],
+              ],
             ),
           ),
       ],

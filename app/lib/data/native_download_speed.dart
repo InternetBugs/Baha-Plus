@@ -18,7 +18,7 @@ class NativeDownloadSpeed {
   final void Function(double) onSpeed;
   final MethodChannel _channel;
   final int Function()? _elapsedMicroseconds;
-  final Map<String, int> Function()? _counters;
+  Map<String, int> Function()? _counters;
   final _clock = Stopwatch()..start();
   String? _document;
   Timer? _timer;
@@ -30,9 +30,10 @@ class NativeDownloadSpeed {
     _document = document;
     final session = ++_session;
     _revision++;
+    _reset();
+    _supported = _counters != null;
+    _sync();
     if (_counters != null) {
-      _supported = true;
-      _sync();
       return;
     }
     try {
@@ -48,6 +49,11 @@ class NativeDownloadSpeed {
     } on PlatformException {
       // Statistics must never delay or interrupt media initialization.
     }
+  }
+
+  Future<void> usePlatformCounters(String document, List<String> sources) {
+    _counters = null;
+    return start(document, sources);
   }
 
   void setEnabled(bool enabled) {

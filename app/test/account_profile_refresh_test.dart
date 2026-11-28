@@ -150,7 +150,7 @@ void main() {
       for (final expired in [false, true]) {
         if (expired) {
           await AccountCache(storage).save({
-            ...snapshot,
+            ...snapshot.toJson(),
             'profileCheckedAt': DateTime.now()
                 .subtract(const Duration(days: 1))
                 .millisecondsSinceEpoch,
@@ -289,28 +289,31 @@ void main() {
     });
   }
 
-  test('a guest confirmation cannot clear a newer authenticated sync', () async {
-    final (store, account, storage) = await setup();
-    final started = Completer<void>(), result = Completer<Json?>();
-    account.profileLoader = () async {
-      if (account.profileReads == 1) return null;
-      started.complete();
-      return result.future;
-    };
-    final checking = store.refreshAccountProfile();
-    await started.future;
-    account.accountLoader = () async => {
-      'profile': _newProfile,
-      'favorites': [],
-      'history': [],
-    };
-    await store.syncAccount();
-    result.complete(null);
-    expect(await checking, isFalse);
-    expect(store.accountProfile?.toJson(), _newProfile);
-    expect((await AccountCache(storage).load())!['profile'], _newProfile);
-    expect(store.accountNeedsRefresh, isFalse);
-  });
+  test(
+    'a guest confirmation cannot clear a newer authenticated sync',
+    () async {
+      final (store, account, storage) = await setup();
+      final started = Completer<void>(), result = Completer<Json?>();
+      account.profileLoader = () async {
+        if (account.profileReads == 1) return null;
+        started.complete();
+        return result.future;
+      };
+      final checking = store.refreshAccountProfile();
+      await started.future;
+      account.accountLoader = () async => {
+        'profile': _newProfile,
+        'favorites': [],
+        'history': [],
+      };
+      await store.syncAccount();
+      result.complete(null);
+      expect(await checking, isFalse);
+      expect(store.accountProfile?.toJson(), _newProfile);
+      expect((await AccountCache(storage).load())!['profile'], _newProfile);
+      expect(store.accountNeedsRefresh, isFalse);
+    },
+  );
 
   test('a delayed sync confirmation cannot restore a previous owner', () async {
     final (store, account, storage) = await setup();

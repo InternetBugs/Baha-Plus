@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' show PlatformDispatcher, Rect;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -30,6 +31,8 @@ class AppDiagnostics extends ChangeNotifier {
   Directory? _directory;
   Future<void>? _initializing;
   Future<void> _pending = Future.value();
+  final _buffer = <List<int>>[];
+  Timer? _flushTimer;
   bool _enabled = false, _writeFailed = false, _hooksInstalled = false;
   bool _disposed = false;
   bool _hasLogs = false;
@@ -47,6 +50,7 @@ class AppDiagnostics extends ChangeNotifier {
     // Queued writes outlive their producer; they must not notify a disposed
     // notifier when a session ends mid-write.
     _disposed = true;
+    _scheduleAppend();
     super.dispose();
   }
 
@@ -63,17 +67,22 @@ class AppDiagnostics extends ChangeNotifier {
   Future<void> _open() async {
     final root = await _directoryLoader();
     final directory = Directory('${root.path}/diagnostics');
-    await directory.create(recursive: true);
     final flag = File('${directory.path}/enabled');
-    final enabled = await flag.exists() && await flag.readAsString() == 'true';
     final current = File('${directory.path}/current.jsonl');
-    _currentBytes = await current.exists() ? await current.length() : 0;
-    _hasLogs =
-        _currentBytes > 0 ||
-        await File('${directory.path}/previous.jsonl').exists();
+    final (isEnabled, size, previousExists) = await (
+      flag.exists().then(
+        (exists) async => exists && await flag.readAsString() == 'true',
+      ),
+      current.exists().then(
+        (exists) async => exists ? await current.length() : 0,
+      ),
+      File('${directory.path}/previous.jsonl').exists(),
+    ).wait;
+    _currentBytes = size;
+    _hasLogs = size > 0 || previousExists;
     _directory = directory;
-    _enabled = enabled;
-    if (enabled) record('capture.resumed');
+    _enabled = isEnabled;
+    if (isEnabled) record('capture.resumed');
     notifyListeners();
   }
 
@@ -96,9 +105,11 @@ class AppDiagnostics extends ChangeNotifier {
 
   Future<void> start() async {
     await initialize();
+    _scheduleAppend();
     await _pending;
     // Retain earlier sessions until the user explicitly clears them. This also
     // preserves the tail of a session that ended with a process crash.
+    await _directory!.create(recursive: true);
     await _flag.writeAsString('true', flush: true);
     _writeFailed = false;
     _enabled = true;
@@ -112,21 +123,23 @@ class AppDiagnostics extends ChangeNotifier {
     record('capture.stopped');
     _enabled = false;
     notifyListeners();
-    await _flag.writeAsString('false', flush: true);
+    _scheduleAppend();
+    if (await _flag.exists()) await _flag.writeAsString('false', flush: true);
     await flush();
   }
 
   void recordError(String event, Object error, [StackTrace? stack]) {
+    if (!_enabled) return;
     record(event, {
       'type': error.runtimeType.toString(),
-      if (error is PlatformException &&
-          RegExp(r'^[\w.-]{1,64}$').hasMatch(error.code))
+      if (error is PlatformException && _errorCode.hasMatch(error.code))
         'code': error.code,
       // Native exceptions frequently embed signed media URLs or headers in
       // their messages/details. Stack frames carry the useful code locations.
       if (stack != null)
         'stack': stack.toString().split('\n').take(24).toList(),
     });
+    _scheduleAppend();
   }
 
   void record(String event, [Map<String, Object?> data = const {}]) {
@@ -135,46 +148,71 @@ class AppDiagnostics extends ChangeNotifier {
       _droppedEntries++;
       return;
     }
-    var line =
-        '${jsonEncode({'time': DateTime.now().toUtc().toIso8601String(), 'event': _cleanString(event), 'data': _clean(data)})}\n';
-    if (utf8.encode(line).length > maxEntryBytes) {
-      line =
-          '${jsonEncode({
-            'time': DateTime.now().toUtc().toIso8601String(),
-            'event': _cleanString(event),
-            'data': {'truncated': true},
-          })}\n';
+    final time = DateTime.now().toUtc().toIso8601String();
+    final name = _cleanString(event);
+    var bytes = utf8.encode(
+      '${jsonEncode({'time': time, 'event': name, 'data': _clean(data)})}\n',
+    );
+    if (bytes.length > maxEntryBytes) {
+      bytes = utf8.encode(
+        '${jsonEncode({
+          'time': time,
+          'event': name,
+          'data': {'truncated': true},
+        })}\n',
+      );
     }
     _queuedEntries++;
+    _buffer.add(bytes);
     if (!_hasLogs) {
       _hasLogs = true;
       if (!_disposed) notifyListeners();
     }
+    _flushTimer ??= Timer(const Duration(milliseconds: 200), _scheduleAppend);
+  }
+
+  void _scheduleAppend() {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    if (_buffer.isEmpty) return;
+    final lines = List<List<int>>.of(_buffer);
+    _buffer.clear();
     _pending = _pending
         .then((_) async {
-          final bytes = utf8.encode(line);
-          if (_currentBytes + bytes.length > maxFileBytes) {
-            if (await _previous.exists()) await _previous.delete();
-            if (await _current.exists()) {
-              await _current.rename(_previous.path);
-            }
-            _currentBytes = 0;
+          final batch = BytesBuilder(copy: false);
+          Future<void> appendBatch() async {
+            if (batch.isEmpty) return;
+            final bytes = batch.takeBytes();
+            await _current.writeAsBytes(
+              bytes,
+              mode: FileMode.append,
+              flush: true,
+            );
+            _currentBytes += bytes.length;
           }
-          await _current.writeAsBytes(
-            bytes,
-            mode: FileMode.append,
-            flush: true,
-          );
-          _currentBytes += bytes.length;
+
+          for (final line in lines) {
+            if (_currentBytes + batch.length + line.length > maxFileBytes) {
+              await appendBatch();
+              if (await _previous.exists()) await _previous.delete();
+              if (await _current.exists()) {
+                await _current.rename(_previous.path);
+              }
+              _currentBytes = 0;
+            }
+            batch.add(line);
+          }
+          await appendBatch();
         })
         .catchError((Object _) {
           _writeFailed = true;
           if (!_disposed) notifyListeners();
         })
-        .whenComplete(() => _queuedEntries--);
+        .whenComplete(() => _queuedEntries -= lines.length);
   }
 
   Future<void> flush() async {
+    _scheduleAppend();
     await _pending;
     if (_writeFailed) {
       throw const FileSystemException('Diagnostic write failed');
@@ -187,6 +225,7 @@ class AppDiagnostics extends ChangeNotifier {
     final wasEnabled = _enabled;
     _enabled = false;
     try {
+      _scheduleAppend();
       await _pending;
       for (final file in [_current, _previous]) {
         if (await file.exists()) await file.delete();
@@ -201,6 +240,7 @@ class AppDiagnostics extends ChangeNotifier {
       notifyListeners();
     }
     record('capture.cleared');
+    await flush();
   }
 
   /// Keep a single immutable report for sharing. The journal remains private.
@@ -224,6 +264,7 @@ class AppDiagnostics extends ChangeNotifier {
       ..writeln('--- Events (UTC, oldest first) ---');
     // Serialize the snapshot with append/rotation, including events arriving
     // while native package metadata is being loaded.
+    _scheduleAppend();
     final snapshot = _pending.then((_) async {
       if (_writeFailed) {
         throw const FileSystemException('Diagnostic write failed');
@@ -294,6 +335,7 @@ class AppDiagnostics extends ChangeNotifier {
     r'cookie|authorization|password|token|secret|csrf|account|email|username|userid|^document$|url|uri|headers|^body$',
     caseSensitive: false,
   );
+  static final _errorCode = RegExp(r'^[\w.-]{1,64}$');
   static final _url = RegExp(
     r'''(?:https?|file|content)://[^\s"'<>]+''',
     caseSensitive: false,

@@ -23,6 +23,7 @@ jobs:
   validate:
     name: Validate release request
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -43,6 +44,29 @@ jobs:
             exit 1
           fi
           python3 tools/release_version.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Verify adapters and build tools
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run resources:check
+          npm run typecheck
+          npm test
+          python3 -m unittest discover -s tests -p 'test_*.py'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.9"
+      - name: Verify Flutter
+        working-directory: app
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          flutter analyze --no-pub
+          flutter test --no-pub
+          flutter test --no-pub --dart-define=BAHA_DIAGNOSTICS=true test/native_http_playback_test.dart test/native_playback_test.dart
       - name: Prepare release notes
         env:
           GH_TOKEN: ${{ github.token }}

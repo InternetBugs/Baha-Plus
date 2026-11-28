@@ -30,6 +30,17 @@ void main() {
     );
   });
 
+  test(
+    'large official pages parse in an isolate and preserve typed identity',
+    () async {
+      final padding = List.filled(33000, 'a').join();
+      final document = await parseOfficialHtml(
+        '$heading$owner$menu<!--$padding-->',
+      );
+      expect(parseOfficialAccountProfile(document)?.displayName, '讀者');
+    },
+  );
+
   const publicProfile = '''
 <div class="main-container_header_guildimg">
   <img id="avatar_img" src="https://avatar2.bahamut.com.tw/reader.png?v=3">

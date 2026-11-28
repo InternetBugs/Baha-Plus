@@ -178,6 +178,29 @@ void main() {
     expect(lanes.decisionCount, 0);
   });
 
+  test('rolling lanes require clearance and prevent overtaking', () {
+    final lanes = StableDanmakuLanes()..prepare(position: 0, laneCount: 1);
+    int? rolling(String id, double start, double end, double width) =>
+        lanes.assign(
+          id: id,
+          mode: 'rolling',
+          start: start,
+          end: end,
+          width: width,
+          viewportWidth: 300,
+        );
+
+    expect(rolling('first', 0, 10, 60), 0);
+    expect(rolling('too close', 2, 12, 60), isNull);
+    expect(rolling('too fast', 3, 9, 60), isNull);
+    expect(rolling('safe', 3, 13, 60), 0);
+    lanes.pruneExpired(12);
+    expect(lanes.decisionCount, 1);
+    expect(rolling('safe', 3, 13, 60), 0);
+    lanes.clear();
+    expect(rolling('new', 0, 10, 60), 0);
+  });
+
   test(
     'seeking backwards and changing the viewport release old lane decisions',
     () {

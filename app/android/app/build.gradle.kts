@@ -53,6 +53,9 @@ android {
 
     buildTypes {
         release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Local builds retain their existing debug signature unless a release key is provided.
             signingConfig = signingConfigs.getByName(
                 if (releaseKeystore.isNullOrBlank()) "debug" else "production"

@@ -30,6 +30,28 @@ Json _json() => {
 };
 
 void main() {
+  test('equivalent playback samples do not notify listeners', () {
+    PlaybackState sample({double end = 80}) => PlaybackState.fromJson({
+      ..._json(),
+      'qualities': [1080, 360],
+      'quality': 360,
+      'bufferedRanges': [
+        [0, end],
+      ],
+    });
+    final initial = sample();
+    expect(initial, sample());
+    expect(initial.hashCode, sample().hashCode);
+    final playback = ValueNotifier(initial);
+    addTearDown(playback.dispose);
+    var notifications = 0;
+    playback.addListener(() => notifications++);
+    playback.value = sample();
+    expect(notifications, 0);
+    playback.value = sample(end: 81);
+    expect(notifications, 1);
+  });
+
   test(
     'buffer intervals preserve gaps, legacy endpoints and empty buffers',
     () {

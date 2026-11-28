@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import '../core/models.dart';
 import '../data/app_store.dart';
 import 'chrome.dart';
+import 'community_widgets.dart' show formatEpisodeNumberLabel;
 import 'layout.dart';
 export 'home_content.dart';
 
@@ -102,9 +104,7 @@ class ContinueCard extends StatelessWidget {
 
   String _summary() {
     final label = entry.episodeLabel.trim();
-    final episode = RegExp(r'^\d+(?:\.\d+)?$').hasMatch(label)
-        ? store.t('episodeNumber').replaceAll('{n}', label)
-        : label;
+    final episode = formatEpisodeNumberLabel(store, label);
     final watchedTo = store
         .t('historyWatchedTo')
         .replaceAll('{episode}', episode);
@@ -522,6 +522,7 @@ class SearchContent extends StatelessWidget {
             children: [
               SectionHeading(
                 store.t('recommended'),
+                actionLabel: store.t('expandSection'),
                 onTap: () => store.selectTab(2, filter: 'hot'),
               ),
               if (recColumns == 1)
@@ -559,6 +560,7 @@ class SearchContent extends StatelessWidget {
               const SizedBox(height: 26),
               SectionHeading(
                 store.t('browse'),
+                actionLabel: store.t('expandSection'),
                 onTap: () => store.selectTab(2, filter: 'all'),
               ),
               const SizedBox(height: 16),
@@ -601,43 +603,48 @@ class SearchContent extends StatelessWidget {
     Anime? anime,
     Color color, {
     double height = 116,
-  }) => PressableSurface(
-    onTap: () => store.selectTab(2, filter: filter),
-    child: ClipRSuperellipse(
-      borderRadius: BorderRadius.circular(BahaRadius.tile),
-      child: SizedBox(
-        height: height,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            ColoredBox(color: color),
-            if (anime != null) Artwork(anime.cover),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    color.withValues(alpha: .78),
-                  ],
-                ),
-              ),
-            ),
-            Align(
-              alignment: Alignment.bottomLeft,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
+  }) => Semantics(
+    button: true,
+    label: title,
+    excludeSemantics: true,
+    child: PressableSurface(
+      onTap: () => store.selectTab(2, filter: filter),
+      child: ClipRSuperellipse(
+        borderRadius: BorderRadius.circular(BahaRadius.tile),
+        child: SizedBox(
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: color),
+              if (anime != null) Artwork(anime.cover, height: height),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      color.withValues(alpha: .78),
+                    ],
                   ),
                 ),
               ),
-            ),
-          ],
+              Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -653,10 +660,25 @@ class SearchStatus extends StatelessWidget {
     child: Center(
       child: store.searching
           ? const CupertinoActivityIndicator()
-          : Text(
-              store.t(store.searchFailed ? 'searchUnavailable' : 'noResults'),
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  store.t(
+                    store.searchFailed ? 'searchUnavailable' : 'noResults',
+                  ),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                if (store.searchFailed) ...[
+                  const SizedBox(height: 16),
+                  GlassActionPill(
+                    key: const ValueKey('search-retry-button'),
+                    label: store.t('retry'),
+                    onTap: store.search,
+                  ),
+                ],
+              ],
             ),
     ),
   );
@@ -763,6 +785,44 @@ class LibraryContent extends StatelessWidget {
                     ],
                   ),
                 )
+              else if (items.isEmpty &&
+                  store.libraryFilter == 'favorites' &&
+                  store.accountSynced)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 44),
+                  child: Column(
+                    children: [
+                      Icon(
+                        CupertinoIcons.heart,
+                        size: 44,
+                        color: secondary(context),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        store.t('noFavorites'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        store.t('noFavoritesHint'),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: secondary(context),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      GlassActionPill(
+                        key: const ValueKey('library-empty-favorites-discover'),
+                        label: store.t('discover'),
+                        minWidth: 148,
+                        height: 44,
+                        onTap: () => store.selectTab(0),
+                      ),
+                    ],
+                  ),
+                )
               else if (items.isEmpty)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 40),
@@ -785,10 +845,42 @@ class LibraryContent extends StatelessWidget {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.only(top: 24),
-              child: Text(
-                store.t('libraryScopeHint'),
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: secondary(context)),
+              child: Column(
+                children: [
+                  if (store.libraryCatalogLoading)
+                    const CupertinoActivityIndicator()
+                  else if (store.libraryCatalogError != null) ...[
+                    Text(
+                      store.t('catalogUnavailable'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: secondary(context)),
+                    ),
+                    const SizedBox(height: 12),
+                    GlassActionPill(
+                      key: const ValueKey('library-load-more'),
+                      label: store.t('retry'),
+                      onTap: () => unawaited(store.loadMoreLibraryCatalog()),
+                    ),
+                  ] else if (store.libraryCatalogHasMore) ...[
+                    GlassActionPill(
+                      key: const ValueKey('library-load-more'),
+                      icon: CupertinoIcons.plus,
+                      label: store.t('loadMoreCatalog'),
+                      onTap: () => unawaited(store.loadMoreLibraryCatalog()),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      store.t('libraryScopeHint'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: secondary(context)),
+                    ),
+                  ] else
+                    Text(
+                      store.t('libraryCatalogEnd'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: secondary(context)),
+                    ),
+                ],
               ),
             ),
           ),
@@ -810,15 +902,54 @@ class ScheduleContent extends StatefulWidget {
 }
 
 class _ScheduleContentState extends State<ScheduleContent> {
+  static const _dayStorageKey = 'schedule-selected-day';
   int day = DateTime.now().toUtc().add(const Duration(hours: 8)).weekday % 7;
+  bool _restoredDay = false;
+  List<Anime>? _cachedSeasonalSource;
+  int? _cachedDay;
+  List<Anime> _cachedItems = const [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_restoredDay) return;
+    _restoredDay = true;
+    final stored = PageStorage.maybeOf(context)?.readState(
+      context,
+      identifier: _dayStorageKey,
+    );
+    if (stored is int && stored >= 0 && stored <= 6) {
+      day = stored;
+    }
+  }
+
+  List<Anime> _itemsFor(List<Anime> seasonal) {
+    if (identical(_cachedSeasonalSource, seasonal) && _cachedDay == day) {
+      return _cachedItems;
+    }
+    _cachedSeasonalSource = seasonal;
+    _cachedDay = day;
+    _cachedItems = seasonal.where((e) => e.updateDay == day).toList()
+      ..sort((a, b) => (a.updateTime ?? '').compareTo(b.updateTime ?? ''));
+    return _cachedItems;
+  }
+
+  void _selectDay(int nextDay) {
+    PageStorage.maybeOf(context)?.writeState(
+      context,
+      nextDay,
+      identifier: _dayStorageKey,
+    );
+    setState(() => day = nextDay);
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = widget.store;
     final days = store.simplified
         ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
         : ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
-    final items = store.seasonal.where((e) => e.updateDay == day).toList()
-      ..sort((a, b) => (a.updateTime ?? '').compareTo(b.updateTime ?? ''));
+    final items = _itemsFor(store.seasonal);
     return LayoutBuilder(
       builder: (context, bounds) {
         final wide = bounds.maxWidth >= 640;
@@ -835,7 +966,7 @@ class _ScheduleContentState extends State<ScheduleContent> {
           labelPadding: EdgeInsets.symmetric(horizontal: wide ? 18 : 11),
           selectedIndex: order.indexOf(day).clamp(0, order.length - 1),
           segments: [for (final index in order) GlassSegment(label: days[index])],
-          onSegmentSelected: (index) => setState(() => day = order[index]),
+          onSegmentSelected: (index) => _selectDay(order[index]),
         );
         return Column(
           children: [
@@ -852,7 +983,23 @@ class _ScheduleContentState extends State<ScheduleContent> {
             if (items.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 50),
-                child: Text(store.t('noUpdates')),
+                child: Column(
+                  children: [
+                    Text(
+                      store.t('noUpdates'),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      store.t('noUpdatesHint'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: secondary(context),
+                      ),
+                    ),
+                  ],
+                ),
               )
             else if (columns == 1)
               for (final anime in items) _compactRow(context, anime)
@@ -891,106 +1038,128 @@ class _ScheduleContentState extends State<ScheduleContent> {
   Widget _compactRow(BuildContext context, Anime anime) {
     final textScaler = MediaQuery.textScalerOf(context);
     final timeMinWidth = math.max(44.0, textScaler.scale(38.0));
-    return PressableSurface(
+    return Semantics(
+      button: true,
+      label: [
+        if (anime.updateTime != null && anime.updateTime!.isNotEmpty)
+          anime.updateTime!,
+        anime.title,
+        if (anime.episodeLabel != null && anime.episodeLabel!.isNotEmpty)
+          anime.episodeLabel!,
+      ].join(', '),
+      excludeSemantics: true,
+      child: PressableSurface(
+        pressedScale: 0.985,
+        onTap: () => widget.openDetail(anime),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(minWidth: timeMinWidth),
+                child: Text(
+                  anime.updateTime ?? '',
+                  maxLines: 1,
+                  style: TextStyle(fontSize: 12, color: secondary(context)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ClipRSuperellipse(
+                borderRadius: BorderRadius.circular(BahaRadius.thumb),
+                child: Artwork(anime.cover, width: 88, height: 58),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      anime.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      anime.episodeLabel ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: secondary(context)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tabletCard(BuildContext context, Anime anime) => Semantics(
+    button: true,
+    label: [
+      if (anime.updateTime != null && anime.updateTime!.isNotEmpty)
+        anime.updateTime!,
+      anime.title,
+      if (anime.episodeLabel != null && anime.episodeLabel!.isNotEmpty)
+        anime.episodeLabel!,
+    ].join(', '),
+    excludeSemantics: true,
+    child: PressableSurface(
       pressedScale: 0.985,
       onTap: () => widget.openDetail(anime),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: bahaCardDecoration(
+          context,
+          borderRadius: BahaRadius.tile,
+          tintAlpha: .055,
+        ),
         child: Row(
           children: [
-            ConstrainedBox(
-              constraints: BoxConstraints(minWidth: timeMinWidth),
-              child: Text(
-                anime.updateTime ?? '',
-                maxLines: 1,
-                style: TextStyle(fontSize: 12, color: secondary(context)),
-              ),
-            ),
-            const SizedBox(width: 12),
             ClipRSuperellipse(
               borderRadius: BorderRadius.circular(BahaRadius.thumb),
-              child: Artwork(anime.cover, width: 88, height: 58),
+              child: Artwork(anime.cover, width: 104, height: 64),
             ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (anime.updateTime != null && anime.updateTime!.isNotEmpty)
+                    Text(
+                      anime.updateTime!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: brandBlue,
+                      ),
+                    ),
+                  const SizedBox(height: 4),
                   Text(
                     anime.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    anime.episodeLabel ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: secondary(context)),
-                  ),
+                  if (anime.episodeLabel != null &&
+                      anime.episodeLabel!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      anime.episodeLabel!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: secondary(context)),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _tabletCard(BuildContext context, Anime anime) => PressableSurface(
-    pressedScale: 0.985,
-    onTap: () => widget.openDetail(anime),
-    child: Container(
-      padding: const EdgeInsets.all(14),
-      decoration: bahaCardDecoration(
-        context,
-        borderRadius: BahaRadius.tile,
-        tintAlpha: .055,
-      ),
-      child: Row(
-        children: [
-          ClipRSuperellipse(
-            borderRadius: BorderRadius.circular(BahaRadius.thumb),
-            child: Artwork(anime.cover, width: 104, height: 64),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (anime.updateTime != null && anime.updateTime!.isNotEmpty)
-                  Text(
-                    anime.updateTime!,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: brandBlue,
-                    ),
-                  ),
-                const SizedBox(height: 4),
-                Text(
-                  anime.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (anime.episodeLabel != null &&
-                    anime.episodeLabel!.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    anime.episodeLabel!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: secondary(context)),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
       ),
     ),
   );

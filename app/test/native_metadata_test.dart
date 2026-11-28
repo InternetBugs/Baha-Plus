@@ -201,6 +201,73 @@ void main() {
     },
   );
 
+  test(
+    'detail becomes available before rating and is reused on reopen',
+    () async {
+      final pending = Completer<RatingSummary>();
+      final ratingStarted = Completer<void>();
+      final api = FakeMetadata();
+      api.detailLoader = (_, video) async =>
+          _detail(_anime.title, video).copyWith(fanId: '31');
+      api.ratingLoader = (fanId) {
+        expect(fanId, '31');
+        ratingStarted.complete();
+        return pending.future;
+      };
+      final store = await create(api);
+      await store.openDetail(_anime);
+      await ratingStarted.future;
+      expect(store.detailLoading, isFalse);
+      expect(store.detail!.episodes.single.id, '20');
+      expect(store.detail!.rating, isNull);
+
+      final rated = Completer<void>();
+      store.detailNotifier.addListener(() {
+        if (store.detail?.rating != null && !rated.isCompleted) {
+          rated.complete();
+        }
+      });
+      pending.complete(
+        RatingSummary.fromJson({
+          'value': 5,
+          'count': 1,
+          'distribution': [0, 0, 0, 0, 1],
+        }),
+      );
+      await rated.future;
+      await store.openDetail(_anime);
+      expect(api.detailRequests, hasLength(1));
+      expect(store.detail!.rating!.value, 5);
+    },
+  );
+
+  test('library merges catalog and pages and emits scoped changes', () async {
+    final pages = <int>[];
+    final other = _anime.copyWith(id: '11', title: 'Other', sections: []);
+    final api = FakeMetadata();
+    api.catalogLoader = () async => _catalog();
+    api.libraryLoader = (page) async {
+      pages.add(page);
+      return (items: [_anime, other], hasMore: page == 1);
+    };
+    final store = await create(api);
+    await store.refreshCatalog();
+    var global = 0;
+    var library = 0;
+    store.addListener(() => global++);
+    store.libraryFilterNotifier.addListener(() => library++);
+    await store.loadMoreLibraryCatalog();
+    await store.loadMoreLibraryCatalog();
+    await store.loadMoreLibraryCatalog();
+    expect(pages, [1, 2]);
+    expect(store.libraryCatalogHasMore, isFalse);
+    expect(store.libraryItems.map((item) => item.id), ['10', '11']);
+    store.libraryQuery = 'OTHER';
+    expect(store.libraryItems.single, other);
+    expect(library, greaterThanOrEqualTo(5));
+    expect(global, 0);
+  });
+
   Future<void> frames(WidgetTester tester) async {
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 50));

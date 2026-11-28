@@ -63,8 +63,134 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late FakeVideo video;
   setUp(() {
+    NativeHttpApi.clearAdCache();
     video = FakeVideo();
     VideoPlayerPlatform.instance = video;
+  });
+
+  test(
+    'authorization overlaps previous release while decoder install waits',
+    () async {
+      final fixture = HttpFixture(ads: false);
+      final release = Completer<void>();
+      final playlistRequested = Completer<void>();
+      fixture.handler = (request) async {
+        if (request.url.path.endsWith('/360.m3u8')) {
+          playlistRequested.complete();
+        }
+        return fixture.response(request);
+      };
+      final session = NativeHttpPlayback(
+        document: 'next-episode',
+        videoId: '40190',
+        preferredQuality: 360,
+        diagnostics: AppDiagnostics.instance,
+        api: fixture.api(),
+        onState: (_) {},
+        skipAgeConfirmation: true,
+      );
+      addTearDown(session.close);
+      final preparing = session.prepare(waitBeforeInstall: release.future);
+      await playlistRequested.future;
+      expect(video.sources, isEmpty);
+      expect(fixture.count('checklock.php'), 0);
+      release.complete();
+      await preparing;
+      await Future<void>.delayed(Duration.zero);
+      final paths = fixture.requests
+          .map((request) => request.url.path)
+          .toList();
+      expect(
+        paths.indexOf('/anime/v1/danmu.php'),
+        greaterThan(paths.lastIndexOf('/ajax/checklock.php')),
+      );
+      expect(session.state.canControl, isTrue);
+    },
+  );
+
+  for (final closing in [false, true]) {
+    test(
+      'pending progress flushes ${closing ? 'close' : 'EOF'} position',
+      () async {
+        final fixture = HttpFixture(ads: false);
+        final first = Completer<void>();
+        final firstStarted = Completer<void>();
+        final second = Completer<void>();
+        final reported = <String?>[];
+        fixture.handler = (request) async {
+          if (request.url.path.endsWith('/elapse.php')) {
+            reported.add(request.url.queryParameters['time']);
+            if (reported.length == 1) {
+              firstStarted.complete();
+              await first.future;
+            } else if (reported.length == 2) {
+              second.complete();
+            }
+          }
+          return fixture.response(request);
+        };
+        final session = NativeHttpPlayback(
+          document: 'progress-flush',
+          videoId: '40190',
+          preferredQuality: 0,
+          diagnostics: AppDiagnostics.instance,
+          api: fixture.api(),
+          onState: (_) {},
+          skipAgeConfirmation: true,
+        );
+        addTearDown(session.close);
+        await session.prepare();
+        await firstStarted.future;
+        Future<void>? closed;
+        if (closing) {
+          expect(await session.command('seek', 250), isTrue);
+          closed = session.close();
+        } else {
+          final controller = session.player!.video!;
+          controller.value = controller.value.copyWith(isCompleted: true);
+        }
+        await Future<void>.delayed(Duration.zero);
+        expect(reported, ['10']);
+        first.complete();
+        await second.future;
+        expect(reported, ['10', closing ? '250' : '-1']);
+        await closed;
+      },
+    );
+  }
+
+  test('seek progress is debounced to the latest position', () async {
+    final fixture = HttpFixture(ads: false);
+    final initial = Completer<void>();
+    final seek = Completer<String?>();
+    fixture.handler = (request) async {
+      if (request.url.path.endsWith('/elapse.php')) {
+        if (!initial.isCompleted) {
+          initial.complete();
+        } else if (!seek.isCompleted) {
+          seek.complete(request.url.queryParameters['time']);
+        }
+      }
+      return fixture.response(request);
+    };
+    final session = NativeHttpPlayback(
+      document: 'seek-debounce',
+      videoId: '40190',
+      preferredQuality: 0,
+      diagnostics: AppDiagnostics.instance,
+      api: fixture.api(),
+      onState: (_) {},
+      skipAgeConfirmation: true,
+    );
+    addTearDown(session.close);
+    await session.prepare();
+    await initial.future;
+    for (final position in [20.0, 30.0, 40.0]) {
+      expect(await session.command('seek', position), isTrue);
+    }
+    expect(seek.isCompleted, isFalse);
+    expect(await seek.future.timeout(const Duration(seconds: 3)), '40');
+    expect(fixture.progressCount, 2);
   });
 
   test(
@@ -435,13 +561,18 @@ void main() {
       expect(fixture.count('unlock.php'), unlockBeforeBuffer);
 
       // Transient transport error during seek progress report keeps playback alive.
-      fixture.handler = (request) async =>
-          request.url.path == '/ajax/unlock.php' ||
-              request.url.path == '/ajax/elapse.php'
-          ? throw const SocketException('transient hiccup')
-          : fixture.response(request);
+      final transportFailed = Completer<void>();
+      var failedAttempts = 0;
+      fixture.handler = (request) async {
+        if (request.url.path == '/ajax/unlock.php' ||
+            request.url.path == '/ajax/elapse.php') {
+          if (++failedAttempts == 3) transportFailed.complete();
+          throw const SocketException('transient hiccup');
+        }
+        return fixture.response(request);
+      };
       expect(await session.command('seek', 30), isTrue);
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await transportFailed.future.timeout(const Duration(seconds: 3));
       expect(session.failureStage, isNull);
       expect(session.state.phase, PlaybackPhase.content);
 
@@ -450,8 +581,14 @@ void main() {
           request.url.path == '/ajax/elapse.php'
           ? http.Response('{"state":2}', 200)
           : fixture.response(request);
+      final denied = Completer<void>();
+      session.addListener(() {
+        if (session.failureStage != null && !denied.isCompleted) {
+          denied.complete();
+        }
+      });
       expect(await session.command('seek', 40), isTrue);
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await denied.future.timeout(const Duration(seconds: 3));
       expect(session.failureStage, 'progress-denied');
       expect(session.state.phase, PlaybackPhase.error);
     },
@@ -800,34 +937,32 @@ void main() {
         find.byKey(const ValueKey('community-input-60')),
         '原生發送草稿',
       );
-      store.accountProfile = const AccountProfile(
-        id: 'reader',
-        displayName: 'Reader',
-      );
-      await tester.runAsync(
-        () => store.setDanmakuSettings(store.danmakuSettings),
-      );
+      portal.accountApi.accountLoader = () async => {
+        'profile': {'id': 'reader', 'displayName': 'Reader'},
+        'favorites': <Json>[],
+        'history': <Json>[],
+      };
+      await tester.runAsync(store.syncAccount);
       await tester.pump();
       senderFixture.handler = (request) async => request.method == 'POST'
           ? http.Response('{"error":1}', 200)
           : senderFixture.response(request);
       final sendButton = find.byIcon(CupertinoIcons.arrow_up_circle_fill);
-      await tester.tap(sendButton);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pump();
+      Future<void> submit() async {
+        await tester.runAsync(() async {
+          await tester.tap(sendButton);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+        await tester.pump();
+      }
+      await submit();
       expect(find.text('原生發送草稿'), findsOneWidget);
       expect(
         store.nativeHttpPlayback!.danmaku.where((item) => item.id == '91'),
         isEmpty,
       );
       senderFixture.handler = null;
-      await tester.tap(sendButton);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pump();
+      await submit();
       expect(find.text('原生發送草稿'), findsNothing);
       expect(
         store.nativeHttpPlayback!.danmaku

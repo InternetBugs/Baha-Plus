@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show listEquals;
+
 import 'models.dart';
 
 enum PlaybackPhase {
@@ -96,6 +98,47 @@ class PlaybackState {
       (phase == PlaybackPhase.content || phase == PlaybackPhase.advertisement);
   bool get canControl =>
       phase == PlaybackPhase.content && surfaceReady && duration > 0;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaybackState &&
+          phase == other.phase &&
+          surfaceReady == other.surfaceReady &&
+          paused == other.paused &&
+          buffering == other.buffering &&
+          ended == other.ended &&
+          muted == other.muted &&
+          position == other.position &&
+          duration == other.duration &&
+          buffered == other.buffered &&
+          listEquals(bufferedRanges, other.bufferedRanges) &&
+          downloadBytesPerSecond == other.downloadBytesPerSecond &&
+          rate == other.rate &&
+          listEquals(qualities, other.qualities) &&
+          quality == other.quality &&
+          hasDanmaku == other.hasDanmaku &&
+          danmaku == other.danmaku;
+
+  @override
+  int get hashCode => Object.hash(
+    phase,
+    surfaceReady,
+    paused,
+    buffering,
+    ended,
+    muted,
+    position,
+    duration,
+    buffered,
+    bufferedRanges == null ? null : Object.hashAll(bufferedRanges!),
+    downloadBytesPerSecond,
+    rate,
+    Object.hashAll(qualities),
+    quality,
+    hasDanmaku,
+    danmaku,
+  );
 
   static List<PlaybackBufferRange>? _parseBufferedRanges(dynamic raw) {
     if (raw == null) return null;

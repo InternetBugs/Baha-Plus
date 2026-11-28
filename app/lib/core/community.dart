@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'models.dart';
 
 const communityReadActions = {
@@ -32,8 +33,10 @@ int _count(dynamic value, [int maximum = 100000000]) {
   return value;
 }
 
+final _communityId = RegExp(r'^[0-9]{1,20}$');
+
 String _id(dynamic value) {
-  if (value is! String || !RegExp(r'^[0-9]{1,20}$').hasMatch(value)) {
+  if (value is! String || !_communityId.hasMatch(value)) {
     throw const FormatException('Invalid community ID');
   }
   return value;
@@ -52,6 +55,21 @@ String? _image(dynamic value) {
 }
 
 class OfficialComment {
+  const OfficialComment({
+    required this.id,
+    required this.name,
+    required this.userId,
+    required this.text,
+    required this.time,
+    this.avatar,
+    this.image,
+    required this.likes,
+    required this.dislikes,
+    required this.replies,
+    required this.vote,
+    required this.folded,
+  });
+
   OfficialComment.fromJson(Json json)
     : id = _id(json['id']),
       name = _text(json['name'], 200, empty: false),
@@ -73,9 +91,70 @@ class OfficialComment {
   final String? avatar, image;
   final int likes, dislikes, replies, vote;
   final bool folded;
+
+  Json toJson() => {
+    'id': id,
+    'name': name,
+    'userId': userId,
+    'text': text,
+    'time': time,
+    'avatar': avatar,
+    'image': image,
+    'likes': likes,
+    'dislikes': dislikes,
+    'replies': replies,
+    'vote': vote,
+    'folded': folded,
+  };
+
+  OfficialComment copyWith({
+    int? likes,
+    int? dislikes,
+    int? replies,
+    int? vote,
+    bool? folded,
+  }) => OfficialComment(
+    id: id,
+    name: name,
+    userId: userId,
+    text: text,
+    time: time,
+    avatar: avatar,
+    image: image,
+    likes: likes ?? this.likes,
+    dislikes: dislikes ?? this.dislikes,
+    replies: replies ?? this.replies,
+    vote: vote ?? this.vote,
+    folded: folded ?? this.folded,
+  );
+
+  OfficialComment withVote(int type) {
+    final desired = switch (type) {
+      1 => 1,
+      2 => -1,
+      _ => throw const CommunityException('input'),
+    };
+    final nextVote = vote == desired ? 0 : desired;
+    return copyWith(
+      likes: math.max(0, likes - (vote == 1 ? 1 : 0) + (nextVote == 1 ? 1 : 0)),
+      dislikes: math.max(
+        0,
+        dislikes - (vote == -1 ? 1 : 0) + (nextVote == -1 ? 1 : 0),
+      ),
+      vote: nextVote,
+    );
+  }
 }
 
 class CommentPage {
+  static final _postableId = RegExp(r'^[1-9][0-9]{0,19}$');
+  const CommentPage({
+    required this.messageId,
+    required this.total,
+    required this.nextPage,
+    required this.comments,
+  });
+
   CommentPage.fromJson(Json json)
     : messageId = _id(json['messageId']),
       total = _count(json['total']),
@@ -84,20 +163,49 @@ class CommentPage {
   final String messageId;
   final int total, nextPage;
   final List<OfficialComment> comments;
+  bool get canPost => _postableId.hasMatch(messageId);
 
-  static List<OfficialComment> parseComments(dynamic value) {
+  CommentPage copyWith({
+    String? messageId,
+    int? total,
+    int? nextPage,
+    List<OfficialComment>? comments,
+  }) => CommentPage(
+    messageId: messageId ?? this.messageId,
+    total: total ?? this.total,
+    nextPage: nextPage ?? this.nextPage,
+    comments: comments ?? this.comments,
+  );
+
+  static List<OfficialComment> parseComments(
+    dynamic value, {
+    int maxItems = 200,
+  }) {
     final raw = value as List;
-    if (raw.length > 200) {
+    if (raw.length > maxItems) {
       throw const FormatException('Too many comments');
     }
-    final items = raw
-        .map((item) => OfficialComment.fromJson(item as Json))
+    final ids = <String>{};
+    return raw
+        .map((item) {
+          final comment = OfficialComment.fromJson(item as Json);
+          if (!ids.add(comment.id)) {
+            throw const FormatException('Duplicate comments');
+          }
+          return comment;
+        })
         .toList(growable: false);
-    if (items.map((item) => item.id).toSet().length != items.length) {
-      throw const FormatException('Duplicate comments');
-    }
-    return items;
   }
+}
+
+class CommentDraft {
+  const CommentDraft({this.text = '', this.replyThread, this.replyTarget});
+
+  final String text;
+  final OfficialComment? replyThread;
+  final OfficialComment? replyTarget;
+  bool get isEmpty =>
+      text.isEmpty && replyThread == null && replyTarget == null;
 }
 
 class AnimeNotification {
@@ -113,6 +221,14 @@ class AnimeNotification {
   }
   final String id, title, time, videoId;
   final String? cover;
+
+  Json toJson() => {
+    'id': id,
+    'title': title,
+    'time': time,
+    'videoId': videoId,
+    'cover': cover,
+  };
 }
 
 class DanmakuSettings {
@@ -134,15 +250,19 @@ class DanmakuSettings {
       top: json['top'] as bool,
       bottom: json['bottom'] as bool,
     );
-    if (!result.opacity.isFinite ||
-        result.opacity < .1 ||
-        result.opacity > 1 ||
-        !result.scale.isFinite ||
-        result.scale < .5 ||
-        result.scale > 1.5) {
+    return result._validated();
+  }
+
+  DanmakuSettings _validated() {
+    if (!opacity.isFinite ||
+        opacity < .1 ||
+        opacity > 1 ||
+        !scale.isFinite ||
+        scale < .5 ||
+        scale > 1.5) {
       throw const FormatException('Invalid danmaku settings');
     }
-    return result;
+    return this;
   }
 
   final bool enabled, rolling, top, bottom;
@@ -163,15 +283,29 @@ class DanmakuSettings {
     bool? rolling,
     bool? top,
     bool? bottom,
-  }) => DanmakuSettings.fromJson({
-    ...toJson(),
-    'enabled': ?enabled,
-    'opacity': ?opacity,
-    'scale': ?scale,
-    'rolling': ?rolling,
-    'top': ?top,
-    'bottom': ?bottom,
-  });
+  }) => DanmakuSettings(
+    enabled: enabled ?? this.enabled,
+    opacity: opacity ?? this.opacity,
+    scale: scale ?? this.scale,
+    rolling: rolling ?? this.rolling,
+    top: top ?? this.top,
+    bottom: bottom ?? this.bottom,
+  )._validated();
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DanmakuSettings &&
+          enabled == other.enabled &&
+          opacity == other.opacity &&
+          scale == other.scale &&
+          rolling == other.rolling &&
+          top == other.top &&
+          bottom == other.bottom;
+
+  @override
+  int get hashCode =>
+      Object.hash(enabled, opacity, scale, rolling, top, bottom);
 
   static bool validMessage(String text) =>
       text.trim().isNotEmpty && utf8.encode(text.trim()).length <= 60;

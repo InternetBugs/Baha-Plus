@@ -8,7 +8,7 @@ import 'diagnostics_page.dart';
 import 'glass_alert.dart';
 import 'glass_settings_menu.dart';
 
-class AccountPage extends StatelessWidget {
+class AccountPage extends StatefulWidget {
   const AccountPage({
     required this.store,
     required this.onCheckUpdates,
@@ -18,6 +18,28 @@ class AccountPage extends StatelessWidget {
   final AppStore store;
   final VoidCallback onCheckUpdates;
   final VoidCallback? onNotifications;
+
+  @override
+  State<AccountPage> createState() => _AccountPageState();
+}
+
+class _AccountPageState extends State<AccountPage> {
+  late Listenable _listenable;
+  AppStore get store => widget.store;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenable = Listenable.merge([store, store.updates]);
+  }
+
+  @override
+  void didUpdateWidget(covariant AccountPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.store != store) {
+      _listenable = Listenable.merge([store, store.updates]);
+    }
+  }
 
   void _connect(BuildContext context) {
     Navigator.pop(context);
@@ -36,6 +58,15 @@ class AccountPage extends StatelessWidget {
   }
 
   Future<void> _logout(BuildContext context) async {
+    final confirmed = await showGlassConfirmDialog(
+      context: context,
+      title: store.t('logout'),
+      message: store.t('logoutConfirm'),
+      cancelLabel: store.t('cancel'),
+      confirmLabel: store.t('logout'),
+      destructive: true,
+    );
+    if (confirmed != true || !context.mounted) return;
     final success = await store.logoutAccount();
     if (success || !context.mounted) return;
     await showGlassMessageDialog(
@@ -62,9 +93,10 @@ class AccountPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([store, store.updates]),
+    listenable: _listenable,
     builder: (context, child) => GlassScaffold(
       extendBody: false,
+      enableBackgroundSampling: false,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
       statusBarStyle: GlassStatusBarStyle.auto,
       appBar: GlassAppBar(
@@ -172,6 +204,7 @@ class AccountPage extends StatelessWidget {
                   icon: CupertinoIcons.square_arrow_right,
                   onTap: store.loggingOut ? null : () => _logout(context),
                   busy: store.loggingOut,
+                  destructive: true,
                 ),
               ],
             ],
@@ -179,13 +212,13 @@ class AccountPage extends StatelessWidget {
           const SizedBox(height: 22),
           GlassSettingsGroup(
             children: [
-              if (onNotifications != null)
+              if (widget.onNotifications != null)
                 GlassSettingsRow(
                   title: store.t('notifications'),
                   icon: CupertinoIcons.bell,
                   onTap: () {
                     Navigator.pop(context);
-                    onNotifications!();
+                    widget.onNotifications!();
                   },
                   value: store.unreadNotifications > 0
                       ? '${store.unreadNotifications}'
@@ -311,7 +344,7 @@ class AccountPage extends StatelessWidget {
                   store.updates.checking ? 'checkingUpdates' : 'checkUpdates',
                 ),
                 icon: CupertinoIcons.arrow_clockwise,
-                onTap: store.updates.checking ? null : onCheckUpdates,
+                onTap: store.updates.checking ? null : widget.onCheckUpdates,
                 value: store.updates.currentVersion ?? '—',
                 busy: store.updates.checking,
               ),

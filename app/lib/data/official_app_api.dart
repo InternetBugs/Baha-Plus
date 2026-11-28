@@ -6,22 +6,9 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../core/models.dart';
+import 'http_pool.dart';
+import 'official_search.dart';
 import 'official_user_agent.dart';
-
-class _PooledClient {
-  _PooledClient(this.client);
-  final http.Client client;
-  int inFlight = 0;
-  bool retired = false;
-  bool closed = false;
-
-  void closeIfUnused() {
-    if (!closed && retired && inFlight == 0) {
-      closed = true;
-      client.close();
-    }
-  }
-}
 
 /// Anonymous, read-only App catalog and video metadata.
 ///
@@ -34,40 +21,30 @@ class OfficialAppApi {
     String? userAgent,
     this.timeout = const Duration(seconds: 12),
     this.retryDelay = const Duration(milliseconds: 250),
-  }) : _ownsClient = client == null,
-       _clientFactory = clientFactory ?? http.Client.new,
-       _pool = _PooledClient(
-         client ?? (clientFactory?.call() ?? http.Client()),
-       ),
-       _userAgent = userAgent {
+  }) : _userAgent = userAgent {
     if (timeout <= Duration.zero) {
       throw ArgumentError.value(timeout, 'timeout');
     }
     if (retryDelay < Duration.zero) {
       throw ArgumentError.value(retryDelay, 'retryDelay');
     }
-    _pools.add(_pool);
+    _pool = RetryingHttpClientPool(
+      client: client,
+      clientFactory: clientFactory,
+    );
   }
 
   static const maxResponseBytes = 2000000;
   static final _videoId = RegExp(r'^[1-9][0-9]{0,9}$');
 
-  final bool _ownsClient;
-  final http.Client Function() _clientFactory;
   final String? _userAgent;
   final Duration timeout;
   final Duration retryDelay;
-  _PooledClient _pool;
-  final _pools = <_PooledClient>{};
-  final _requests = <Completer<void>>{};
+  late final RetryingHttpClientPool _pool;
   bool _disposed = false;
 
   Future<Catalog> fetchCatalog() async {
-    final data = await _get(
-      'index.php',
-      maxRetries: 2,
-      retryTimeout: true,
-    );
+    final data = await _get('index.php', maxRetries: 2, retryTimeout: true);
     try {
       return OfficialAppMetadata.catalog(data);
     } on FormatException {
@@ -101,6 +78,8 @@ class OfficialAppApi {
   Future<AnimeDetail> fetchDetail({
     required String animeId,
     required String videoId,
+    bool includeRating = true,
+    Future<void>? cancel,
   }) async {
     _validateVideoId(animeId);
     _validateVideoId(videoId);
@@ -109,6 +88,7 @@ class OfficialAppApi {
       query: {'sn': videoId},
       maxRetries: 1,
       retryTimeout: true,
+      cancel: cancel,
     );
     late final OfficialAppVideo video;
     late final Json anime;
@@ -127,19 +107,24 @@ class OfficialAppApi {
     }
 
     // Reviews use the verified detail's fanId, not its animeSn or acgSn.
-    final fanId = anime['fanId']?.toString();
-    if (fanId == null || !_videoId.hasMatch(fanId)) return detail;
+    final fanId = detail.fanId;
+    if (!includeRating || fanId == null) return detail;
     try {
-      final rating = await fetchRating(fanId);
-      return OfficialAppMetadata.detail(anime, video, rating: rating);
-    } on OfficialAppApiException {
-      if (_disposed) rethrow;
+      final rating = await fetchRating(fanId, cancel: cancel);
+      return rating == null
+          ? detail
+          : OfficialAppMetadata.attachRating(detail, rating);
+    } on OfficialAppApiException catch (error) {
+      if (_disposed || error.code == 'cancelled') rethrow;
       // An unavailable review service must leave the episodes usable.
       return detail;
     }
   }
 
-  Future<RatingSummary> fetchRating(String fanId) async {
+  Future<RatingSummary?> fetchRating(
+    String fanId, {
+    Future<void>? cancel,
+  }) async {
     _validateVideoId(fanId);
     final data = await _getData(
       Uri.https('api.gamer.com.tw', '/acg/v1/reviews_list.php', {
@@ -148,6 +133,7 @@ class OfficialAppApi {
       }),
       maxRetries: 0,
       retryTimeout: false,
+      cancel: cancel,
     );
     try {
       final rating = data['rating'] as Json;
@@ -176,7 +162,7 @@ class OfficialAppApi {
   }
 
   /// Public search/artwork data, always anonymous even for a signed-in app.
-  Future<Json> fetchPublicCatalog(Uri uri) {
+  Future<Json> fetchPublicCatalog(Uri uri, {Future<void>? cancel}) {
     if (uri.scheme != 'https' ||
         uri.host != 'api.gamer.com.tw' ||
         uri.port != 443 ||
@@ -188,7 +174,40 @@ class OfficialAppApi {
         ].contains(uri.path)) {
       throw const OfficialAppApiException('invalid-catalog-endpoint');
     }
-    return _request(uri, maxRetries: 1, retryTimeout: false);
+    return _request(uri, maxRetries: 1, retryTimeout: false, cancel: cancel);
+  }
+
+  Future<({List<Anime> items, bool hasMore})> fetchLibraryPage(
+    int page, {
+    Future<void>? cancel,
+  }) async {
+    if (page < 1) throw ArgumentError.value(page, 'page');
+    final body = await fetchPublicCatalog(
+      Uri.https('api.gamer.com.tw', '/anime/v1/anime_list.php', {
+        'page': '$page',
+      }),
+      cancel: cancel,
+    );
+    try {
+      final items = OfficialAnimeSearch.parseResponse(body);
+      final data = body['data'] as Json;
+      final totalPages = int.tryParse(
+        '${data['totalPage'] ?? data['totalPages']}',
+      );
+      final hasMore = data['hasMore'];
+      return (
+        items: items,
+        hasMore:
+            items.isNotEmpty &&
+            (hasMore is bool
+                ? hasMore
+                : totalPages == null || page < totalPages),
+      );
+    } on FormatException {
+      throw const OfficialAppApiException('invalid-catalog');
+    } on TypeError {
+      throw const OfficialAppApiException('invalid-catalog');
+    }
   }
 
   static void _validateVideoId(String videoId) {
@@ -202,21 +221,25 @@ class OfficialAppApi {
     Map<String, String>? query,
     int maxRetries = 1,
     bool retryTimeout = false,
+    Future<void>? cancel,
   }) => _getData(
     Uri.https('api.gamer.com.tw', '/mobile_app/anime/v4/$endpoint', query),
     maxRetries: maxRetries,
     retryTimeout: retryTimeout,
+    cancel: cancel,
   );
 
   Future<Json> _getData(
     Uri uri, {
     int maxRetries = 1,
     bool retryTimeout = false,
+    Future<void>? cancel,
   }) async {
     final body = await _request(
       uri,
       maxRetries: maxRetries,
       retryTimeout: retryTimeout,
+      cancel: cancel,
     );
     if (body['error'] != null) {
       throw OfficialAppApiException(
@@ -240,85 +263,38 @@ class OfficialAppApi {
     return code is int ? code : null;
   }
 
-  static bool _isRetryable(
-    OfficialAppApiException error, {
-    required bool retryTimeout,
-  }) {
-    if (error.code == 'network' || error.code == 'tls') return true;
-    if (error.code == 'timeout') return retryTimeout;
-    if (error.code == 'http-429') return true;
-    if (error.code.startsWith('http-')) {
-      final status = int.tryParse(error.code.substring(5));
-      if (status != null && status >= 500 && status <= 599) return true;
-    }
-    return false;
-  }
-
-  void _rotateClient() {
-    if (!_ownsClient || _disposed) return;
-    final previous = _pool;
-    previous.retired = true;
-    previous.closeIfUnused();
-    if (previous.closed) _pools.remove(previous);
-    _pool = _PooledClient(_clientFactory());
-    _pools.add(_pool);
-  }
-
-  Future<void> _waitRetry(Duration delay) async {
-    final wake = Completer<void>();
-    _requests.add(wake);
-    final timer = Timer(delay, () {
-      if (!wake.isCompleted) wake.complete();
-    });
-    try {
-      await wake.future;
-    } finally {
-      timer.cancel();
-      _requests.remove(wake);
-    }
-  }
-
   Future<Json> _request(
     Uri uri, {
     int maxRetries = 1,
     bool retryTimeout = false,
+    Future<void>? cancel,
   }) async {
-    for (var attempt = 0; ; attempt++) {
-      try {
-        return await _requestOnce(uri, persistentConnection: attempt == 0);
-      } on OfficialAppApiException catch (error) {
-        if (_disposed ||
-            attempt >= maxRetries ||
-            !_isRetryable(error, retryTimeout: retryTimeout)) {
-          rethrow;
-        }
-        _rotateClient();
-        final delay = retryDelay * (attempt == 0 ? 1 : 3);
-        if (delay > Duration.zero) {
-          await _waitRetry(delay);
-          if (_disposed) throw const OfficialAppApiException('disposed');
-        }
-      }
-    }
-  }
-
-  Future<Json> _requestOnce(
-    Uri uri, {
-    required bool persistentConnection,
-  }) async {
-    if (_disposed) throw const OfficialAppApiException('disposed');
-    final abort = Completer<void>();
-    _requests.add(abort);
-    final pool = _pool;
-    pool.inFlight++;
-    final request =
-        http.AbortableRequest('GET', uri, abortTrigger: abort.future)
-          ..followRedirects = false
-          ..persistentConnection = persistentConnection
-          ..headers['Accept'] = 'application/json'
-          ..headers['User-Agent'] = _userAgent ?? OfficialUserAgent.value;
     try {
-      return await _read(pool, request).timeout(timeout);
+      return await _pool.run(
+        (client, abort, attempt) async {
+          if (_userAgent == null) await OfficialUserAgent.ensureResolved();
+          final request = http.AbortableRequest('GET', uri, abortTrigger: abort)
+            ..followRedirects = false
+            ..persistentConnection = attempt == 0
+            ..headers['Accept'] = 'application/json'
+            ..headers['User-Agent'] = _userAgent ?? OfficialUserAgent.value;
+          return _read(client, request);
+        },
+        timeout: timeout,
+        maxRetries: maxRetries,
+        cancel: cancel,
+        retryAfter: (error, attempt) {
+          final delay = retryDelay * (attempt == 0 ? 1 : 3);
+          if (error is _UnexpectedStatus) {
+            if (error.status == 429) return error.retryAfter ?? delay;
+            if (error.status >= 500 && error.status <= 599) return delay;
+          }
+          if (error is TimeoutException) return retryTimeout ? delay : null;
+          return RetryingHttpClientPool.isTransportError(error) ? delay : null;
+        },
+      );
+    } on HttpPoolCancelled catch (error) {
+      throw OfficialAppApiException(error.disposed ? 'disposed' : 'cancelled');
     } on OfficialAppApiException {
       rethrow;
     } on TimeoutException {
@@ -331,33 +307,26 @@ class OfficialAppApi {
       throw OfficialAppApiException(
         _disposed
             ? 'disposed'
-            : error is HandshakeException
+            : error is TlsException
             ? 'tls'
             : 'network',
         socketErrorCode: error is SocketException
             ? error.osError?.errorCode
             : null,
       );
-    } finally {
-      if (!abort.isCompleted) abort.complete();
-      _requests.remove(abort);
-      pool.inFlight--;
-      if (_ownsClient) {
-        pool.closeIfUnused();
-        if (pool.closed) _pools.remove(pool);
-      }
     }
   }
 
-  Future<Json> _read(_PooledClient pool, http.BaseRequest request) async {
-    final response = await pool.client.send(request);
-    void discard() {
-      unawaited(response.stream.listen((_) {}, onError: (Object _) {}).cancel());
-    }
-
+  Future<Json> _read(http.Client client, http.BaseRequest request) async {
+    final response = await client.send(request);
     if (response.statusCode != 200) {
-      discard();
-      throw OfficialAppApiException('http-${response.statusCode}');
+      await cancelResponse(response);
+      throw _UnexpectedStatus(
+        response.statusCode,
+        response.statusCode == 429
+            ? _parseRetryAfter(response.headers['retry-after'])
+            : null,
+      );
     }
     final contentType = response.headers['content-type']
         ?.split(';')
@@ -365,11 +334,11 @@ class OfficialAppApi {
         .trim()
         .toLowerCase();
     if (contentType != 'application/json') {
-      discard();
+      await cancelResponse(response);
       throw const OfficialAppApiException('not-json');
     }
     if ((response.contentLength ?? 0) > maxResponseBytes) {
-      discard();
+      await cancelResponse(response);
       throw const OfficialAppApiException('response-too-large');
     }
     final bytes = BytesBuilder(copy: false);
@@ -390,21 +359,46 @@ class OfficialAppApi {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    for (final request in _requests.toList()) {
-      if (!request.isCompleted) request.complete();
-    }
-    for (final pool in _pools.toList()) {
-      if (!pool.closed) {
-        pool.closed = true;
-        pool.client.close();
-      }
-    }
-    _pools.clear();
+    _pool.dispose();
   }
+
+  static Duration? _parseRetryAfter(String? raw) {
+    if (raw == null) return null;
+    final seconds = int.tryParse(raw.trim());
+    if (seconds != null) return Duration(seconds: seconds.clamp(0, 5));
+    try {
+      final delay = HttpDate.parse(raw).difference(DateTime.now());
+      return Duration(milliseconds: delay.inMilliseconds.clamp(0, 5000));
+    } on FormatException {
+      return null;
+    } on HttpException {
+      return null;
+    }
+  }
+}
+
+class _UnexpectedStatus extends OfficialAppApiException {
+  _UnexpectedStatus(this.status, this.retryAfter) : super('http-$status');
+
+  final int status;
+  final Duration? retryAfter;
 }
 
 /// Maps only public fields; favorites, breakpoints and account flags are ignored.
 class OfficialAppMetadata {
+  static final _addedDate = RegExp(r'上架日[：:]\s*(\d{1,2}/\d{1,2})');
+  static final _episodeCount = RegExp(r'共\s*(\d+)\s*集');
+  static final _year = RegExp(r'\d{4}/\d{2}');
+  static final _leadingYear = RegExp(r'^\d{4}/\d{2}');
+  static final _episodeSuffix = RegExp(r'\s*\[[^\]]+\]\s*$');
+  static final _credits = RegExp(
+    r'[＜<](?:製作團隊|制作团队|STAFF|CAST)[＞>]',
+    caseSensitive: false,
+  );
+  static final _viewCount = RegExp(r'^\d{1,15}$');
+  static final _updateTime = RegExp(r'^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$');
+  static final _updateDate = RegExp(r'^(\d{1,2})/(\d{1,2})$');
+
   static Catalog catalog(Json data, {DateTime? now}) {
     final instant = (now ?? DateTime.now()).toUtc();
     final taipei = instant.add(const Duration(hours: 8));
@@ -438,32 +432,54 @@ class OfficialAppMetadata {
         final videoId = record['videoSn']?.toString();
         final info = OfficialAppVideo._text(record['info'], 500);
         final week = int.tryParse(record['week']?.toString() ?? '');
-        final addedDate = isNew
-            ? RegExp(r'上架日[：:]\s*(\d{1,2}/\d{1,2})').firstMatch(info)?.group(1)
+        final title = OfficialAppVideo._text(
+          record['title'],
+          499,
+          required: true,
+        );
+        final label = isSeason
+            ? _label(record['volume'], 100)
+            : _episodeCount.firstMatch(info)?.group(0);
+        final latestVideo =
+            videoId != null && OfficialAppApi._videoId.hasMatch(videoId)
+            ? videoId
             : null;
-        final item = Anime.fromJson({
-          'id': id,
-          'title': OfficialAppVideo._text(record['title'], 499, required: true),
-          'cover': cover,
-          if (!isSeason) 'poster': cover,
-          if (videoId != null && OfficialAppApi._videoId.hasMatch(videoId))
-            'latestVideoId': videoId,
-          'episodeLabel': isSeason
-              ? _label(record['volume'], 100)
-              : RegExp(r'共\s*(\d+)\s*集').firstMatch(info)?.group(0),
-          if (isSeason && week != null && week >= 1 && week <= 7)
-            'updateDay': week % 7,
-          if (isSeason) 'updateTime': _time(record['upTimeHours']),
-          if (isSeason) 'updateDate': _date(record['upTime'], taipei),
-          'views': _views(record['popular']),
-          'year': RegExp(r'\d{4}/\d{2}').firstMatch(info)?.group(0),
-          // Keep the timeline's episode thumbnail, video and update date when
-          // a second section supplies the same series' main visual.
-          if (old != null) ...old.toJson(),
-          if (!isSeason) 'poster': cover,
-          'addedDate': ?addedDate,
-          'sections': {...?old?.sections, section}.toList(),
-        });
+        final views = _views(record['popular']);
+        final year = _year.firstMatch(info)?.group(0);
+        final updateTime = isSeason ? _time(record['upTimeHours']) : null;
+        final updateDate = isSeason ? _date(record['upTime'], taipei) : null;
+        final updateDay = isSeason && week != null && week >= 1 && week <= 7
+            ? week % 7
+            : null;
+        final addedDate = isNew ? _addedDate.firstMatch(info)?.group(1) : null;
+        final item = old == null
+            ? Anime.fromJson({
+                'id': id,
+                'title': title,
+                'cover': cover,
+                if (!isSeason) 'poster': cover,
+                'latestVideoId': ?latestVideo,
+                'episodeLabel': label,
+                'updateDay': ?updateDay,
+                'updateTime': ?updateTime,
+                'updateDate': ?updateDate,
+                'views': views,
+                'year': year,
+                'addedDate': ?addedDate,
+                'sections': [section],
+              })
+            : old.copyWith(
+                poster: isSeason ? old.poster : cover,
+                latestVideoId: old.latestVideoId ?? latestVideo,
+                episodeLabel: old.episodeLabel ?? label,
+                updateDay: old.updateDay ?? updateDay,
+                updateTime: old.updateTime ?? updateTime,
+                updateDate: old.updateDate ?? updateDate,
+                addedDate: addedDate ?? old.addedDate,
+                views: old.views ?? views,
+                year: old.year ?? year,
+                sections: {...old.sections, section}.toList(),
+              );
         items[id] = item;
       }
     }
@@ -498,10 +514,15 @@ class OfficialAppMetadata {
     }
     // Official index.php splits large expiring-license groups into repeated
     // category blocks sharing the same title. Merge identical titles in order.
-    final grouped = <String, ({String intro, bool expiring, Map<String, Anime> items})>{};
+    final grouped =
+        <String, ({String intro, bool expiring, Map<String, Anime> items})>{};
     for (final raw in records) {
       final record = raw as Json;
-      final title = OfficialAppVideo._text(record['title'], 499, required: true);
+      final title = OfficialAppVideo._text(
+        record['title'],
+        499,
+        required: true,
+      );
       final intro = OfficialAppVideo._text(record['intro'], 2000);
       final list = record['list'] as List;
       if (list.length > 500) {
@@ -526,9 +547,9 @@ class OfficialAppMetadata {
           'poster': cover,
           if (videoId != null && OfficialAppApi._videoId.hasMatch(videoId))
             'latestVideoId': videoId,
-          'episodeLabel': RegExp(r'共\s*(\d+)\s*集').firstMatch(info)?.group(0),
+          'episodeLabel': _episodeCount.firstMatch(info)?.group(0),
           'views': _views(entry['popular']),
-          'year': RegExp(r'\d{4}/\d{2}').firstMatch(info)?.group(0),
+          'year': _year.firstMatch(info)?.group(0),
           'sections': const <String>[],
         });
       }
@@ -538,7 +559,9 @@ class OfficialAppMetadata {
       for (final entry in grouped.entries)
         if (entry.value.items.isNotEmpty)
           AnimeCollection(
-            id: entry.value.expiring ? 'expiring-${++index}' : 'topic-${++index}',
+            id: entry.value.expiring
+                ? 'expiring-${++index}'
+                : 'topic-${++index}',
             title: entry.key,
             intro: entry.value.intro,
             items: List<Anime>.unmodifiable(entry.value.items.values),
@@ -585,7 +608,7 @@ class OfficialAppMetadata {
     }
 
     final seasonStart = OfficialAppVideo._text(anime['seasonStart'], 100);
-    add('年份', RegExp(r'^\d{4}/\d{2}').firstMatch(seasonStart)?.group(0));
+    add('年份', _leadingYear.firstMatch(seasonStart)?.group(0));
     add('分級說明', video.ratingDescription);
     final tags = anime['tags'];
     if (tags != null) {
@@ -609,24 +632,30 @@ class OfficialAppMetadata {
       if (rating == null) add('評分', '$score / 5');
     }
     final content = OfficialAppVideo._text(anime['content'], 200000);
-    return AnimeDetail.fromJson({
-      'title': OfficialAppVideo._text(
-        anime['title'],
-        499,
-        required: true,
-      ).replaceFirst(RegExp(r'\s*\[[^\]]+\]\s*$'), ''),
-      'description': content
-          .split(
-            RegExp(r'[＜<](?:製作團隊|制作团队|STAFF|CAST)[＞>]', caseSensitive: false),
-          )
-          .first
-          .trim(),
-      'poster': _image(anime['cover']),
-      'episodes': episodes.values.toList(growable: false),
-      'metadata': metadata,
-      if (rating != null) 'rating': rating.toJson(),
-    });
+    final rawFanId = '${anime['fanId']}';
+    final fanId = OfficialAppApi._videoId.hasMatch(rawFanId) ? rawFanId : null;
+    return AnimeDetail.fromJson(
+      {
+        'title': OfficialAppVideo._text(
+          anime['title'],
+          499,
+          required: true,
+        ).replaceFirst(_episodeSuffix, ''),
+        'description': content.split(_credits).first.trim(),
+        'poster': _image(anime['cover']),
+        'episodes': episodes.values.toList(growable: false),
+        'metadata': metadata,
+      },
+      fanId: fanId,
+      rating: rating,
+    );
   }
+
+  static AnimeDetail attachRating(AnimeDetail detail, RatingSummary rating) =>
+      detail.copyWith(
+        rating: rating,
+        metadata: detail.metadata.where((item) => item.label != '評分').toList(),
+      );
 
   static String _image(dynamic value) {
     final text = OfficialAppVideo._text(value, 4096, required: true);
@@ -650,7 +679,7 @@ class OfficialAppMetadata {
     if (value == null) return null;
     final text = value.toString().trim();
     if (text.isEmpty) return null;
-    if (!RegExp(r'^\d{1,15}$').hasMatch(text)) {
+    if (!_viewCount.hasMatch(text)) {
       throw const FormatException('Invalid view count');
     }
     return text;
@@ -659,7 +688,7 @@ class OfficialAppMetadata {
   static String? _time(dynamic value) {
     final text = OfficialAppVideo._text(value, 16);
     if (text.isEmpty) return null;
-    final match = RegExp(r'^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$').firstMatch(text);
+    final match = _updateTime.firstMatch(text);
     if (match == null) {
       throw const FormatException('Invalid update time');
     }
@@ -673,7 +702,7 @@ class OfficialAppMetadata {
   static String? _date(dynamic value, DateTime today) {
     final text = OfficialAppVideo._text(value, 20);
     if (text.isEmpty) return null;
-    final match = RegExp(r'^(\d{1,2})/(\d{1,2})$').firstMatch(text);
+    final match = _updateDate.firstMatch(text);
     if (match == null) throw const FormatException('Invalid update date');
     final month = int.parse(match[1]!);
     final day = int.parse(match[2]!);

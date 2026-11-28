@@ -186,9 +186,10 @@ class AppUpdates extends ChangeNotifier {
   final Future<String> Function() _versionLoader;
   final Future<bool> Function(Uri) _openUrl;
   final Duration timeout;
-  http.Client? _client;
+  final http.Client? _client;
   Future<AppRelease?>? _pending;
   Completer<AppRelease?>? _result;
+  Completer<void>? _abort;
   Timer? _deadline;
   int _generation = 0;
   bool _startupChecked = false, _disposed = false;
@@ -205,24 +206,28 @@ class AppUpdates extends ChangeNotifier {
     checking = true;
     final generation = ++_generation;
     final result = Completer<AppRelease?>();
+    final abort = Completer<void>();
     final pending = result.future.whenComplete(() {
       _deadline?.cancel();
       _deadline = null;
       _pending = null;
       _result = null;
+      _abort = null;
       checking = false;
       if (!_disposed) notifyListeners();
     });
     _result = result;
+    _abort = abort;
     _pending = pending;
     _deadline = Timer(timeout, () {
       _generation++;
+      if (!abort.isCompleted) abort.complete();
       result.completeError(
         TimeoutException('Release check timed out', timeout),
       );
     });
     unawaited(
-      _check(generation).then(
+      _check(generation, abort.future).then(
         (release) {
           if (!result.isCompleted) result.complete(release);
         },
@@ -235,21 +240,26 @@ class AppUpdates extends ChangeNotifier {
     return pending;
   }
 
-  Future<AppRelease?> _check(int generation) async {
+  Future<AppRelease?> _check(int generation, Future<void> abort) async {
     final version = currentVersion ?? await _versionLoader();
     if (_disposed || generation != _generation) return null;
     currentVersion = version;
     final installed = Version.parse(currentVersion!);
     notifyListeners();
-    final client = _client ??= http.Client();
-    final response = await client.get(
-      latestReleaseUri,
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'Baha-Plus/$currentVersion',
-      },
-    );
+    final client = _client ?? http.Client();
+    final request =
+        http.AbortableRequest('GET', latestReleaseUri, abortTrigger: abort)
+          ..headers.addAll({
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'Baha-Plus/$currentVersion',
+          });
+    final http.Response response;
+    try {
+      response = await http.Response.fromStream(await client.send(request));
+    } finally {
+      if (_client == null) client.close();
+    }
     if (_disposed ||
         generation != _generation ||
         response.statusCode == HttpStatus.notFound) {
@@ -286,6 +296,8 @@ class AppUpdates extends ChangeNotifier {
   void cancelCheck() {
     _generation++;
     _deadline?.cancel();
+    final abort = _abort;
+    if (abort != null && !abort.isCompleted) abort.complete();
     final result = _result;
     if (result != null && !result.isCompleted) result.complete(null);
   }
@@ -294,7 +306,6 @@ class AppUpdates extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     cancelCheck();
-    _client?.close();
     super.dispose();
   }
 }

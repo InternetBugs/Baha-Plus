@@ -75,6 +75,34 @@ void main() {
     await handled;
   });
 
+  test('clients share proxy resolution and foreground invalidation', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.write('ok');
+      await request.response.close();
+    });
+    final proxy = _DeviceProxy(server.port);
+    final overrides = SystemHttpOverrides(platformProxy: proxy);
+    final first = overrides.createHttpClient(null);
+    final second = overrides.createHttpClient(null);
+    addTearDown(() async {
+      first.close(force: true);
+      second.close(force: true);
+      await server.close(force: true);
+    });
+    final uri = Uri.parse('http://shared-proxy.invalid/image.jpg');
+    Future<String> get(HttpClient client) async =>
+        utf8.decodeStream(await (await client.getUrl(uri)).close());
+    expect(await Future.wait([get(first), get(second)]), ['ok', 'ok']);
+    expect(proxy.requests, hasLength(1));
+    first.close(force: true);
+    expect(await get(second), 'ok');
+    expect(proxy.requests, hasLength(1));
+    SystemHttpOverrides.clearProxyCache();
+    expect(await get(second), 'ok');
+    expect(proxy.requests, hasLength(2));
+  });
+
   test('proxy cache refreshes after TTL when device proxy changes', () async {
     final firstServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final secondServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -114,81 +142,91 @@ void main() {
     await secondHandled;
   });
 
-  test('open failure evicts cached proxy so immediate retry re-resolves', () async {
-    final deadServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final deadPort = deadServer.port;
-    await deadServer.close(force: true);
+  test(
+    'open failure evicts cached proxy so immediate retry re-resolves',
+    () async {
+      final deadServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final deadPort = deadServer.port;
+      await deadServer.close(force: true);
 
-    final liveServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final proxy = _DeviceProxy(deadPort);
-    final client = SystemHttpOverrides(
-      platformProxy: proxy,
-      proxyCacheTtl: const Duration(minutes: 5),
-    ).createHttpClient(null);
-    addTearDown(() async {
-      client.close(force: true);
-      await liveServer.close(force: true);
-    });
-    final handled = liveServer.first.then((request) async {
-      request.response.write('recovered');
-      await request.response.close();
-    });
+      final liveServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final proxy = _DeviceProxy(deadPort);
+      final client = SystemHttpOverrides(
+        platformProxy: proxy,
+        proxyCacheTtl: const Duration(minutes: 5),
+      ).createHttpClient(null);
+      addTearDown(() async {
+        client.close(force: true);
+        await liveServer.close(force: true);
+      });
+      final handled = liveServer.first.then((request) async {
+        request.response.write('recovered');
+        await request.response.close();
+      });
 
-    final uri = Uri.parse('http://artwork.invalid/retry.jpg');
-    await expectLater(client.getUrl(uri), throwsA(isA<SocketException>()));
+      final uri = Uri.parse('http://artwork.invalid/retry.jpg');
+      await expectLater(client.getUrl(uri), throwsA(isA<SocketException>()));
 
-    proxy.port = liveServer.port;
-    final response = await (await client.getUrl(uri)).close();
-    expect(await utf8.decodeStream(response), 'recovered');
-    expect(proxy.requests, hasLength(2));
-    await handled;
-  });
+      proxy.port = liveServer.port;
+      final response = await (await client.getUrl(uri)).close();
+      expect(await utf8.decodeStream(response), 'recovered');
+      expect(proxy.requests, hasLength(2));
+      await handled;
+    },
+  );
 
-  test('malformed proxy entries and lookup errors fall back to direct', () async {
-    expect(
-      SystemProxyHttpClient.formatPac([
-        Proxy.fromJson({'host': '', 'port': '', 'type': 'https'}),
-        Proxy.fromJson({'host': '127.0.0.1', 'port': 'abc', 'type': 'http'}),
-      ]),
-      isEmpty,
-    );
-    expect(
-      SystemProxyHttpClient.formatPac([
-        Proxy.fromJson({'host': '::1', 'port': '7890', 'type': 'https'}),
-        Proxy.fromJson({'host': '', 'port': '', 'type': 'none'}),
-      ]),
-      'PROXY [::1]:7890; DIRECT',
-    );
+  test(
+    'malformed proxy entries and lookup errors fall back to direct',
+    () async {
+      expect(
+        SystemProxyHttpClient.formatPac([
+          Proxy.fromJson({'host': '', 'port': '', 'type': 'https'}),
+          Proxy.fromJson({'host': '127.0.0.1', 'port': 'abc', 'type': 'http'}),
+        ]),
+        isEmpty,
+      );
+      expect(
+        SystemProxyHttpClient.formatPac([
+          Proxy.fromJson({'host': '::1', 'port': '7890', 'type': 'https'}),
+          Proxy.fromJson({'host': '', 'port': '', 'type': 'none'}),
+        ]),
+        'PROXY [::1]:7890; DIRECT',
+      );
 
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final brokenEntriesProxy = _DeviceProxy(
-      null,
-      entries: [Proxy.fromJson({'host': '', 'port': '', 'type': 'https'})],
-    );
-    final brokenEntriesClient = SystemHttpOverrides(
-      platformProxy: brokenEntriesProxy,
-    ).createHttpClient(null);
-    final throwingProxy = _DeviceProxy(
-      null,
-      error: const FormatException('Malformed plugin JSON'),
-    );
-    final throwingClient = SystemHttpOverrides(
-      platformProxy: throwingProxy,
-    ).createHttpClient(null);
-    addTearDown(() async {
-      brokenEntriesClient.close(force: true);
-      throwingClient.close(force: true);
-      await server.close(force: true);
-    });
-    final handled = server.take(2).forEach((request) async {
-      request.response.write('direct-fallback');
-      await request.response.close();
-    });
-    final uri = Uri.parse('http://127.0.0.1:${server.port}/direct');
-    final firstResponse = await (await brokenEntriesClient.getUrl(uri)).close();
-    expect(await utf8.decodeStream(firstResponse), 'direct-fallback');
-    final secondResponse = await (await throwingClient.getUrl(uri)).close();
-    expect(await utf8.decodeStream(secondResponse), 'direct-fallback');
-    await handled;
-  });
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final brokenEntriesProxy = _DeviceProxy(
+        null,
+        entries: [
+          Proxy.fromJson({'host': '', 'port': '', 'type': 'https'}),
+        ],
+      );
+      final brokenEntriesClient = SystemHttpOverrides(
+        platformProxy: brokenEntriesProxy,
+      ).createHttpClient(null);
+      final throwingProxy = _DeviceProxy(
+        null,
+        error: const FormatException('Malformed plugin JSON'),
+      );
+      final throwingClient = SystemHttpOverrides(
+        platformProxy: throwingProxy,
+      ).createHttpClient(null);
+      addTearDown(() async {
+        brokenEntriesClient.close(force: true);
+        throwingClient.close(force: true);
+        await server.close(force: true);
+      });
+      final handled = server.take(2).forEach((request) async {
+        request.response.write('direct-fallback');
+        await request.response.close();
+      });
+      final uri = Uri.parse('http://127.0.0.1:${server.port}/direct');
+      final firstResponse = await (await brokenEntriesClient.getUrl(
+        uri,
+      )).close();
+      expect(await utf8.decodeStream(firstResponse), 'direct-fallback');
+      final secondResponse = await (await throwingClient.getUrl(uri)).close();
+      expect(await utf8.decodeStream(secondResponse), 'direct-fallback');
+      await handled;
+    },
+  );
 }

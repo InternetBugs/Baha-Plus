@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/community.dart';
 import '../core/models.dart';
+import 'http_pool.dart';
 import 'native_http_api.dart';
 import 'official_cookie_rotation.dart';
 import 'official_user_agent.dart';
@@ -18,10 +20,14 @@ import 'official_user_agent.dart';
 class OfficialHttpClient {
   OfficialHttpClient({
     http.Client? client,
+    http.Client Function()? clientFactory,
     Future<NativeHttpCookieJar> Function()? cookieLoader,
     Future<void> Function()? cookieClearer,
     this.timeout = const Duration(seconds: 12),
-  }) : _client = client ?? http.Client(),
+  }) : _pool = RetryingHttpClientPool(
+         client: client,
+         clientFactory: clientFactory,
+       ),
        _cookieLoader = cookieLoader ?? loadCookies,
        _cookieClearer = cookieClearer ?? clearDeviceCookies;
 
@@ -63,11 +69,14 @@ class OfficialHttpClient {
       '/app/v1/comment_like_del.php',
     },
   };
-  final http.Client _client;
+  static final _domainPrefix = RegExp(r'^\.');
+  static final _cookieName = RegExp(r'^[!#$%&*+\-.^_`|~0-9A-Za-z]+$');
+  static final _invalidCookieValue = RegExp(r'[\x00-\x20\x7f";,\\]');
+  static final _invalidCookiePath = RegExp(r'[;\r\n]');
+  final RetryingHttpClientPool _pool;
   final Future<NativeHttpCookieJar> Function() _cookieLoader;
   final Future<void> Function() _cookieClearer;
   final Duration timeout;
-  final _requests = <Completer<void>>{};
   int _generation = 0;
   bool _disposed = false;
 
@@ -93,29 +102,37 @@ class OfficialHttpClient {
   }
 
   static Future<NativeHttpCookieJar> loadCookies({List<Uri>? urls}) async {
-    final jar = NativeHttpCookieJar(allowedHosts: hosts, persistLoginRotation: true);
+    final jar = NativeHttpCookieJar(
+      allowedHosts: hosts,
+      persistLoginRotation: true,
+    );
     final manager = OfficialCookieRotation.manager;
     final now = DateTime.now().millisecondsSinceEpoch;
     // WebView2 returns CDP expiry in seconds and -1 for session cookies.
     final windows = defaultTargetPlatform == TargetPlatform.windows;
-    for (final uri in urls ?? _cookieURLs) {
-      for (final cookie in await manager.getCookies(
-        url: WebUri(uri.toString()),
-      )) {
+    final batches = await Future.wait([
+      for (final uri in urls ?? _cookieURLs)
+        manager
+            .getCookies(url: WebUri(uri.toString()))
+            .then((cookies) => (uri, cookies)),
+    ]);
+    for (final (uri, cookies) in batches) {
+      for (final cookie in cookies) {
         final name = cookie.name, value = '${cookie.value}';
         final path = cookie.path ?? '/';
         final domain = cookie.domain
-            ?.replaceFirst(RegExp(r'^\.'), '')
+            ?.replaceFirst(_domainPrefix, '')
             .toLowerCase();
         final expires = cookie.expiresDate;
-        if (!RegExp(r'^[!#$%&*+\-.^_`|~0-9A-Za-z]+$').hasMatch(name) ||
-            value.contains(RegExp(r'[\x00-\x20\x7f";,\\]')) ||
+        if (!_cookieName.hasMatch(name) ||
+            value.contains(_invalidCookieValue) ||
             !path.startsWith('/') ||
-            path.contains(RegExp(r'[;\r\n]')) ||
+            path.contains(_invalidCookiePath) ||
             (domain != null &&
                 domain != 'gamer.com.tw' &&
                 domain != uri.host) ||
-            (expires != null && cookie.isSessionOnly != true &&
+            (expires != null &&
+                cookie.isSessionOnly != true &&
                 expires <= (windows ? now ~/ 1000 : now))) {
           continue;
         }
@@ -134,8 +151,9 @@ class OfficialHttpClient {
   }) async {
     NativeHttpCookieJar? cookies;
     final generation = _generation;
+    final ended = Completer<void>();
     void check() {
-      if (_disposed || generation != _generation) {
+      if (ended.isCompleted || _disposed || generation != _generation) {
         throw const CommunityException('stale');
       }
       checkCurrent?.call();
@@ -146,7 +164,13 @@ class OfficialHttpClient {
       cookies = await _cookieLoader().timeout(timeout);
       check();
       return await action(
-        OfficialHttpSession._(this, cookies, cookies.fingerprint(_cookieURLs, ignoreCsrf: true), check),
+        OfficialHttpSession._(
+          this,
+          cookies,
+          cookies.fingerprint(_cookieURLs, ignoreCsrf: true),
+          check,
+          ended.future,
+        ),
       );
     } on CommunityException {
       rethrow;
@@ -157,6 +181,7 @@ class OfficialHttpClient {
     } catch (_) {
       throw const CommunityException('network');
     } finally {
+      ended.complete();
       cookies?.clear();
     }
   }
@@ -176,97 +201,115 @@ class OfficialHttpClient {
         paths[uri.host]?.contains(uri.path) != true) {
       throw const CommunityException('endpoint');
     }
-    final abort = Completer<void>();
-    _requests.add(abort);
-    String? responseCookies;
-    final sentHeader = session.cookies.header(uri);
     try {
-      final body = await (() async {
-        final request = http.AbortableRequest(
-          form == null ? 'GET' : 'POST',
-          uri,
-          abortTrigger: abort.future,
-        )..followRedirects = false;
-        request.headers.addAll({
-          'User-Agent': OfficialUserAgent.value,
-          'Origin': uri == OfficialSite.logout
-              ? OfficialSite.logout.origin
-              : 'https://ani.gamer.com.tw',
-          'Referer': uri == OfficialSite.logout
-              ? OfficialSite.logout.toString()
-              : 'https://ani.gamer.com.tw/',
-          if (sentHeader.isNotEmpty) 'Cookie': sentHeader,
-          ...headers,
-        });
-        if (form != null) request.bodyFields = form;
-        // The last check precedes transmission. Never recheck a successful
-        // POST acknowledgement and turn it into a retryable failure.
-        session.checkCurrent();
-        final response = await _client.send(request);
-        if (response.statusCode == 401) {
-          throw const CommunityException('login');
-        }
-        if (response.statusCode >= 300 && response.statusCode < 400) {
-          final location = response.headers['location'];
-          final target = location == null
-              ? null
-              : uri.resolveUri(Uri.parse(location));
-          final logout = uri == OfficialSite.logout;
-          if (!logout &&
-              target != null &&
-              target.scheme == 'https' &&
-              target.host == 'user.gamer.com.tw' &&
-              target.port == 443 &&
-              target.userInfo.isEmpty &&
-              target.path == '/login.php') {
+      final (body, responseCookies, sentHeader) = await _pool.run(
+        (client, abort, attempt) async {
+          await OfficialUserAgent.ensureResolved();
+          session.checkCurrent();
+          final sentHeader = session.cookies.header(uri);
+          final request =
+              http.AbortableRequest(
+                  form == null ? 'GET' : 'POST',
+                  uri,
+                  abortTrigger: abort,
+                )
+                ..followRedirects = false
+                ..persistentConnection = attempt == 0;
+          request.headers.addAll({
+            'User-Agent': OfficialUserAgent.value,
+            'Origin': uri == OfficialSite.logout
+                ? OfficialSite.logout.origin
+                : 'https://ani.gamer.com.tw',
+            'Referer': uri == OfficialSite.logout
+                ? OfficialSite.logout.toString()
+                : 'https://ani.gamer.com.tw/',
+            if (sentHeader.isNotEmpty) 'Cookie': sentHeader,
+            ...headers,
+          });
+          if (form != null) request.bodyFields = form;
+          // The last check precedes transmission. Never recheck a successful
+          // POST acknowledgement and turn it into a retryable failure.
+          session.checkCurrent();
+          final response = await client.send(request);
+          if (response.statusCode == 401) {
+            await cancelResponse(response);
             throw const CommunityException('login');
           }
-          // Logout normally redirects to a public Bahamut page. Acknowledge
-          // that response without forwarding credentials or loading a page.
-          if (logout &&
-              const [301, 302, 303, 307, 308].contains(response.statusCode) &&
-              target != null &&
-              OfficialSite.allowedNavigation(target) &&
-              target.port == 443 &&
-              target.userInfo.isEmpty) {
-            return '';
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            await cancelResponse(response);
+            final location = response.headers['location'];
+            final target = location == null
+                ? null
+                : uri.resolveUri(Uri.parse(location));
+            final logout = uri == OfficialSite.logout;
+            if (!logout &&
+                target != null &&
+                target.scheme == 'https' &&
+                target.host == 'user.gamer.com.tw' &&
+                target.port == 443 &&
+                target.userInfo.isEmpty &&
+                target.path == '/login.php') {
+              throw const CommunityException('login');
+            }
+            // Logout normally redirects to a public Bahamut page. Acknowledge
+            // that response without forwarding credentials or loading a page.
+            if (logout &&
+                const [301, 302, 303, 307, 308].contains(response.statusCode) &&
+                target != null &&
+                OfficialSite.allowedNavigation(target) &&
+                target.port == 443 &&
+                target.userInfo.isEmpty) {
+              return ('', null, sentHeader);
+            }
+            throw const CommunityException('unavailable');
           }
-          throw const CommunityException('unavailable');
-        }
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw const CommunityException('unavailable');
-        }
-        final bytes = <int>[];
-        if ((response.contentLength ?? 0) > 2000000) {
-          throw const CommunityException('format');
-        }
-        await for (final chunk in response.stream) {
-          if (_disposed) throw const CommunityException('unavailable');
-          if (bytes.length + chunk.length > 2000000) {
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            await cancelResponse(response);
+            throw const CommunityException('unavailable');
+          }
+          final bytes = BytesBuilder(copy: false);
+          if ((response.contentLength ?? 0) > 2000000) {
+            await cancelResponse(response);
             throw const CommunityException('format');
           }
-          bytes.addAll(chunk);
-        }
-        final text = utf8.decode(bytes);
-        if (text.contains('challenge-platform') ||
-            text.contains('cf-chl-') ||
-            text.contains('id="challenge-form"')) {
-          throw const CommunityException('verification');
-        }
-        responseCookies = response.headers['set-cookie'];
-        return text;
-      })().timeout(timeout);
+          await for (final chunk in response.stream) {
+            if (_disposed) throw const CommunityException('unavailable');
+            if (bytes.length + chunk.length > 2000000) {
+              throw const CommunityException('format');
+            }
+            bytes.add(chunk);
+          }
+          final text = utf8.decode(bytes.takeBytes());
+          if (text.contains('challenge-platform') ||
+              text.contains('cf-chl-') ||
+              text.contains('id="challenge-form"')) {
+            throw const CommunityException('verification');
+          }
+          return (text, response.headers['set-cookie'], sentHeader);
+        },
+        timeout: timeout,
+        maxRetries: form == null ? 1 : 0,
+        cancel: session._ended,
+        retryAfter: (error, _) => RetryingHttpClientPool.isTransportError(error)
+            ? Duration.zero
+            : null,
+      );
       if (responseCookies != null) {
-        await session.cookies.receiveResponse(uri, responseCookies!, sentHeader, () {
-          session.checkCurrent();
-          return uri != OfficialSite.logout;
-        });
+        await session.cookies.receiveResponse(
+          uri,
+          responseCookies,
+          sentHeader,
+          () {
+            session.checkCurrent();
+            return uri != OfficialSite.logout;
+          },
+        );
       }
       if (form == null) session.checkCurrent();
       return body;
-    } finally {
-      if (!abort.isCompleted) abort.complete();
-      _requests.remove(abort);
+    } on HttpPoolCancelled {
+      session.checkCurrent();
+      throw const CommunityException('stale');
     }
   }
 
@@ -274,16 +317,14 @@ class OfficialHttpClient {
   void invalidate() {
     OfficialCookieRotation.invalidate();
     _generation++;
-    for (final abort in _requests) {
-      if (!abort.isCompleted) abort.complete();
-    }
+    _pool.abortAll();
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     invalidate();
-    _client.close();
+    _pool.dispose();
   }
 }
 
@@ -293,11 +334,13 @@ class OfficialHttpSession {
     this.cookies,
     this._fingerprint,
     this.checkCurrent,
+    this._ended,
   );
   final OfficialHttpClient _client;
   final NativeHttpCookieJar cookies;
   final String _fingerprint;
   final void Function() checkCurrent;
+  final Future<void> _ended;
 
   Future<String> get(Uri uri) => _client._request(this, uri);
   Future<Json> json(Uri uri) async => jsonDecode(await get(uri)) as Json;
@@ -307,7 +350,11 @@ class OfficialHttpSession {
     final current = await _client._cookieLoader().timeout(_client.timeout);
     try {
       checkCurrent();
-      if (current.fingerprint(OfficialHttpClient._cookieURLs, ignoreCsrf: true) != _fingerprint) {
+      if (current.fingerprint(
+            OfficialHttpClient._cookieURLs,
+            ignoreCsrf: true,
+          ) !=
+          _fingerprint) {
         throw const CommunityException('stale');
       }
       cookies.adoptDeviceRotation(current);

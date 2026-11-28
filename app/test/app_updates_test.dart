@@ -158,6 +158,33 @@ void main() {
     response.complete(releaseResponse('v0.6.0'));
   });
 
+  for (final cancelManually in [false, true]) {
+    test('update check aborts its request (manual: $cancelManually)', () async {
+      final client = _AbortClient();
+      final updates = AppUpdates(
+        versionLoader: () async => '0.5.0',
+        client: client,
+        timeout: cancelManually
+            ? const Duration(seconds: 5)
+            : const Duration(milliseconds: 20),
+      );
+      final pending = updates.check();
+      final timeout = cancelManually
+          ? null
+          : expectLater(pending, throwsA(isA<TimeoutException>()));
+      await client.started.future;
+      if (cancelManually) {
+        updates.cancelCheck();
+        expect(await pending, isNull);
+      } else {
+        await timeout;
+      }
+      await client.aborted.future;
+      updates.dispose();
+      expect(client.closed, isFalse);
+    });
+  }
+
   test('download opens exactly the repository Releases page', () async {
     final opened = <Uri>[];
     final updates = AppUpdates(
@@ -231,10 +258,7 @@ void main() {
           '### 播放改进\r\n'
           '\r\n'
           '- 修复暂停与播放恢复。\r\n';
-      expect(
-        AppRelease.extractChangelog(body),
-        '### 播放改进\n\n- 修复暂停与播放恢复。',
-      );
+      expect(AppRelease.extractChangelog(body), '### 播放改进\n\n- 修复暂停与播放恢复。');
     });
 
     test('preserves sibling level-2 headings written inside update notes', () {
@@ -288,4 +312,24 @@ void main() {
       expect(AppRelease.extractChangelog(fenced), fenced);
     });
   });
+}
+
+class _AbortClient extends http.BaseClient {
+  final started = Completer<void>();
+  final aborted = Completer<void>();
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    started.complete();
+    await (request as http.Abortable).abortTrigger!;
+    aborted.complete();
+    throw http.RequestAbortedException(request.url);
+  }
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
+  }
 }

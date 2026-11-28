@@ -13,6 +13,7 @@ import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/data/device_storage.dart';
 import 'package:baha_plus/data/official_cookie_rotation.dart';
 import 'package:baha_plus/data/official_search.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeSearch implements AnimeSearch {
   final queries = <String>[];
@@ -46,6 +47,43 @@ class MemoryStorage implements DeviceStorage {
         key.startsWith('baha.account.') ||
         key.startsWith('baha.notifications.read.'),
   );
+}
+
+class _MemoryPreferences implements SharedPreferencesAsync {
+  final values = <String, Object?>{};
+  final batchKeys = <Set<String>?>[];
+
+  @override
+  Future<Map<String, Object?>> getAll({Set<String>? allowList}) async {
+    batchKeys.add(allowList);
+    return {
+      for (final entry in values.entries)
+        if (allowList == null || allowList.contains(entry.key))
+          entry.key: entry.value,
+    };
+  }
+
+  @override
+  Future<String?> getString(String key) async => values[key] as String?;
+
+  @override
+  Future<void> setString(String key, String value) async => values[key] = value;
+
+  @override
+  Future<void> remove(String key) async => values.remove(key);
+
+  @override
+  Future<Set<String>> getKeys({Set<String>? allowList}) async => values.keys
+      .where((key) => allowList == null || allowList.contains(key))
+      .toSet();
+
+  @override
+  Future<void> clear({Set<String>? allowList}) async => values.removeWhere(
+    (key, _) => allowList == null || allowList.contains(key),
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class DelayedAccountStorage extends MemoryStorage {
@@ -320,29 +358,32 @@ void main() {
   );
 
   for (final cancelLogin in [false, true]) {
-    test('login waits for pending cookie writes (cancel=$cancelLogin)', () async {
-      final store = await _createStore();
-      addTearDown(store.dispose);
-      store.catalog = catalog;
-      final portal = FakePortal();
-      await store.attach(portal);
-      final release = Completer<void>();
-      final writing = OfficialCookieRotation.clear(() => release.future);
-      final login = store.connectAccount();
-      try {
-        await Future<void>.delayed(Duration.zero);
-        expect(portal.visited, isEmpty);
-        if (cancelLogin) await store.closeBrowser();
-      } finally {
-        release.complete();
-        await writing;
-        await login;
-      }
-      expect(store.browserVisible, !cancelLogin);
-      expect(portal.visited, [
-        if (!cancelLogin) OfficialSite.home.resolve('mygather.php'),
-      ]);
-    });
+    test(
+      'login waits for pending cookie writes (cancel=$cancelLogin)',
+      () async {
+        final store = await _createStore();
+        addTearDown(store.dispose);
+        store.catalog = catalog;
+        final portal = FakePortal();
+        await store.attach(portal);
+        final release = Completer<void>();
+        final writing = OfficialCookieRotation.clear(() => release.future);
+        final login = store.connectAccount();
+        try {
+          await Future<void>.delayed(Duration.zero);
+          expect(portal.visited, isEmpty);
+          if (cancelLogin) await store.closeBrowser();
+        } finally {
+          release.complete();
+          await writing;
+          await login;
+        }
+        expect(store.browserVisible, !cancelLogin);
+        expect(portal.visited, [
+          if (!cancelLogin) OfficialSite.home.resolve('mygather.php'),
+        ]);
+      },
+    );
   }
 
   test('native account refresh leaves an open login document intact', () async {
@@ -769,6 +810,7 @@ void main() {
     () async {
       final store = await _createStore(storage: MemoryStorage());
       addTearDown(store.dispose);
+      await store.ensureSearchAssets();
       expect(store.folding.matches('世界最強的魔女，就此開始', '世界最强的魔女'), isTrue);
       expect(
         store.folding.matches('Fate/strange Fake', 'Ｆａｔｅ　ｓｔｒａｎｇｅ'),
@@ -777,6 +819,95 @@ void main() {
       expect(store.folding.normalize('𠮷-野'), '𠮷野');
       expect(store.folding.normalize('e\u0301'), store.folding.normalize('é'));
       expect(store.folding.toTraditional('进击的巨人'), '進擊的巨人');
+    },
+  );
+
+  test('anime copies preserve value equality and validate updates', () {
+    final anime = catalog.items.first;
+    final copy = anime.copyWith(sections: [...anime.sections]);
+    expect(copy, anime);
+    expect(copy.hashCode, anime.hashCode);
+    expect(anime.copyWith(poster: null).poster, isNull);
+    expect(() => anime.copyWith(addedDate: 'bad'), throwsFormatException);
+    expect(() => anime.copyWith(sections: ['unknown']), throwsFormatException);
+  });
+
+  test(
+    'startup batches preferences and migrates legacy caches to files',
+    () async {
+      final root = await Directory.systemTemp.createTemp('baha-cache-');
+      addTearDown(() => root.delete(recursive: true));
+      final anime = catalog.items.first;
+      final preferences = _MemoryPreferences();
+      preferences.values.addAll({
+        'baha.device.language': 'zh-Hans',
+        'baha.device.glass': 'premium',
+        CatalogCache.key: catalog.encode(),
+        AccountCache.key: jsonEncode({
+          'favorites': [anime.toJson()],
+          'history': [],
+        }),
+        'baha.notifications.read.reader': '[]',
+      });
+      final disk = PreferencesStorage(
+        preferences: preferences,
+        directoryLoader: () async => root,
+      );
+      final store = await _createStore(storage: disk);
+      addTearDown(store.dispose);
+      expect(store.language, 'zh-Hans');
+      expect(store.glassStyle, 'premium');
+      expect(store.favorites.single, anime);
+      expect(preferences.batchKeys, hasLength(1));
+      for (final key in [CatalogCache.key, AccountCache.key]) {
+        expect(preferences.values.containsKey(key), isFalse);
+        expect(await File('${root.path}/$key.json').exists(), isTrue);
+      }
+      await AccountCache(disk).save({'favorites': [], 'history': []});
+      expect((await AccountCache(disk).load())!.favorites, isEmpty);
+      await disk.clearAccountData();
+      expect(await AccountCache(disk).load(), isNull);
+      expect(await CatalogCache(disk).load(), isNotNull);
+      expect(
+        preferences.values.containsKey('baha.notifications.read.reader'),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'dual-script search returns partial results and caches complete queries',
+    () async {
+      var requests = 0;
+      var failTraditional = true;
+      final search = OfficialAnimeSearch(toTraditional: (_) => '傳統');
+      addTearDown(search.dispose);
+      search.useTransport((uri, {required useAccount}) async {
+        requests++;
+        if (failTraditional && uri.queryParameters['kw'] == '傳統') {
+          throw StateError('offline');
+        }
+        return {
+          'data': {
+            'animeList': [
+              {
+                'animeSn': 10,
+                'videoSn': 20,
+                'title': 'Series',
+                'cover': 'https://p2.bahamut.com.tw/cover.jpg',
+              },
+            ],
+          },
+        };
+      });
+      expect((await search.search('传统')).single.id, '10');
+      failTraditional = false;
+      expect((await search.search('传统')).single.id, '10');
+      expect((await search.search('传统')).single.id, '10');
+      expect(requests, 4);
+      search.reset();
+      await search.search('传统');
+      expect(requests, 6);
     },
   );
 

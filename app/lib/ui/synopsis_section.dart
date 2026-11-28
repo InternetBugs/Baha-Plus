@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -86,12 +85,7 @@ class SynopsisPage extends StatelessWidget {
       topEdgeFadeExtent: 44,
       appBar: GlassAppBar(
         title: Text(store.t('synopsis'), style: const TextStyle(fontSize: 17)),
-        padding: layout.isCompact
-            ? const EdgeInsets.symmetric(horizontal: 8)
-            : EdgeInsets.only(
-                left: math.max(8.0, hPad.left - 8),
-                right: math.max(8.0, hPad.right - 8),
-              ),
+        padding: layout.appBarPadding(hPad),
         actions: [
           GlassIconButton(
             semanticLabel: store.t('close'),

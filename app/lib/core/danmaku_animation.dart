@@ -61,11 +61,17 @@ class DanmakuAnimationClock {
 }
 
 class _DanmakuLaneDecision {
-  const _DanmakuLaneDecision(this.mode, this.lane, this.end);
-  final String mode;
+  const _DanmakuLaneDecision(this.lane, this.end);
   final int? lane;
   final double end;
 }
+
+typedef _RollingItem = ({
+  double start,
+  double duration,
+  double width,
+  double viewportWidth,
+});
 
 /// A visible message keeps its assigned lane until it expires. Recomputing
 /// all lanes every frame makes surviving messages jump when an older one exits.
@@ -74,6 +80,7 @@ class StableDanmakuLanes {
   Float64List _rollingEnds = Float64List(0);
   Float64List _topEnds = Float64List(0);
   Float64List _bottomEnds = Float64List(0);
+  List<_RollingItem?> _rollingItems = const [];
   double _nextExpiry = double.infinity;
   int _laneCount = 0;
   double? _lastPosition;
@@ -93,27 +100,24 @@ class StableDanmakuLanes {
       _laneCount = laneCount;
       _rollingEnds = Float64List(laneCount)
         ..fillRange(0, laneCount, double.negativeInfinity);
+      _rollingItems = List.filled(laneCount, null);
       _topEnds = Float64List(laneCount)
         ..fillRange(0, laneCount, double.negativeInfinity);
       _bottomEnds = Float64List(laneCount)
         ..fillRange(0, laneCount, double.negativeInfinity);
     }
     _lastPosition = position;
+    pruneExpired(position);
+  }
+
+  void pruneExpired(double position) {
     if (position >= _nextExpiry) {
       var next = double.infinity;
-      List<String>? expired;
-      _decisions.forEach((id, decision) {
-        if (decision.end <= position) {
-          (expired ??= <String>[]).add(id);
-        } else if (decision.end < next) {
-          next = decision.end;
-        }
+      _decisions.removeWhere((_, decision) {
+        if (decision.end <= position) return true;
+        if (decision.end < next) next = decision.end;
+        return false;
       });
-      if (expired != null) {
-        for (var i = 0; i < expired!.length; i++) {
-          _decisions.remove(expired![i]);
-        }
-      }
       _nextExpiry = next;
     }
   }
@@ -123,24 +127,64 @@ class StableDanmakuLanes {
     required String mode,
     required double start,
     required double end,
+    double? width,
+    double? viewportWidth,
+    double gap = 24,
   }) {
     final previous = _decisions[id];
     if (previous != null) return previous.lane;
     if (_decisions.length >= 512) return null;
     final laneEnds = _endsForMode(mode);
     final currentPos = _lastPosition ?? start;
+    final rolling = mode == 'rolling';
+    final duration = end - start;
+    final item =
+        rolling &&
+            width != null &&
+            width.isFinite &&
+            width > 0 &&
+            viewportWidth != null &&
+            viewportWidth.isFinite &&
+            viewportWidth > 0 &&
+            duration.isFinite &&
+            duration > 0
+        ? (
+            start: start,
+            duration: duration,
+            width: width,
+            viewportWidth: viewportWidth,
+          )
+        : null;
     int? selected;
     for (var lane = 0; lane < _laneCount; lane++) {
       final occupiedUntil = laneEnds[lane];
-      if (occupiedUntil <= currentPos || occupiedUntil <= start) {
+      final ahead = item == null ? null : _rollingItems[lane];
+      var clear = occupiedUntil <= currentPos || occupiedUntil <= start;
+      if (item != null &&
+          ahead != null &&
+          ahead.viewportWidth == item.viewportWidth) {
+        final clearance =
+            ahead.start +
+            ahead.duration *
+                (ahead.width + gap) /
+                (item.viewportWidth + ahead.width);
+        final reachesLeftEdge =
+            start +
+            item.duration *
+                item.viewportWidth /
+                (item.viewportWidth + item.width);
+        clear = start >= clearance && reachesLeftEdge >= occupiedUntil;
+      }
+      if (clear) {
         selected = lane;
         laneEnds[lane] = end;
+        if (identical(laneEnds, _rollingEnds)) _rollingItems[lane] = item;
         break;
       }
     }
     // Remember a skipped message too, so it does not suddenly appear halfway
     // across the screen when a lane becomes free in a later frame.
-    _decisions[id] = _DanmakuLaneDecision(mode, selected, end);
+    _decisions[id] = _DanmakuLaneDecision(selected, end);
     if (end < _nextExpiry) _nextExpiry = end;
     return selected;
   }
@@ -148,6 +192,9 @@ class StableDanmakuLanes {
   void clear() {
     _decisions.clear();
     _rollingEnds.fillRange(0, _rollingEnds.length, double.negativeInfinity);
+    if (_rollingItems.isNotEmpty) {
+      _rollingItems.fillRange(0, _rollingItems.length, null);
+    }
     _topEnds.fillRange(0, _topEnds.length, double.negativeInfinity);
     _bottomEnds.fillRange(0, _bottomEnds.length, double.negativeInfinity);
     _nextExpiry = double.infinity;

@@ -1,0 +1,9 @@
+-keep class app.bahaplus.mobile.** { *; }
+-keep class io.flutter.app.** { *; }
+-keep class !io.flutter.embedding.android.FlutterPlayStoreSplitApplication,!io.flutter.embedding.engine.deferredcomponents.PlayStoreDeferredComponentManager**,io.flutter.embedding.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class androidx.media3.** { *; }
+-keep class com.pichillilorenzo.flutter_inappwebview_android.** { *; }
+-keep class io.flutter.plugins.** { *; }

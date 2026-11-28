@@ -214,6 +214,22 @@ void main() {
       await hostEvent('modeChanged', {'id': landscapeId, 'active': false});
       expect(button, findsOneWidget);
 
+      if (platform == TargetPlatform.iOS) {
+        await tester.tap(button);
+        await tester.pump();
+        final pending = messages.lastWhere((call) => call.method == 'enter');
+        final pendingId = (pending.arguments as Map)['id'];
+        await tester.pump(const Duration(seconds: 5));
+        expect(button, findsNothing);
+        await hostEvent('modeChanged', {
+          'id': pendingId,
+          'active': false,
+          'reason': 'pip-timeout',
+        });
+        expect(button, findsOneWidget);
+        expect(session.player!.video, same(video));
+      }
+
       await tester.pumpWidget(const SizedBox.shrink());
     }, variant: TargetPlatformVariant({platform}));
   }

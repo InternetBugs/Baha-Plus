@@ -194,6 +194,7 @@ void main() {
         expect(fixture.requests.map((request) => request.url.path), [
           '/mygather.php',
           '/search.php',
+          '/ajax/getCSRFToken.php',
           '/mygather.php',
         ]);
       },
@@ -223,7 +224,7 @@ void main() {
     addTearDown(fixture.api.dispose);
     await expectLater(fixture.set(false), throwsA(_error('stale')));
     expect(fixture.posts, isEmpty);
-    expect(fixture.searches, isEmpty);
+    expect(fixture.searches, hasLength(1));
   });
 
   Future<AppStore> createStore(_FavoriteFixture fixture) async {

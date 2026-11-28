@@ -5,7 +5,10 @@ import '../core/models.dart';
 import '../data/app_store.dart';
 import 'catalog_pages.dart' show ContinueCard, ShowAnime, ShowCollection;
 import 'chrome.dart';
+import 'featured_carousel.dart';
 import 'layout.dart';
+
+export 'featured_carousel.dart';
 
 class HomeContent extends StatelessWidget {
   const HomeContent({
@@ -87,7 +90,11 @@ class HomeContent extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SectionHeading(store.t('recentUpdates'), onTap: openSeason),
+                  SectionHeading(
+                    store.t('recentUpdates'),
+                    actionLabel: store.t('expandSection'),
+                    onTap: openSeason,
+                  ),
                   const SizedBox(height: 16),
                   _RecentUpdatesGrid(
                     store: store,
@@ -109,6 +116,7 @@ class HomeContent extends StatelessWidget {
                     padding: _hInset,
                     child: SectionHeading(
                       store.t('newlyAdded'),
+                      actionLabel: store.t('expandSection'),
                       onTap: () => openCollection(
                         AnimeCollection(
                           id: 'new-added',
@@ -302,38 +310,43 @@ class _HeroCardShell extends StatelessWidget {
       final height = bounds.hasBoundedHeight
           ? bounds.maxHeight
           : math.min(bounds.maxWidth * 1.06, 420.0);
-      return PressableSurface(
-        pressedScale: 0.985,
-        onTap: onTapCard,
-        child: ClipRSuperellipse(
-          borderRadius: BorderRadius.circular(BahaRadius.hero),
-          child: SizedBox(
-            height: height,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Artwork(artworkUrl(wideBanner)),
-                ColoredBox(color: tintColor),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.center,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.transparent, scrimEndColor],
+      return Semantics(
+        button: true,
+        label: '$badge, $title',
+        child: PressableSurface(
+          pressedScale: 0.985,
+          onTap: onTapCard,
+          child: ClipRSuperellipse(
+            borderRadius: BorderRadius.circular(BahaRadius.hero),
+            child: SizedBox(
+              height: height,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Artwork(
+                    artworkUrl(wideBanner),
+                    width: bounds.maxWidth,
+                    height: height,
+                  ),
+                  ColoredBox(color: tintColor),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.center,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, scrimEndColor],
+                      ),
                     ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _HeroKindChip(label: badge, dotColor: dotColor),
-                      const Spacer(),
-                      Flexible(
-                        flex: 0,
-                        child: Semantics(
-                          button: true,
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _HeroKindChip(label: badge, dotColor: dotColor),
+                        const Spacer(),
+                        Flexible(
+                          flex: 0,
                           child: Text(
                             title,
                             maxLines: largeText ? 2 : 3,
@@ -346,7 +359,6 @@ class _HeroCardShell extends StatelessWidget {
                             ),
                           ),
                         ),
-                      ),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -395,10 +407,11 @@ class _HeroCardShell extends StatelessWidget {
                           ),
                         ],
                       ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -481,7 +494,11 @@ class _ContinueWatchingSection extends StatelessWidget {
       children: [
         Padding(
           padding: horizontalPadding,
-          child: SectionHeading(store.t('history'), onTap: openHistory),
+          child: SectionHeading(
+            store.t('history'),
+            actionLabel: store.t('expandSection'),
+            onTap: openHistory,
+          ),
         ),
         const SizedBox(height: 12),
         SizedBox(
@@ -611,7 +628,11 @@ class _NewAddedPosterRail extends StatelessWidget {
                         children: [
                           ClipRSuperellipse(
                             borderRadius: BorderRadius.circular(BahaRadius.tile),
-                            child: Artwork(anime.artwork),
+                            child: Artwork(
+                              anime.artwork,
+                              width: cardWidth,
+                              height: posterHeight,
+                            ),
                           ),
                           if (anime.addedDate != null)
                             Positioned(
@@ -715,61 +736,70 @@ class _TopicsRail extends StatelessWidget {
               .replaceAll('{n}', '${collection.items.length}');
           return SizedBox(
             width: cardWidth,
-            child: PressableSurface(
-              key: ValueKey('home-topic-${collection.id}'),
-              onTap: () => openCollection(collection),
-              child: ClipRSuperellipse(
-                borderRadius: BorderRadius.circular(BahaRadius.card),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    Artwork(lead.artwork),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: collection.expiring
-                              ? const [Color(0x55281604), Color(0xe4221002)]
-                              : const [Color(0x4c0a0c14), Color(0xe40a0c14)],
+            child: Semantics(
+              button: true,
+              label: '${titleFor(collection)}, $count',
+              excludeSemantics: true,
+              child: PressableSurface(
+                key: ValueKey('home-topic-${collection.id}'),
+                onTap: () => openCollection(collection),
+                child: ClipRSuperellipse(
+                  borderRadius: BorderRadius.circular(BahaRadius.card),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Artwork(
+                        lead.artwork,
+                        width: cardWidth,
+                        height: railHeight,
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: collection.expiring
+                                ? const [Color(0x55281604), Color(0xe4221002)]
+                                : const [Color(0x4c0a0c14), Color(0xe40a0c14)],
+                          ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            collection.expiring
-                                ? '${store.t('heroExpiring')} · $count'
-                                : '${store.t('heroCollection')} · $count',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: collection.expiring
-                                  ? const Color(0xffffd080)
-                                  : const Color(0xccffffff),
+                      Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              collection.expiring
+                                  ? '${store.t('heroExpiring')} · $count'
+                                  : '${store.t('heroCollection')} · $count',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: collection.expiring
+                                    ? const Color(0xffffd080)
+                                    : const Color(0xccffffff),
+                              ),
                             ),
-                          ),
-                          Text(
-                            titleFor(collection),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w700,
-                              height: 1.3,
-                              color: Colors.white,
+                            Text(
+                              titleFor(collection),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                height: 1.3,
+                                color: Colors.white,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -904,161 +934,5 @@ class _PosterMiniStack extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class FeaturedCarousel<T> extends StatefulWidget {
-  const FeaturedCarousel({
-    required this.items,
-    required this.keyIdOf,
-    required this.itemBuilder,
-    super.key,
-  });
-
-  final List<T> items;
-  final String Function(T) keyIdOf;
-  final Widget Function(BuildContext, T) itemBuilder;
-
-  @override
-  State<FeaturedCarousel<T>> createState() => _FeaturedCarouselState<T>();
-}
-
-class _FeaturedCarouselState<T> extends State<FeaturedCarousel<T>> {
-  final ValueNotifier<int> _currentPage = ValueNotifier<int>(0);
-  PageController? _pages;
-  double _fraction = .96;
-
-  @override
-  void didUpdateWidget(covariant FeaturedCarousel<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final maxIndex = math.max(0, widget.items.length - 1);
-    if (_currentPage.value > maxIndex) {
-      _currentPage.value = maxIndex;
-    }
-  }
-
-  PageController _controllerFor(double fraction) {
-    if (_pages != null && (_fraction - fraction).abs() < .01) {
-      return _pages!;
-    }
-    final initialPage = _pages != null && _pages!.hasClients
-        ? (_pages!.page?.round() ?? _pages!.initialPage)
-        : _currentPage.value;
-    final previous = _pages;
-    _fraction = fraction;
-    final clamped = initialPage
-        .clamp(0, math.max(0, widget.items.length - 1))
-        .toInt();
-    _currentPage.value = clamped;
-    _pages = PageController(initialPage: clamped, viewportFraction: fraction);
-    if (previous != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
-    }
-    return _pages!;
-  }
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, bounds) {
-      final wide = bounds.maxWidth >= 560;
-      final singleWide = wide && widget.items.length == 1;
-      final reduceMotion = MediaQuery.disableAnimationsOf(context);
-      final textScaler = MediaQuery.textScalerOf(context);
-      final extraTextHeight = math.max(0.0, textScaler.scale(16) - 16) * 4.5;
-      final double fraction;
-      final double height;
-      final int visibleCount;
-      if (!wide) {
-        fraction = .95;
-        height = math.min(bounds.maxWidth * 1.06 + extraTextHeight, 440.0);
-        visibleCount = 1;
-      } else if (singleWide) {
-        fraction = 1.0;
-        height = math.min(bounds.maxWidth * .50 + extraTextHeight, 440.0);
-        visibleCount = 1;
-      } else if (bounds.maxWidth >= 960) {
-        visibleCount = math.min(3, widget.items.length);
-        // Size pages so the trailing card aligns flush with the content grid
-        // right edge while preserving the 16px inter-card gap.
-        fraction = (bounds.maxWidth + 16.0) / (visibleCount * bounds.maxWidth);
-        final cardWidth = bounds.maxWidth * fraction - 16.0;
-        height = math.min(cardWidth * 1.18 + extraTextHeight, 460.0);
-      } else {
-        const targetCardWidth = 350.0;
-        fraction = (targetCardWidth / bounds.maxWidth).clamp(.42, .54);
-        height = math.min(targetCardWidth * 1.18 + extraTextHeight, 460.0);
-        visibleCount = (1 / fraction).floor().clamp(1, widget.items.length);
-      }
-      final controller = _controllerFor(fraction);
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: height,
-            child: PageView.builder(
-              key: const PageStorageKey('featured-carousel-pages'),
-              controller: controller,
-              clipBehavior: Clip.none,
-              padEnds: false,
-              allowImplicitScrolling: true,
-              physics: const BouncingScrollPhysics(),
-              itemCount: widget.items.length,
-              onPageChanged: (index) => _currentPage.value = index,
-              itemBuilder: (context, index) => Padding(
-                key: ValueKey('featured-${widget.keyIdOf(widget.items[index])}'),
-                padding: EdgeInsets.only(
-                  right: singleWide ? 0 : (wide ? 16 : 12),
-                ),
-                child: widget.itemBuilder(context, widget.items[index]),
-              ),
-            ),
-          ),
-          if (widget.items.length > visibleCount) ...[
-            const SizedBox(height: 12),
-            ValueListenableBuilder<int>(
-              valueListenable: _currentPage,
-              builder: (context, page, _) {
-                final activeIndex = page
-                    .clamp(0, math.max(0, widget.items.length - 1))
-                    .toInt();
-                return Row(
-                  key: const ValueKey('featured-carousel-indicators'),
-                  children: [
-                    for (
-                      var index = 0;
-                      index < widget.items.length;
-                      index++
-                    ) ...[
-                      if (index > 0) const SizedBox(width: 6),
-                      AnimatedContainer(
-                        duration: reduceMotion
-                            ? Duration.zero
-                            : const Duration(milliseconds: 200),
-                        curve: Curves.easeOutCubic,
-                        width: index == activeIndex ? 20 : 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: index == activeIndex
-                              ? brandBlue
-                              : secondary(context).withValues(alpha: .32),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    ],
-                  ],
-                );
-              },
-            ),
-          ],
-        ],
-      );
-    },
-  );
-
-  @override
-  void dispose() {
-    _currentPage.dispose();
-    _pages?.dispose();
-    super.dispose();
   }
 }

@@ -42,13 +42,15 @@ class _BufferPainter extends CustomPainter {
   final TextDirection textDirection;
 
   static final _bufferPaint = Paint()..color = const Color(0xff8e8e93);
+  static final _trackPaint = Paint();
 
   @override
   void paint(Canvas canvas, Size size) {
     // GlassSlider paints its track across the full width, at the vertical center.
     final track = Rect.fromLTWH(0, (size.height - 4) / 2, size.width, 4);
     final rounded = RRect.fromRectAndRadius(track, const Radius.circular(2));
-    canvas.drawRRect(rounded, Paint()..color = trackColor);
+    _trackPaint.color = trackColor;
+    canvas.drawRRect(rounded, _trackPaint);
     if (duration <= 0 || !duration.isFinite || ranges.isEmpty) return;
     canvas.save();
     canvas.clipRRect(rounded);

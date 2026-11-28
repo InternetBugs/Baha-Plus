@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' show Color;
 
-import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:html/parser.dart' show parseFragment;
+import 'package:http/http.dart' as http;
 
 import '../core/models.dart';
 import '../core/native_danmaku.dart';
@@ -244,7 +246,6 @@ class NativeHttpApi {
     Uri.https('ani.gamer.com.tw', '/animeVideo.php'),
     Uri.https('ani.gamer.com.tw', '/ajax/elapse.php'),
     Uri.https('api.gamer.com.tw', '/anime/v1/video.php'),
-    Uri.https('api.gamer.com.tw', '/anime/v1/video_src.php'),
   ]);
   _NativeHttpPool _pool;
   final _pools = <_NativeHttpPool>{};
@@ -263,6 +264,8 @@ class NativeHttpApi {
     dotAll: true,
   );
   static final _adIdPattern = RegExp(r'^[0-9]{1,20}$');
+  static final _adCacheAge = Stopwatch();
+  static List<NativeHttpAd>? _adCache;
   static final _resolutionPattern = RegExp(r'RESOLUTION=\d+x(\d+)');
   static final _controlCharPattern = RegExp(r'[\x00-\x20\x7f]');
 
@@ -290,42 +293,41 @@ class NativeHttpApi {
         if (imported != _cookies) imported?.clear();
       }
     }
-    await _text('page', _web('/animeVideo.php', {'sn': _video}));
+    await _text(
+      'page',
+      _web('/animeVideo.php', {'sn': _video}),
+      sessionAlreadyChecked: true,
+    );
     _device = _deviceId(
       (await _json('device', _web('/ajax/getdeviceid.php')))['deviceid'],
     );
-    final metadata = await _json(
-      'metadata',
-      _api('/anime/v1/video.php', {'videoSn': _video}),
-    );
+    final random = Random.secure();
+    final responses = await Future.wait([
+      _json('metadata', _api('/anime/v1/video.php', {'videoSn': _video})),
+      _json(
+        'policy',
+        _web('/ajax/token.php', {
+          'adID': 'undefined',
+          'sn': _video,
+          'device': _device,
+          'hash': List.generate(
+            6,
+            (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+          ).join(),
+        }),
+      ),
+    ]);
+    final [metadata, policy] = responses;
     final video = (metadata['data'] as Json)['video'] as Json;
     if (video['requestParentPassword'] == true) {
       throw const NativeHttpException('parent-verification-required');
     }
-    final random = Random.secure();
-    final policy = await _json(
-      'policy',
-      _web('/ajax/token.php', {
-        'adID': 'undefined',
-        'sn': _video,
-        'device': _device,
-        'hash': List.generate(
-          6,
-          (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-        ).join(),
-      }),
-    );
     if (policy['time'] is! num) {
       throw const NativeHttpException('policy-format');
     }
     NativeHttpAd? ad;
     if (policy['time'] != 1) {
-      final ads = parseAds(
-        await _text(
-          'ad-config',
-          Uri.https('i2.bahamut.com.tw', '/JS/ad/animeVideo.js'),
-        ),
-      );
+      final ads = await _ads();
       ad = ads[random.nextInt(ads.length)];
     }
     double number(dynamic raw) =>
@@ -347,6 +349,31 @@ class NativeHttpApi {
       duration: number(video['duration']),
       ad: ad,
     );
+  }
+
+  Future<List<NativeHttpAd>> _ads() async {
+    final cached = _adCache;
+    if (cached != null && _adCacheAge.elapsed < const Duration(minutes: 15)) {
+      return cached;
+    }
+    final ads = parseAds(
+      await _text(
+        'ad-config',
+        Uri.https('i2.bahamut.com.tw', '/JS/ad/animeVideo.js'),
+      ),
+    );
+    _adCacheAge
+      ..reset()
+      ..start();
+    return _adCache = ads;
+  }
+
+  @visibleForTesting
+  static void clearAdCache() {
+    _adCache = null;
+    _adCacheAge
+      ..stop()
+      ..reset();
   }
 
   void consent() {
@@ -418,25 +445,29 @@ class NativeHttpApi {
     final playlist = await _text('playlist', master);
     final variants = parseVariants(master, playlist);
     // Catalog duration is not a media clock. Use HLS seconds for resume bounds.
-    final media = variants.isEmpty
+    final mediaUri = variants.values.firstOrNull ?? master;
+    final media = mediaUri == master
         ? playlist
-        : await _text('media-playlist', variants.values.first);
+        : await _text('media-playlist', mediaUri);
     final duration = _sumExtinfDuration(media);
     if (!duration.isFinite || duration <= 0 || duration > 172800) {
       throw const NativeHttpException('media-duration');
     }
-    return NativePlaybackSource.fromJson({
-      'master': master.toString(),
-      'variants': [
-        for (final entry in variants.entries)
-          {'height': entry.key, 'url': entry.value.toString()},
-      ],
-      'position': (position ?? preparation.position).clamp(0.0, duration),
-      'duration': duration,
-      'paused': paused,
-      'rate': rate,
-      'muted': muted,
-    });
+    return NativePlaybackSource.fromJson(
+      {
+        'master': master.toString(),
+        'variants': [
+          for (final entry in variants.entries)
+            {'height': entry.key, 'url': entry.value.toString()},
+        ],
+        'position': (position ?? preparation.position).clamp(0.0, duration),
+        'duration': duration,
+        'paused': paused,
+        'rate': rate,
+        'muted': muted,
+      },
+      seededPlaylists: {master: playlist, mediaUri: media},
+    );
   }
 
   static double _sumExtinfDuration(String playlist) {
@@ -457,7 +488,9 @@ class NativeHttpApi {
         }
       }
       if (valueEnd > valueStart) {
-        final parsed = double.tryParse(playlist.substring(valueStart, valueEnd));
+        final parsed = double.tryParse(
+          playlist.substring(valueStart, valueEnd),
+        );
         if (parsed != null) sum += parsed;
       }
       index = valueEnd;
@@ -479,17 +512,70 @@ class NativeHttpApi {
         (_preparation!.ad != null && !_adEnded)) {
       throw const NativeHttpException('danmaku-gated');
     }
-    return parseDanmaku(
-      await _json(
-        'danmaku',
-        _api('/anime/v1/danmu.php', {'videoSn': _video, 'geo': 'TW,HK'}),
-      ),
+    final text = await _text(
+      'danmaku',
+      _api('/anime/v1/danmu.php', {'videoSn': _video, 'geo': 'TW,HK'}),
     );
+    const isolateThreshold = 32 * 1024;
+    if (text.length > isolateThreshold ||
+        (text.length > isolateThreshold ~/ 3 &&
+            utf8.encode(text).length > isolateThreshold)) {
+      return Isolate.run(() => _parseDanmakuResponse(text));
+    }
+    return _parseDanmakuResponse(text);
   }
+
+  static List<NativeDanmaku> _parseDanmakuResponse(String text) =>
+      parseDanmaku(_decodeJson('danmaku', text));
 
   static final _danmakuIdPattern = RegExp(r'^\d{1,20}$');
   static final _danmakuSpacePattern = RegExp(r'[\s\u00a0]+');
   static final _danmakuColorPattern = RegExp(r'^#[0-9a-fA-F]{6}$');
+  static final _danmakuEntityPattern = RegExp(
+    r'&(amp|lt|gt|quot|apos|#[0-9]+|#[xX][0-9a-fA-F]+);|&',
+  );
+
+  static String _decodeDanmakuText(String text) {
+    if (text.contains('<') || text.contains('\u0000')) {
+      return parseFragment(text).text ?? '';
+    }
+    if (!text.contains('&')) return text;
+    var fallback = false;
+    final decoded = text.replaceAllMapped(_danmakuEntityPattern, (match) {
+      final entity = match[1];
+      switch (entity) {
+        case 'amp':
+          return '&';
+        case 'lt':
+          return '<';
+        case 'gt':
+          return '>';
+        case 'quot':
+          return '"';
+        case 'apos':
+          return "'";
+        case null:
+          fallback = true;
+          return match[0]!;
+        default:
+          final hex = entity.startsWith('#x') || entity.startsWith('#X');
+          final value = int.tryParse(
+            entity.substring(hex ? 2 : 1),
+            radix: hex ? 16 : 10,
+          );
+          if (value == null ||
+              value < 1 ||
+              value > 0x10ffff ||
+              (value >= 0xd800 && value <= 0xdfff) ||
+              (value >= 0x80 && value <= 0x9f)) {
+            fallback = true;
+            return match[0]!;
+          }
+          return String.fromCharCode(value);
+      }
+    });
+    return fallback ? parseFragment(text).text ?? '' : decoded;
+  }
 
   /// Normalize the units returned by the official API:
   /// time is in tenths of a second, size/position are enum values, text is HTML.
@@ -519,16 +605,12 @@ class NativeHttpApi {
       if (!_danmakuIdPattern.hasMatch(idText) || items.containsKey(idText)) {
         continue;
       }
-      final decoded =
-          (rawText.contains('<') ||
-              rawText.contains('&') ||
-              rawText.contains('\u0000'))
-          ? (parseFragment(rawText).text ?? '')
-          : rawText;
+      final decoded = _decodeDanmakuText(rawText);
       final text = decoded.replaceAll(_danmakuSpacePattern, ' ').trim();
       if (text.isEmpty || text.length > 500) continue;
       final rawColor = row['color'];
-      final color = rawColor is String && _danmakuColorPattern.hasMatch(rawColor)
+      final color =
+          rawColor is String && _danmakuColorPattern.hasMatch(rawColor)
           ? NativeDanmaku.parseColor(rawColor)
           : const Color(0xFFFFFFFF);
       items[idText] = NativeDanmaku(
@@ -668,8 +750,10 @@ class NativeHttpApi {
     }
   }
 
-  Future<Json> _json(String stage, Uri uri) async {
-    final text = await _text(stage, uri);
+  Future<Json> _json(String stage, Uri uri) async =>
+      _decodeJson(stage, await _text(stage, uri));
+
+  static Json _decodeJson(String stage, String text) {
     try {
       final body = jsonDecode(text) as Json;
       _checkError(stage, body);
@@ -681,7 +765,7 @@ class NativeHttpApi {
     }
   }
 
-  void _checkError(String stage, Json body) {
+  static void _checkError(String stage, Json body) {
     final error = body['error'];
     if (error != null && error != false && error != 0) {
       throw NativeHttpException(
@@ -756,10 +840,19 @@ class NativeHttpApi {
     }
   }
 
-  Future<String> _text(String stage, Uri uri) async {
+  Future<String> _text(
+    String stage,
+    Uri uri, {
+    bool sessionAlreadyChecked = false,
+  }) async {
     for (var attempt = 0; ; attempt++) {
       try {
-        return await _textOnce(stage, uri, persistentConnection: attempt == 0);
+        return await _textOnce(
+          stage,
+          uri,
+          persistentConnection: attempt == 0,
+          sessionAlreadyChecked: sessionAlreadyChecked && attempt == 0,
+        );
       } on NativeHttpException catch (error) {
         if (_disposed || !_isRetryable(error, stage, attempt)) rethrow;
         _rotateClient();
@@ -777,6 +870,7 @@ class NativeHttpApi {
     String stage,
     Uri uri, {
     required bool persistentConnection,
+    required bool sessionAlreadyChecked,
   }) async {
     if (_disposed) throw const NativeHttpException('disposed');
     final official = const [
@@ -799,7 +893,9 @@ class NativeHttpApi {
     var sentHeader = '';
     try {
       final text = await (() async {
-        if (uri.host == 'ani.gamer.com.tw' || uri.host == 'api.gamer.com.tw') {
+        if (!sessionAlreadyChecked &&
+            (uri.host == 'ani.gamer.com.tw' ||
+                uri.host == 'api.gamer.com.tw')) {
           await _checkDeviceSession();
         }
         if (_disposed) throw const NativeHttpException('disposed');

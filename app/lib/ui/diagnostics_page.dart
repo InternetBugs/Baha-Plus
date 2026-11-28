@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -103,12 +102,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
             statusBarStyle: GlassStatusBarStyle.auto,
             appBar: GlassAppBar(
               title: Text(store.t('diagnosticsPreview')),
-              padding: previewLayout.isCompact
-                  ? const EdgeInsets.symmetric(horizontal: 8)
-                  : EdgeInsets.only(
-                      left: math.max(8.0, previewPad.left - 8),
-                      right: math.max(8.0, previewPad.right - 8),
-                    ),
+              padding: previewLayout.appBarPadding(previewPad),
               leading: GlassIconButton(
                 semanticLabel: store.t('back'),
                 icon: const Icon(CupertinoIcons.chevron_back),
@@ -173,12 +167,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
         topEdgeFadeExtent: 44,
         appBar: GlassAppBar(
           title: Text(store.t('diagnosticsTitle')),
-          padding: layout.isCompact
-              ? const EdgeInsets.symmetric(horizontal: 8)
-              : EdgeInsets.only(
-                  left: math.max(8.0, hPad.left - 8),
-                  right: math.max(8.0, hPad.right - 8),
-                ),
+          padding: layout.appBarPadding(hPad),
           leading: GlassIconButton(
             semanticLabel: store.t('back'),
             icon: const Icon(CupertinoIcons.chevron_back),

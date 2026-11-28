@@ -5,6 +5,7 @@ import 'package:baha_plus/core/playback_state.dart';
 import 'package:baha_plus/data/native_hls_cache.dart';
 import 'package:baha_plus/data/native_playback.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:http/testing.dart';
@@ -24,6 +25,7 @@ void main() {
   late http.Client local;
   late FakeVideo platform;
   late NativePlayback native;
+  late NativeHlsCache cache;
   late List<PlaybackState> states;
   late int transfers;
   late bool offline;
@@ -46,7 +48,7 @@ void main() {
       source: NativePlaybackSource.fromJson(sourceJson()),
       userAgent: 'test-device',
       onState: states.add,
-      cacheFactory: () => NativeHlsCache(
+      cacheFactory: () => cache = NativeHlsCache(
         headers: const {},
         createDirectory: () async => directory,
         client: MockClient((request) async {
@@ -86,6 +88,7 @@ void main() {
       final parts = mediaUris(await local.read(source));
       await local.read(parts[0]);
       await local.read(parts[2]);
+      await cache.pendingWrites;
       platform.streams[0]!.add(
         VideoEvent(
           eventType: VideoEventType.bufferingUpdate,
@@ -126,6 +129,7 @@ void main() {
       final original = Uri.parse(platform.sources.single.uri!);
       final parts = mediaUris(await local.read(original));
       await local.read(parts[0]);
+      await cache.pendingWrites;
       expect(native.state.bufferRanges, [(start: 0.0, end: 10.0)]);
       expect(await native.command('quality', 1080), isTrue);
       expect(native.state.bufferRanges, isEmpty);
@@ -147,6 +151,7 @@ void main() {
       final original = Uri.parse(platform.sources.single.uri!);
       final parts = mediaUris(await local.read(original));
       await local.read(parts[0]);
+      await cache.pendingWrites;
       final held = platform.holdCreation = Completer<void>();
       final changing = native.command('quality', 1080);
       await Future<void>.delayed(Duration.zero);
@@ -210,6 +215,47 @@ void main() {
       expect(platform.sources.single.uri, sourceJson()['master']);
       expect(native.state.phase, PlaybackPhase.content);
       expect(native.state.paused, isFalse);
+    },
+  );
+
+  test(
+    'a loopback decoder failure restarts native download sampling',
+    () async {
+      const channel = MethodChannel('app.bahaplus.mobile/playback_download');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final sampled = Completer<void>();
+      var starts = 0, samples = 0, bufferingSamples = 0;
+      var buffering = false;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        switch (call.method) {
+          case 'start':
+            starts++;
+            expect(
+              (call.arguments as Map)['sources'],
+              contains(sourceJson()['master']),
+            );
+            return true;
+          case 'sample':
+            samples++;
+            if (buffering && ++bufferingSamples == 2) sampled.complete();
+            return {'bytes': samples * 2048, 'source': 0};
+          default:
+            return null;
+        }
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      platform.failInitializations = 1;
+      await initialize();
+      expect(Uri.parse(platform.sources.first.uri!).host, '127.0.0.1');
+      expect(platform.sources.last.uri, sourceJson()['master']);
+      expect(starts, 1);
+      final current = native.video!;
+      buffering = true;
+      current.value = current.value.copyWith(isBuffering: true);
+      await sampled.future.timeout(const Duration(seconds: 4));
+      await Future<void>.delayed(Duration.zero);
+      expect(native.state.downloadBytesPerSecond, greaterThan(0));
     },
   );
 

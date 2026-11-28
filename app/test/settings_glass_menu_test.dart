@@ -1,9 +1,7 @@
-import 'package:baha_plus/core/models.dart';
 import 'package:baha_plus/data/app_store.dart';
 import 'package:baha_plus/main.dart';
 import 'package:baha_plus/ui/account_page.dart';
 import 'package:baha_plus/ui/chrome.dart';
-import 'package:baha_plus/ui/community_widgets.dart';
 import 'package:baha_plus/ui/glass_alert.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -302,60 +300,6 @@ void main() {
       expect(rect.left, greaterThanOrEqualTo(0));
       expect(rect.right, lessThanOrEqualTo(320));
       expect(rect.bottom, lessThanOrEqualTo(640));
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets(
-    'BoardEpisodePicker opens a Liquid Glass option menu with checkmark',
-    (tester) async {
-      tester.view.physicalSize = const Size(400, 850);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.reset);
-      final store = (await tester.runAsync(
-        () => AppStore.create(
-          metadataApi: FakeMetadata(),
-          storage: MemoryStorage(),
-          animeSearch: FakeSearch(),
-        ),
-      ))!;
-      addTearDown(store.dispose);
-      Episode? selected;
-      await tester.pumpWidget(
-        LiquidGlassWidgets.wrap(
-          brightnessResolver: Theme.maybeBrightnessOf,
-          theme: GlassThemeData.simple(quality: GlassQuality.standard),
-          child: MaterialApp(
-            home: Scaffold(
-              body: Center(
-                child: BoardEpisodePicker(
-                  store: store,
-                  videoId: '20',
-                  episodes: const [
-                    Episode(id: '20', label: '1'),
-                    Episode(id: '21', label: '2'),
-                  ],
-                  onSelected: (episode) => selected = episode,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      await frames(tester);
-      await tester.tap(find.byKey(const ValueKey('board-episode-selector')));
-      await frames(tester);
-      expect(find.byType(CupertinoActionSheet), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('board-select-20')),
-          matching: find.byIcon(CupertinoIcons.checkmark),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const ValueKey('board-select-21')));
-      await frames(tester);
-      expect(selected?.id, '21');
       expect(tester.takeException(), isNull);
     },
   );

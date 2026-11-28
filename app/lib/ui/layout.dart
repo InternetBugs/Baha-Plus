@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 /// Window width classes shared across phones, foldables, iPads and Android
@@ -94,6 +95,15 @@ class AppLayout {
     );
   }
 
+  /// Consistent horizontal padding for [GlassAppBar] aligned with the centered
+  /// content column on medium and expanded screens.
+  EdgeInsets appBarPadding(EdgeInsets contentPadding) => isCompact
+      ? const EdgeInsets.symmetric(horizontal: 8)
+      : EdgeInsets.only(
+          left: math.max(8.0, contentPadding.left - 8),
+          right: math.max(8.0, contentPadding.right - 8),
+        );
+
   static int posterColumns(double contentWidth) =>
       (contentWidth / 190).floor().clamp(2, 6);
 
@@ -138,14 +148,19 @@ class GlassNavigationRail extends StatelessWidget {
   final Color indicatorColor;
   final double width;
 
-  static const _itemHeight = 60.0;
   static const _itemGap = 4.0;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
-    final themeQuality = GlassThemeData.of(context).qualityFor(context);
+    final itemHeight = (MediaQuery.textScalerOf(context).scale(11) + 49).clamp(
+      60.0,
+      86.0,
+    );
+    final themeQuality =
+        GlassAdaptiveScopeData.maybeOf(context)?.effectiveQuality ??
+        GlassThemeData.of(context).qualityFor(context);
     final unselectedColor = Theme.of(
       context,
     ).colorScheme.onSurface.withValues(alpha: dark ? .82 : .76);
@@ -177,8 +192,8 @@ class GlassNavigationRail extends StatelessWidget {
                   curve: Curves.easeOutCubic,
                   left: 0,
                   right: 0,
-                  top: safeIndex * (_itemHeight + _itemGap),
-                  height: _itemHeight,
+                  top: safeIndex * (itemHeight + _itemGap),
+                  height: itemHeight,
                   child: IgnorePointer(
                     child: DecoratedBox(
                       decoration: ShapeDecoration(
@@ -196,7 +211,7 @@ class GlassNavigationRail extends StatelessWidget {
                   for (var index = 0; index < destinations.length; index++) ...[
                     if (index > 0) const SizedBox(height: _itemGap),
                     SizedBox(
-                      height: _itemHeight,
+                      height: itemHeight,
                       child: _GlassRailItem(
                         key: ValueKey('rail-tab-$index'),
                         destination: destinations[index],
@@ -240,6 +255,7 @@ class _GlassRailItem extends StatefulWidget {
 class _GlassRailItemState extends State<_GlassRailItem> {
   bool _hovered = false;
   bool _pressed = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
@@ -252,54 +268,78 @@ class _GlassRailItemState extends State<_GlassRailItem> {
         ? Colors.transparent
         : _pressed
         ? (dark ? const Color(0x1effffff) : const Color(0x14000000))
-        : _hovered
+        : (_hovered || _focused)
         ? (dark ? const Color(0x14ffffff) : const Color(0x0b000000))
         : Colors.transparent;
     return Semantics(
       selected: widget.selected,
       button: true,
       label: widget.destination.label,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapUp: (_) => setState(() => _pressed = false),
-          onTapCancel: () => setState(() => _pressed = false),
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: reducedMotion
-                ? Duration.zero
-                : const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-            decoration: ShapeDecoration(
-              color: fill,
-              shape: const LiquidRoundedSuperellipse(borderRadius: 22),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(widget.destination.icon, size: 22, color: foreground),
-                const SizedBox(height: 4),
-                Text(
-                  widget.destination.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: foreground,
-                    fontWeight: widget.selected
-                        ? FontWeight.w600
-                        : FontWeight.w500,
+      onTap: widget.onTap,
+      child: Focus(
+        onFocusChange: (focused) => setState(() => _focused = focused),
+        child: Shortcuts(
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+            SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          },
+          child: Actions(
+            actions: {
+              ActivateIntent: CallbackAction<ActivateIntent>(
+                onInvoke: (_) {
+                  widget.onTap();
+                  return null;
+                },
+              ),
+            },
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              onEnter: (_) => setState(() => _hovered = true),
+              onExit: (_) => setState(() => _hovered = false),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                excludeFromSemantics: true,
+                onTapDown: (_) => setState(() => _pressed = true),
+                onTapUp: (_) => setState(() => _pressed = false),
+                onTapCancel: () => setState(() => _pressed = false),
+                onTap: widget.onTap,
+                child: AnimatedContainer(
+                  duration: reducedMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 6,
+                  ),
+                  decoration: ShapeDecoration(
+                    color: fill,
+                    shape: const LiquidRoundedSuperellipse(borderRadius: 22),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(widget.destination.icon, size: 22, color: foreground),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.destination.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: foreground,
+                          fontWeight: widget.selected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -383,8 +423,9 @@ Future<T?> showAdaptiveGlassSheet<T>({
         math.min(media.size.height * tabletMaxHeightFraction, tabletMaxHeight),
         availableHeight,
       );
-      final shape = LiquidRoundedSuperellipse(
-        borderRadius: 32,
+      const sheetRadius = BorderRadius.all(Radius.circular(32));
+      final shape = RoundedSuperellipseBorder(
+        borderRadius: sheetRadius,
         side: BorderSide(
           color: dark
               ? const Color(0x22ffffff)
@@ -425,8 +466,8 @@ Future<T?> showAdaptiveGlassSheet<T>({
                       ),
                     ],
                   ),
-                  child: ClipPath(
-                    clipper: ShapeBorderClipper(shape: shape),
+                  child: ClipRSuperellipse(
+                    borderRadius: sheetRadius,
                     child: CupertinoUserInterfaceLevel(
                       data: CupertinoUserInterfaceLevelData.elevated,
                       child: MediaQuery.removePadding(

@@ -355,6 +355,25 @@ void main() {
   });
 
   test(
+    'account-only community actions reject guests before any HTTP request',
+    () async {
+      final fixture = AccountFixture()..cookie = '';
+      addTearDown(fixture.api.dispose);
+      for (final (action, args) in <(String, Json)>[
+        ('comment-send', {'videoId': '20', 'messageId': '123', 'text': '留言'}),
+        ('comment-vote', {'commentId': '1', 'type': 2, 'remove': false}),
+        ('notifications', {}),
+      ]) {
+        await expectLater(
+          fixture.community(action, args),
+          throwsA(nativeError('login')),
+        );
+        expect(fixture.requests, isEmpty);
+      }
+    },
+  );
+
+  test(
     'profile refresh revalidates the login after reading public data',
     () async {
       final fixture = AccountFixture();
@@ -647,6 +666,49 @@ void main() {
   });
 
   test(
+    'comment and reply endpoints enforce their own limits and reject duplicate IDs',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      final rows = List.generate(
+        2001,
+        (index) => fixture.rawComment('${index + 1}'),
+      );
+      var count = 200;
+      var messageId = '0';
+      fixture.handler = (_) async => http.Response(
+        jsonEncode({
+          'messageId': messageId,
+          'comments': rows.take(count).toList(),
+        }),
+        200,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+      Future<Json> page() => fixture.community('comments', {
+        'videoId': '20',
+        'order': 1,
+        'page': 0,
+      });
+      Future<Json> replies() =>
+          fixture.community('replies', {'commentId': '1'});
+      expect((await page())['comments'], hasLength(200));
+      count = 201;
+      await expectLater(page(), throwsA(nativeError('format')));
+      count = 2000;
+      expect((await replies())['comments'], hasLength(2000));
+      count = 2001;
+      await expectLater(replies(), throwsA(nativeError('format')));
+      count = 2;
+      messageId = '9' * 21;
+      await expectLater(page(), throwsA(nativeError('format')));
+      messageId = '123';
+      rows[1] = rows.first;
+      await expectLater(page(), throwsA(nativeError('format')));
+      await expectLater(replies(), throwsA(nativeError('format')));
+    },
+  );
+
+  test(
     'favorite sends the real pair of series IDs once and respects desired state',
     () async {
       final fixture = AccountFixture();
@@ -699,6 +761,71 @@ void main() {
       expect(post.headers['cookie'], contains('session=session-a'));
     },
   );
+
+  test(
+    'submission starts both preflight reads and waits for both before POST',
+    () async {
+      final fixture = AccountFixture();
+      addTearDown(fixture.api.dispose);
+      final profile = Completer<void>();
+      final board = Completer<void>();
+      fixture.handler = (request) async {
+        if (request.url.path == '/mygather.php') await profile.future;
+        if (request.url.path.endsWith('comment_detail.php')) await board.future;
+        return fixture.response(request);
+      };
+      final limit = '😀' * 2000;
+      Future<Json> send(String text) => fixture.community('comment-send', {
+        'videoId': '20',
+        'messageId': '123',
+        'text': text,
+        'owner': 'reader',
+      });
+      for (final invalid in [' ', '$limit字']) {
+        await expectLater(send(invalid), throwsA(nativeError('input')));
+      }
+      expect(fixture.requests, isEmpty);
+      final sending = send(' $limit ');
+      await pumpEventQueue();
+      expect(
+        fixture.requests.map((request) => request.url.path),
+        unorderedEquals(['/mygather.php', '/app/v2/comment_detail.php']),
+      );
+      expect(fixture.posts, isEmpty);
+      board.complete();
+      await pumpEventQueue();
+      expect(fixture.posts, isEmpty);
+      profile.complete();
+      expect((await sending)['id'], '91');
+      expect(fixture.posts.single.bodyFields['message'], limit);
+    },
+  );
+
+  test('owner mismatch fails while the board read is still pending', () async {
+    final fixture = AccountFixture()..owner = 'other';
+    addTearDown(fixture.api.dispose);
+    final board = Completer<void>();
+    fixture.handler = (request) async {
+      if (request.url.path.endsWith('comment_detail.php')) await board.future;
+      return fixture.response(request);
+    };
+    final rejected = expectLater(
+      fixture.community('comment-send', {
+        'videoId': '20',
+        'messageId': '123',
+        'text': '留言',
+        'owner': 'reader',
+      }),
+      throwsA(nativeError('stale')),
+    );
+    try {
+      await rejected.timeout(const Duration(seconds: 2));
+    } finally {
+      board.complete();
+    }
+    await pumpEventQueue();
+    expect(fixture.posts, isEmpty);
+  });
 
   test('vote and undo use separate official endpoints', () async {
     final fixture = AccountFixture();

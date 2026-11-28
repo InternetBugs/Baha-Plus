@@ -9,14 +9,17 @@ import 'native_download_speed.dart';
 import 'native_hls_cache.dart';
 
 class NativePlaybackSource {
-  NativePlaybackSource.fromJson(Json json)
-    : master = mediaUri(json['master']),
-      variants = parseVariants(json['variants']),
-      position = (json['position'] as num).toDouble(),
-      duration = (json['duration'] as num).toDouble(),
-      rate = (json['rate'] as num).toDouble(),
-      paused = json['paused'] as bool,
-      muted = json['muted'] as bool {
+  NativePlaybackSource.fromJson(
+    Json json, {
+    Map<Uri, String> seededPlaylists = const {},
+  }) : master = mediaUri(json['master']),
+       variants = parseVariants(json['variants']),
+       position = (json['position'] as num).toDouble(),
+       duration = (json['duration'] as num).toDouble(),
+       rate = (json['rate'] as num).toDouble(),
+       paused = json['paused'] as bool,
+       muted = json['muted'] as bool,
+       seededPlaylists = Map.unmodifiable(seededPlaylists) {
     if (variants.length > 20 ||
         variants.keys.any((height) => height < 144 || height > 4320) ||
         !position.isFinite ||
@@ -32,6 +35,7 @@ class NativePlaybackSource {
 
   final Uri master;
   final Map<int, Uri> variants;
+  final Map<Uri, String> seededPlaylists;
   final double position, duration, rate;
   final bool paused, muted;
 
@@ -102,6 +106,12 @@ class _SeekAwareVideoPlayerController extends VideoPlayerController {
   }
 }
 
+class _QueuedSeek {
+  _QueuedSeek(this.position);
+  double position;
+  late final Future<bool> result;
+}
+
 /// AVPlayer/ExoPlayer owns the video surface and actual media clock.
 /// Media URLs never enter logs or preferences.
 class NativePlayback extends ChangeNotifier {
@@ -134,6 +144,10 @@ class NativePlayback extends ChangeNotifier {
     source.variants.keys.toList()..sort((a, b) => b.compareTo(a)),
   );
   NativeHlsCache? _cache;
+  late final List<String> _downloadSources = [
+    source.master.toString(),
+    ...source.variants.values.map((uri) => uri.toString()),
+  ];
   late final _downloadSpeed = NativeDownloadSpeed(
     onSpeed: _downloadChanged,
     counters: _cache == null
@@ -156,6 +170,9 @@ class NativePlayback extends ChangeNotifier {
   Duration? _lastVideoPosition;
   String? failureStage, failureCode;
   Future<bool> _commands = Future.value(true);
+  _QueuedSeek? _queuedSeek;
+  Future<bool>? _loading;
+  Future<void>? _retiring;
   Future<void> _released = Future.value();
   PlaybackState? _cachedState;
   VideoPlayerValue? _cachedVideoValue;
@@ -289,6 +306,7 @@ class NativePlayback extends ChangeNotifier {
             onDiagnostic: diagnostics.record,
           );
       try {
+        source.seededPlaylists.forEach(cache.seedPlaylist);
         await cache.start();
       } catch (error) {
         await cache.close();
@@ -304,12 +322,7 @@ class NativePlayback extends ChangeNotifier {
       }
     }
     _downloadSpeed.setEnabled(_foreground);
-    unawaited(
-      _downloadSpeed.start(document, [
-        source.master.toString(),
-        ...source.variants.values.map((uri) => uri.toString()),
-      ]),
-    );
+    unawaited(_downloadSpeed.start(document, _downloadSources));
     _quality = source.variants.containsKey(preferredQuality)
         ? preferredQuality
         : 0;
@@ -323,7 +336,10 @@ class NativePlayback extends ChangeNotifier {
       final cache = _cache;
       final code = failureCode;
       _cache = null;
+      _cachedBufferedCacheVersion = -1;
       _invalidateState();
+      _downloadChanged(0);
+      unawaited(_downloadSpeed.usePlatformCounters(document, _downloadSources));
       await cache?.close().timeout(
         const Duration(seconds: 2),
         onTimeout: () {},
@@ -369,16 +385,37 @@ class NativePlayback extends ChangeNotifier {
   }
 
   Future<bool> _load(int quality, {bool initial = false}) async {
+    final loading = _loading = _loadController(quality, initial: initial);
+    try {
+      return await loading;
+    } finally {
+      if (identical(_loading, loading)) _loading = null;
+    }
+  }
+
+  Future<void> _retire(VideoPlayerController controller) {
+    final release = controller.dispose().catchError((Object _) {});
+    final previous = _retiring;
+    final retiring = _retiring = previous == null
+        ? release
+        : Future.wait<void>([previous, release]);
+    unawaited(
+      retiring.then((_) {
+        if (identical(_retiring, retiring)) _retiring = null;
+      }),
+    );
+    return retiring;
+  }
+
+  Future<bool> _loadController(int quality, {required bool initial}) async {
     final generation = ++_generation;
     final pauseVersion = _pauseVersion;
     final previous = video;
-    final old = state;
-    var stage = 'pause-previous';
+    var stage = 'create';
     final elapsed = Stopwatch()..start();
     VideoPlayerController? next;
+    var installed = false, resumePrevious = false;
     try {
-      await previous?.pause();
-      stage = 'create';
       final media = quality == 0 ? source.master : source.variants[quality]!;
       next = _SeekAwareVideoPlayerController(
         _cache?.playlist(media) ?? media,
@@ -399,39 +436,45 @@ class NativePlayback extends ChangeNotifier {
         await next.dispose();
         return false;
       }
-      final position = initial ? source.position : old.position;
-      stage = 'seek';
-      await next.seekTo(Duration(milliseconds: (position * 1000).round()));
+      final old = state;
       stage = 'rate';
-      await next.setPlaybackSpeed(initial ? source.rate : old.rate);
+      final rate = initial ? source.rate : old.rate;
+      if (next.value.playbackSpeed != rate) await next.setPlaybackSpeed(rate);
       stage = 'volume';
-      await next.setVolume((initial ? source.muted : old.muted) ? 0 : 1);
+      final volume = (initial ? source.muted : old.muted) ? 0.0 : 1.0;
+      if (next.value.volume != volume) await next.setVolume(volume);
+      if (previous != null && previous.value.isPlaying) {
+        stage = 'pause-previous';
+        resumePrevious = true;
+        await previous.pause();
+      }
+      final position = initial ? source.position : _position;
+      stage = 'seek';
+      final target = Duration(milliseconds: (position * 1000).round());
+      if (next.value.position != target) await next.seekTo(target);
       if (_disposed || generation != _generation) {
         await next.dispose();
         return false;
       }
       previous?.removeListener(_changed);
       video = next;
-      _position = position;
+      installed = true;
+      _position = next.value.position.inMilliseconds / 1000;
       _lastVideoPosition = next.value.position;
       _quality = quality;
       failureStage = failureCode = null;
       _invalidateState();
       next.addListener(_changed);
       notifyListeners();
-      stage = 'release-previous';
-      try {
-        await previous?.dispose();
-      } catch (_) {
-        // The replacement is ready; an old platform release failure must
-        // never send playback back to an already disposed controller.
-      }
-      if (_active &&
+      if (active &&
           _foreground &&
           pauseVersion == _pauseVersion &&
-          !old.paused) {
+          resumePrevious) {
         stage = 'play';
         await next.play();
+        if (!_disposed && (!_foreground || pauseVersion != _pauseVersion)) {
+          await next.pause();
+        }
       }
       _changed();
       return true;
@@ -454,16 +497,16 @@ class NativePlayback extends ChangeNotifier {
           'elapsedMs=${elapsed.elapsedMilliseconds} code=$failureCode',
         );
       }
-      if (next != null && next == video) {
+      if (installed && next != null && next == video) {
         _blocked = true;
         _invalidateState();
         try {
           await next.pause();
         } catch (_) {}
         _publish();
-      } else {
+      } else if (!installed && next != null) {
         try {
-          await next?.dispose().timeout(const Duration(seconds: 5));
+          await _retire(next).timeout(const Duration(seconds: 5));
         } catch (_) {
           // Creation can finish after its initialization deadline. Its
           // dispose future still releases it when the platform returns.
@@ -476,11 +519,13 @@ class NativePlayback extends ChangeNotifier {
         if (_active &&
             _foreground &&
             pauseVersion == _pauseVersion &&
-            !old.paused) {
+            resumePrevious) {
           await previous.play();
         }
       }
       return false;
+    } finally {
+      if (installed && previous != null) unawaited(_retire(previous));
     }
   }
 
@@ -491,19 +536,26 @@ class NativePlayback extends ChangeNotifier {
     if (_disposed) return;
     _foreground = applicationActive;
     final pauseVersion = _pauseVersion;
+    final current = video;
+    if (current == null) return;
     final position = (timeline['position'] as num).toDouble();
     _seekRevision++;
     _position = position.clamp(0, duration);
     _invalidateState();
-    await video?.seekTo(Duration(milliseconds: (_position * 1000).round()));
-    await video?.setPlaybackSpeed((timeline['rate'] as num).toDouble());
-    await video?.setVolume(timeline['muted'] == true ? 0 : 1);
+    final target = Duration(milliseconds: (_position * 1000).round());
+    final rate = (timeline['rate'] as num).toDouble();
+    final volume = timeline['muted'] == true ? 0.0 : 1.0;
+    if (current.value.position != target) await current.seekTo(target);
+    if (current.value.playbackSpeed != rate) {
+      await current.setPlaybackSpeed(rate);
+    }
+    if (current.value.volume != volume) await current.setVolume(volume);
     if (_disposed) return;
     _active = true;
     if (timeline['paused'] == false &&
         _foreground &&
         pauseVersion == _pauseVersion) {
-      await video?.play();
+      await current.play();
     }
     _changed();
   }
@@ -580,7 +632,29 @@ class NativePlayback extends ChangeNotifier {
   }
 
   Future<bool> command(String action, double? value) {
-    if (action == 'pause') _pauseVersion++;
+    if (action == 'pause') {
+      _pauseVersion++;
+      final current = video;
+      if (active && _loading != null && current?.value.isPlaying == true) {
+        unawaited(current!.pause().catchError((Object _) {}));
+      }
+    }
+    if (action == 'seek') {
+      if (value == null || !value.isFinite) return Future.value(false);
+      final queued = _queuedSeek;
+      if (queued != null) {
+        queued.position = value;
+        return queued.result;
+      }
+      final seek = _queuedSeek = _QueuedSeek(value);
+      seek.result = _commands.then((_) {
+        if (identical(_queuedSeek, seek)) _queuedSeek = null;
+        return _command(action, seek.position);
+      });
+      _commands = seek.result.catchError((_) => false);
+      return seek.result;
+    }
+    _queuedSeek = null;
     final pending = _commands.then((_) => _command(action, value));
     _commands = pending.catchError((_) => false);
     return pending;
@@ -648,7 +722,9 @@ class NativePlayback extends ChangeNotifier {
       default:
         return false;
     }
-    await _samplePosition(publish: false);
+    if (action != 'rate' && action != 'mute') {
+      await _samplePosition(publish: false);
+    }
     _changed();
     return true;
   }
@@ -672,14 +748,19 @@ class NativePlayback extends ChangeNotifier {
     _downloadSpeed.dispose();
     _generation++;
     final current = video;
+    final loading = _loading;
     current?.removeListener(_changed);
     video = null;
     _invalidateState();
     _released = () async {
       try {
-        await current?.dispose();
+        await Future.wait<void>([
+          if (current != null) current.dispose(),
+          if (loading != null) loading.then<void>((_) {}),
+          if (_cache case final cache?) cache.close(),
+        ]);
       } finally {
-        await _cache?.close();
+        await _retiring;
       }
     }();
     unawaited(_released);

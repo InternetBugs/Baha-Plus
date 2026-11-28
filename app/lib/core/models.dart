@@ -1,6 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show listEquals;
+
 typedef Json = Map<String, dynamic>;
+
+const _unchanged = Object();
 
 class OfficialSite {
   static final home = Uri.parse('https://ani.gamer.com.tw/');
@@ -45,6 +49,8 @@ class OfficialSite {
 }
 
 class Anime {
+  static final _addedDate = RegExp(r'^\d{1,2}/\d{1,2}$');
+
   const Anime({
     required this.id,
     required this.title,
@@ -75,7 +81,9 @@ class Anime {
       addedDate: json['addedDate'] as String?,
       views: json['views'] as String?,
       year: json['year'] as String?,
-      sections: (json['sections'] as List).cast<String>(),
+      sections: List<String>.unmodifiable(
+        (json['sections'] as List).cast<String>(),
+      ),
     );
     if (!value.isValid) throw const FormatException('Invalid anime');
     return value;
@@ -94,6 +102,87 @@ class Anime {
   final List<String> sections;
   String get artwork => poster ?? cover;
 
+  Anime copyWith({
+    String? id,
+    String? title,
+    String? cover,
+    Object? poster = _unchanged,
+    Object? latestVideoId = _unchanged,
+    Object? episodeLabel = _unchanged,
+    Object? updateDay = _unchanged,
+    Object? updateTime = _unchanged,
+    Object? updateDate = _unchanged,
+    Object? addedDate = _unchanged,
+    Object? views = _unchanged,
+    Object? year = _unchanged,
+    List<String>? sections,
+  }) {
+    final value = Anime(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      cover: cover ?? this.cover,
+      poster: identical(poster, _unchanged) ? this.poster : poster as String?,
+      latestVideoId: identical(latestVideoId, _unchanged)
+          ? this.latestVideoId
+          : latestVideoId as String?,
+      episodeLabel: identical(episodeLabel, _unchanged)
+          ? this.episodeLabel
+          : episodeLabel as String?,
+      updateDay: identical(updateDay, _unchanged)
+          ? this.updateDay
+          : updateDay as int?,
+      updateTime: identical(updateTime, _unchanged)
+          ? this.updateTime
+          : updateTime as String?,
+      updateDate: identical(updateDate, _unchanged)
+          ? this.updateDate
+          : updateDate as String?,
+      addedDate: identical(addedDate, _unchanged)
+          ? this.addedDate
+          : addedDate as String?,
+      views: identical(views, _unchanged) ? this.views : views as String?,
+      year: identical(year, _unchanged) ? this.year : year as String?,
+      sections: sections == null ? this.sections : List.unmodifiable(sections),
+    );
+    if (!value.isValid) throw const FormatException('Invalid anime');
+    return value;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Anime &&
+          id == other.id &&
+          title == other.title &&
+          cover == other.cover &&
+          poster == other.poster &&
+          latestVideoId == other.latestVideoId &&
+          episodeLabel == other.episodeLabel &&
+          updateDay == other.updateDay &&
+          updateTime == other.updateTime &&
+          updateDate == other.updateDate &&
+          addedDate == other.addedDate &&
+          views == other.views &&
+          year == other.year &&
+          listEquals(sections, other.sections);
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    title,
+    cover,
+    poster,
+    latestVideoId,
+    episodeLabel,
+    updateDay,
+    updateTime,
+    updateDate,
+    addedDate,
+    views,
+    year,
+    Object.hashAll(sections),
+  );
+
   bool get isValid =>
       OfficialSite.validId(id) &&
       title.isNotEmpty &&
@@ -103,7 +192,7 @@ class Anime {
       (latestVideoId == null || OfficialSite.validId(latestVideoId!)) &&
       (updateDay == null || (updateDay! >= 0 && updateDay! <= 6)) &&
       (updateDate == null || Catalog.validDate(updateDate!)) &&
-      (addedDate == null || RegExp(r'^\d{1,2}/\d{1,2}$').hasMatch(addedDate!)) &&
+      (addedDate == null || _addedDate.hasMatch(addedDate!)) &&
       sections.every(const ['season', 'hot', 'new'].contains);
 
   Json toJson() => {
@@ -142,7 +231,9 @@ class AnimeCollection {
           .toList(growable: false),
       expiring: json['expiring'] as bool? ?? false,
     );
-    if (!value.isValid) throw const FormatException('Invalid anime collection');
+    if (!value._hasValidStructure) {
+      throw const FormatException('Invalid anime collection');
+    }
     return value;
   }
 
@@ -150,7 +241,9 @@ class AnimeCollection {
   final List<Anime> items;
   final bool expiring;
 
-  bool get isValid =>
+  bool get isValid => _hasValidStructure && items.every((item) => item.isValid);
+
+  bool get _hasValidStructure =>
       id.isNotEmpty &&
       id.runes.length <= 128 &&
       title.isNotEmpty &&
@@ -158,7 +251,6 @@ class AnimeCollection {
       intro.runes.length <= 2000 &&
       items.isNotEmpty &&
       items.length <= 500 &&
-      items.every((item) => item.isValid) &&
       items.map((item) => item.id).toSet().length == items.length;
 
   Json toJson() => {
@@ -221,6 +313,11 @@ class HomeFeed {
 }
 
 class Catalog {
+  static final _timestamp = RegExp(
+    r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$',
+  );
+  static final _date = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+
   const Catalog({
     this.items = const [],
     this.fetchedAt = '',
@@ -244,7 +341,9 @@ class Catalog {
                 .map((value) => AnimeCollection.fromJson(value as Json))
                 .toList(growable: false),
     );
-    if (!result.isValid) throw const FormatException('Invalid catalog');
+    if (!result._hasValidStructure) {
+      throw const FormatException('Invalid catalog');
+    }
     return result;
   }
   final List<Anime> items;
@@ -252,15 +351,18 @@ class Catalog {
   final List<String> seasonalPopularIds;
   final List<AnimeCollection> collections;
   bool get isValid =>
+      _hasValidStructure &&
+      items.every((item) => item.isValid) &&
+      collections.every((collection) => collection.isValid);
+
+  bool get _hasValidStructure =>
       items.isNotEmpty &&
       items.length <= 5000 &&
-      items.every((item) => item.isValid) &&
       items.map((item) => item.id).toSet().length == items.length &&
       seasonalPopularIds.length <= 5000 &&
       seasonalPopularIds.every(OfficialSite.validId) &&
       seasonalPopularIds.toSet().length == seasonalPopularIds.length &&
       collections.length <= 100 &&
-      collections.every((collection) => collection.isValid) &&
       collections.map((collection) => collection.id).toSet().length ==
           collections.length &&
       validTimestamp(fetchedAt);
@@ -269,18 +371,17 @@ class Catalog {
     'fetchedAt': fetchedAt,
     if (seasonalPopularIds.isNotEmpty) 'seasonalPopularIds': seasonalPopularIds,
     if (collections.isNotEmpty)
-      'collections': collections.map((collection) => collection.toJson()).toList(),
+      'collections': collections
+          .map((collection) => collection.toJson())
+          .toList(),
   };
   String encode() => jsonEncode(toJson());
 
   static bool validTimestamp(String value) =>
-      RegExp(
-        r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$',
-      ).hasMatch(value) &&
-      DateTime.tryParse(value) != null;
+      _timestamp.hasMatch(value) && DateTime.tryParse(value) != null;
 
   static bool validDate(String value) =>
-      RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value) &&
+      _date.hasMatch(value) &&
       (DateTime.tryParse(value)?.toIso8601String().startsWith('${value}T') ??
           false);
 }
@@ -301,6 +402,8 @@ class Episode {
 }
 
 class AccountProfile {
+  static final _id = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
+  static final _control = RegExp(r'[\u0000-\u001f\u007f]');
   const AccountProfile({
     required this.id,
     required this.displayName,
@@ -316,10 +419,10 @@ class AccountProfile {
     final avatarUri = profile.avatar == null
         ? null
         : Uri.tryParse(profile.avatar!);
-    if (!RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(profile.id) ||
+    if (!_id.hasMatch(profile.id) ||
         profile.displayName.trim().isEmpty ||
         profile.displayName.runes.length > 100 ||
-        RegExp(r'[\u0000-\u001f\u007f]').hasMatch(profile.displayName) ||
+        _control.hasMatch(profile.displayName) ||
         (profile.avatar != null &&
             (avatarUri == null ||
                 !OfficialSite.validImage(profile.avatar!) ||
@@ -359,7 +462,9 @@ class RatingSummary {
   RatingSummary.fromJson(Json json)
     : value = (json['value'] as num).toDouble(),
       count = json['count'] as int,
-      distribution = (json['distribution'] as List).cast<int>() {
+      distribution = List<int>.unmodifiable(
+        (json['distribution'] as List).cast<int>(),
+      ) {
     if (!value.isFinite ||
         value < 0 ||
         value > 5 ||
@@ -384,37 +489,96 @@ class RatingSummary {
 }
 
 class AnimeDetail {
-  AnimeDetail.fromJson(Json json)
-    : title = json['title'] as String,
-      description = json['description'] as String,
-      poster = json['poster'] as String?,
-      rating = json['rating'] == null
-          ? null
-          : RatingSummary.fromJson(json['rating'] as Json),
-      episodes = (json['episodes'] as List)
-          .map((item) => Episode.fromJson(item as Json))
-          .toList(growable: false),
-      metadata = (json['metadata'] as List)
-          .map((item) => Metadata.fromJson(item as Json))
-          .toList(growable: false) {
+  const AnimeDetail._({
+    required this.title,
+    required this.description,
+    required this.poster,
+    required this.rating,
+    required this.episodes,
+    required this.metadata,
+    this.fanId,
+  });
+
+  AnimeDetail _validated() {
     if (title.isEmpty ||
         title.length >= 500 ||
         description.length > 200000 ||
         (poster != null && !OfficialSite.validImage(poster!)) ||
+        (fanId != null && !OfficialSite.validId(fanId!)) ||
         episodes.length > 5000 ||
         episodes.map((item) => item.id).toSet().length != episodes.length ||
         metadata.length > 100) {
       throw const FormatException('Invalid anime detail');
     }
+    return this;
   }
+
+  factory AnimeDetail.fromJson(
+    Json json, {
+    String? fanId,
+    RatingSummary? rating,
+  }) => AnimeDetail._(
+    title: json['title'] as String,
+    description: json['description'] as String,
+    poster: json['poster'] as String?,
+    fanId: fanId,
+    rating:
+        rating ??
+        (json['rating'] == null
+            ? null
+            : RatingSummary.fromJson(json['rating'] as Json)),
+    episodes: List.unmodifiable(
+      (json['episodes'] as List).map((item) => Episode.fromJson(item as Json)),
+    ),
+    metadata: List.unmodifiable(
+      (json['metadata'] as List).map((item) => Metadata.fromJson(item as Json)),
+    ),
+  )._validated();
+
+  AnimeDetail copyWith({
+    String? title,
+    String? description,
+    Object? poster = _unchanged,
+    Object? rating = _unchanged,
+    List<Episode>? episodes,
+    List<Metadata>? metadata,
+    Object? fanId = _unchanged,
+  }) {
+    if (episodes != null &&
+        episodes.any(
+          (episode) =>
+              !OfficialSite.validId(episode.id) || episode.label.length > 100,
+        )) {
+      throw const FormatException('Invalid episode');
+    }
+    if (metadata != null &&
+        metadata.any(
+          (item) => item.label.length > 200 || item.value.length > 4000,
+        )) {
+      throw const FormatException('Invalid metadata');
+    }
+    return AnimeDetail._(
+      title: title ?? this.title,
+      description: description ?? this.description,
+      poster: identical(poster, _unchanged) ? this.poster : poster as String?,
+      rating: identical(rating, _unchanged)
+          ? this.rating
+          : rating as RatingSummary?,
+      episodes: episodes == null ? this.episodes : List.unmodifiable(episodes),
+      metadata: metadata == null ? this.metadata : List.unmodifiable(metadata),
+      fanId: identical(fanId, _unchanged) ? this.fanId : fanId as String?,
+    )._validated();
+  }
+
   final String title, description;
-  final String? poster;
+  final String? poster, fanId;
   final RatingSummary? rating;
   final List<Episode> episodes;
   final List<Metadata> metadata;
 }
 
 class WatchEntry {
+  static final _nextVideo = RegExp(r'^[1-9]\d{0,9}$');
   WatchEntry.fromJson(Json json)
     : anime = Anime.fromJson(json['anime'] as Json),
       videoId = json['videoId'] as String,
@@ -431,8 +595,7 @@ class WatchEntry {
         (watchedAt != null &&
             !Catalog.validTimestamp(json['watchedAt'] as String)) ||
         (nextVideoId != null &&
-            (!RegExp(r'^[1-9]\d{0,9}$').hasMatch(nextVideoId!) ||
-                nextVideoId == videoId)) ||
+            (!_nextVideo.hasMatch(nextVideoId!) || nextVideoId == videoId)) ||
         (progress != null &&
             (!progress!.isFinite || progress! < 0 || progress! > 1))) {
       throw const FormatException('Invalid cloud history');

@@ -117,8 +117,40 @@ void main() {
       expect(getLast()['position'], 637);
       expect(getLast()['duration'], 1200);
       expect(getLast()['title'], 'Test Anime');
+      expect(getLast()['artwork'], 'https://p2.bahamut.com.tw/10.jpg');
     },
   );
+
+  test('relative system seeks clamp to the current content timeline', () async {
+    final positions = <double>[];
+    portal.onPlayerCommand = (_, action, value) async {
+      expect(action, 'seek');
+      positions.add(value!);
+      return true;
+    };
+    for (final (position, action) in [
+      (637.0, 'rewind'),
+      (637.0, 'fastForward'),
+      (5.0, 'rewind'),
+      (1195.0, 'fastForward'),
+    ]) {
+      store.playback.value = PlaybackState(
+        phase: PlaybackPhase.content,
+        surfaceReady: true,
+        duration: 1200,
+        position: position,
+      );
+      expect(await remote(action), isTrue);
+    }
+    expect(positions, [627, 647, 0, 1200]);
+    store.playback.value = const PlaybackState(
+      phase: PlaybackPhase.advertisement,
+      surfaceReady: true,
+      duration: 30,
+    );
+    expect(await remote('fastForward'), isFalse);
+    expect(positions, hasLength(4));
+  });
 
   test(
     'iOS native system seeking uses the current clock and rejects invalid or stale input',

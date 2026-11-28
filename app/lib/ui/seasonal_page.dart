@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
@@ -25,9 +24,16 @@ class SeasonalPage extends StatefulWidget {
 class _SeasonalPageState extends State<SeasonalPage> {
   final _title = GlassLargeTitleController();
   AppStore get store => widget.store;
+  List<Anime>? _cachedSeasonal;
+  Map<String, List<Anime>> _cachedGroups = const {};
+  bool? _cachedSimplified;
+  final Map<String, String> _dateLabelCache = {};
 
   Map<String, List<Anime>> _groups() {
-    final items = [...store.seasonal];
+    final current = store.seasonal;
+    if (identical(_cachedSeasonal, current)) return _cachedGroups;
+    _cachedSeasonal = current;
+    final items = [...current];
     final positions = {
       for (var index = 0; index < items.length; index++) items[index].id: index,
     };
@@ -44,16 +50,23 @@ class _SeasonalPageState extends State<SeasonalPage> {
     for (final anime in items) {
       result.putIfAbsent(anime.updateDate ?? '', () => []).add(anime);
     }
+    _cachedGroups = result;
     return result;
   }
 
   String _dateLabel(String key) {
     if (key.isEmpty) return store.t('recentUpdates');
-    final day = DateTime.parse(key);
-    final weekdays = store.simplified
-        ? ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-        : ['週一', '週二', '週三', '週四', '週五', '週六', '週日'];
-    return '${key.substring(5).replaceAll('-', '/')} ${weekdays[day.weekday - 1]}';
+    if (_cachedSimplified != store.simplified) {
+      _cachedSimplified = store.simplified;
+      _dateLabelCache.clear();
+    }
+    return _dateLabelCache.putIfAbsent(key, () {
+      final day = DateTime.parse(key);
+      final weekdays = store.simplified
+          ? const ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+          : const ['週一', '週二', '週三', '週四', '週五', '週六', '週日'];
+      return '${key.substring(5).replaceAll('-', '/')} ${weekdays[day.weekday - 1]}';
+    });
   }
 
   @override
@@ -69,12 +82,7 @@ class _SeasonalPageState extends State<SeasonalPage> {
         appBar: GlassAppBar(
           title: Text(store.t('seasonal')),
           largeTitleController: _title,
-          padding: layout.isCompact
-              ? const EdgeInsets.symmetric(horizontal: 8)
-              : EdgeInsets.only(
-                  left: math.max(8.0, hPad.left - 8),
-                  right: math.max(8.0, hPad.right - 8),
-                ),
+          padding: layout.appBarPadding(hPad),
           leading: GlassIconButton(
             semanticLabel: store.t('back'),
             icon: const Icon(CupertinoIcons.chevron_back),

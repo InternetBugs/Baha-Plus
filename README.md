@@ -111,7 +111,7 @@ Baha Plus 通过 HTTP 请求官方播放授权，并实际播放官方广告。�
 
 **为什么片库里找不到某部作品？**
 
-目前片库展示已读取的首页目录，还不支持完整历史片库的分页浏览。可以尝试使用搜索查找其他作品。
+片库默认先展示首页目录，可在「全部」分组底部点击“加载更多片库”继续按页浏览官方完整片库，也可以直接使用搜索查找指定作品。
 
 **追番和观看进度会同步吗？**
 
@@ -141,6 +141,6 @@ Baha Plus 通过 HTTP 请求官方播放授权，并实际播放官方广告。�
 
 Baha Plus 是第三方项目，与巴哈姆特及动画疯官方没有从属关系。动画内容及相关权益属于其各自权利人，请遵守官方服务条款及所在地适用规定。
 
-项目基于 [Flutter](https://flutter.dev/) 开发，界面使用 [liquid_glass_widgets](https://pub.dev/packages/liquid_glass_widgets)，中文字体使用 Noto Sans TC 和 Noto Sans SC。感谢所有开源项目的贡献者。
+项目基于 [Flutter](https://flutter.dev/) 开发，界面使用 [liquid_glass_widgets](https://pub.dev/packages/liquid_glass_widgets)，排版复用各平台系统原生中文字体。感谢所有开源项目的贡献者。
 
 本项目按照 [MIT License](LICENSE) 开源；第三方资源遵循各自的许可协议。

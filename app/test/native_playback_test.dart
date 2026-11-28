@@ -31,7 +31,10 @@ class FakeVideo extends VideoPlayerPlatform {
   final options = <VideoCreationOptions>[];
   final streams = <int, StreamController<VideoEvent>>{};
   final positions = <int, Duration>{};
+  final holdDisposal = <int, Completer<void>>{};
   final released = <int>[];
+  final seeks = <Duration>[];
+  final volumeCalls = <double>[];
   final playing = <int>{};
   final playCalls = <int>[];
 
@@ -67,6 +70,7 @@ class FakeVideo extends VideoPlayerPlatform {
   Stream<VideoEvent> videoEventsFor(int playerId) => streams[playerId]!.stream;
   @override
   Future<void> dispose(int playerId) async {
+    await holdDisposal[playerId]?.future;
     released.add(playerId);
   }
 
@@ -84,11 +88,15 @@ class FakeVideo extends VideoPlayerPlatform {
   @override
   Future<void> setLooping(int playerId, bool looping) async {}
   @override
-  Future<void> setVolume(int playerId, double volume) async {}
+  Future<void> setVolume(int playerId, double volume) async {
+    volumeCalls.add(volume);
+  }
+
   @override
   Future<void> setPlaybackSpeed(int playerId, double speed) async {}
   @override
   Future<void> seekTo(int playerId, Duration position) async {
+    seeks.add(position);
     await holdSeek?.future;
     positions[playerId] = position;
   }
@@ -203,6 +211,69 @@ void main() {
   );
 
   test(
+    'handoff reuses the position and volume applied during initialization',
+    () async {
+      for (final position in [0, 42]) {
+        final native = NativePlayback(
+          document: 'handoff',
+          source: NativePlaybackSource.fromJson({
+            ...sourceJson(),
+            'position': position,
+            'muted': true,
+          }),
+          userAgent: 'test-device',
+          onState: (_) {},
+        );
+        addTearDown(native.dispose);
+        platform.seeks.clear();
+        platform.volumeCalls.clear();
+        await native.initialize(0);
+        await native.activate(
+          applicationActive: true,
+          timeline: {
+            'position': position,
+            'paused': true,
+            'rate': 1,
+            'muted': true,
+          },
+        );
+        expect(
+          platform.seeks,
+          position == 0 ? [] : [Duration(seconds: position)],
+        );
+        expect(platform.volumeCalls, [1.0, 0.0]);
+        native.dispose();
+        await native.released;
+      }
+    },
+  );
+
+  test('queued adjacent seeks share their latest decoder position', () async {
+    final native = create();
+    addTearDown(native.dispose);
+    await native.initialize(0);
+    await native.activate(
+      applicationActive: true,
+      timeline: {'position': 10, 'paused': true, 'rate': 1, 'muted': false},
+    );
+    platform.seeks.clear();
+    final seekResults = await Future.wait([
+      native.command('seek', 20),
+      native.command('seek', 25),
+      native.command('seek', 30),
+      native.command('pause', null),
+      native.command('seek', 35),
+      native.command('seek', 40),
+    ]);
+    expect(seekResults, everyElement(isTrue));
+    expect(platform.seeks, const [
+      Duration(seconds: 30),
+      Duration(seconds: 40),
+    ]);
+    expect(native.state.position, 40);
+  });
+
+  test(
     'pause received during a quality change prevents the replacement from playing',
     () async {
       final native = create();
@@ -215,12 +286,43 @@ void main() {
       final changing = native.command('quality', 360);
       await Future<void>.delayed(Duration.zero);
       final pause = native.command('pause', null);
+      expect(platform.playing, isEmpty);
       held.complete();
       expect(await changing, isTrue);
       expect(await pause, isTrue);
       expect(platform.playCalls, [0]);
       expect(native.state.paused, isTrue);
       native.dispose();
+    },
+  );
+
+  test(
+    'quality replacement plays while the old controller is disposing',
+    () async {
+      final native = create();
+      addTearDown(native.dispose);
+      await native.initialize(0);
+      await native.activate(
+        applicationActive: true,
+        timeline: {'position': 10, 'paused': false, 'rate': 1, 'muted': false},
+      );
+      final oldDisposal = platform.holdDisposal[0] = Completer<void>();
+      final nextCreation = platform.holdCreation = Completer<void>();
+      final changing = native.command('quality', 360);
+      await Future<void>.delayed(Duration.zero);
+      expect(platform.playing, {0});
+      nextCreation.complete();
+      expect(await changing, isTrue);
+      expect(platform.playing, {1});
+      expect(platform.released, isEmpty);
+      native.dispose();
+      var released = false;
+      final releasing = native.released.then((_) => released = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(released, isFalse);
+      oldDisposal.complete();
+      await releasing;
+      expect(platform.released.toSet(), {0, 1});
     },
   );
 

@@ -62,6 +62,7 @@ class PlaybackEnvironment {
   bool _lastActive = false, _lastNative = false;
   bool _lastKeepAwake = false, _lastPlaying = false;
   String _lastDocument = '', _lastTitle = '', _lastEpisode = '';
+  String? _lastArtwork;
   double _lastDuration = -1, _lastRate = -1, _lastPosition = -1;
   Duration _lastSentAt = Duration.zero;
   Future<void> _updates = Future<void>.value();
@@ -152,7 +153,9 @@ class PlaybackEnvironment {
       'fullscreen': fullscreen,
     });
     _pictureInPicture.value = PictureInPictureMode.entering;
-    const timeout = Duration(seconds: 4);
+    final timeout = defaultTargetPlatform == TargetPlatform.iOS
+        ? const Duration(seconds: 6)
+        : const Duration(seconds: 4);
     try {
       final accepted = await _pictureInPictureCall<bool>(
         'enter',
@@ -246,7 +249,13 @@ class PlaybackEnvironment {
               ? 'play'
               : 'pause'
         : rawAction;
-    final validAction = const ['play', 'pause', 'seek'].contains(action);
+    final validAction = const [
+      'play',
+      'pause',
+      'seek',
+      'rewind',
+      'fastForward',
+    ].contains(action);
 
     dynamic reply(bool accepted, String reason, {bool? stateMatches}) {
       final current =
@@ -308,15 +317,22 @@ class PlaybackEnvironment {
       return reply(false, 'not-operable');
     }
     double? seekPosition;
-    if (action == 'seek') {
-      final value = arguments['value'];
-      if (!state.canControl || value is! num || !value.isFinite || value < 0) {
+    if (const ['seek', 'rewind', 'fastForward'].contains(action)) {
+      if (!state.canControl) return reply(false, 'invalid-seek');
+      final offset = action == 'rewind' ? -10 : 10;
+      final value = action == 'seek'
+          ? arguments['value']
+          : (state.position + offset).clamp(0.0, state.duration);
+      if (value is! num || !value.isFinite || value < 0) {
         return reply(false, 'invalid-seek');
       }
       seekPosition = value.toDouble();
     }
     try {
-      await store.controlPlayer(action as String, seekPosition);
+      await store.controlPlayer(
+        seekPosition == null ? action as String : 'seek',
+        seekPosition,
+      );
     } catch (_) {
       return reply(false, 'command-error');
     }
@@ -330,7 +346,7 @@ class PlaybackEnvironment {
     final stateMatches = switch (action) {
       'pause' => after.paused,
       'play' => !after.paused && !after.ended,
-      'seek' =>
+      'seek' || 'rewind' || 'fastForward' =>
         (after.position - seekPosition!.clamp(0, after.duration)).abs() <= .5,
       _ => false,
     };
@@ -363,6 +379,7 @@ class PlaybackEnvironment {
     final keepAwake = playing && _foreground && !_inPictureInPicture;
     final title = store.playingAnime?.title ?? '';
     final episode = store.playingEpisodeLabel;
+    final artwork = store.playingAnime?.artwork;
     final duration = state.duration;
     final rate = state.rate;
     final now = _now?.call() ?? _clock.elapsed;
@@ -375,6 +392,7 @@ class PlaybackEnvironment {
         _lastPlaying == playing &&
         _lastTitle == title &&
         _lastEpisode == episode &&
+        _lastArtwork == artwork &&
         _lastDuration == duration &&
         _lastRate == rate) {
       if (!active) return;
@@ -395,6 +413,7 @@ class PlaybackEnvironment {
     _lastPlaying = playing;
     _lastTitle = title;
     _lastEpisode = episode;
+    _lastArtwork = artwork;
     _lastDuration = duration;
     _lastRate = rate;
     _lastPosition = state.position;
@@ -409,11 +428,27 @@ class PlaybackEnvironment {
       'playing': playing,
       'title': title,
       'episode': episode,
+      if (_artworkUri(artwork) case final url?) 'artwork': url.toString(),
       'position': state.position.floor(),
       'duration': duration,
       'rate': rate,
     };
     _updates = _updates.then((_) => _send(body));
+  }
+
+  static Uri? _artworkUri(String? artwork) {
+    if (artwork == null || artwork.isEmpty || artwork.length > 4096) {
+      return null;
+    }
+    final uri = Uri.tryParse(artwork);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasFragment) {
+      return null;
+    }
+    return uri;
   }
 
   Future<void> _send(Map<String, dynamic> body) async {

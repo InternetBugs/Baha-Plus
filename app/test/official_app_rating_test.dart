@@ -48,7 +48,7 @@ void main() {
         }),
       );
       addTearDown(api.dispose);
-      final rating = await api.fetchRating('67798');
+      final rating = (await api.fetchRating('67798'))!;
       expect(rating.value, 4.8);
       expect(rating.count, 649);
       expect(rating.distribution, [7, 4, 20, 55, 563]);
@@ -166,7 +166,7 @@ void main() {
           ),
         );
         addTearDown(api.dispose);
-        final rating = await api.fetchRating('67798');
+        final rating = (await api.fetchRating('67798'))!;
         expect(rating.value, 0);
         expect(rating.count, 0);
         expect(rating.distribution, [0, 0, 0, 0, 0]);

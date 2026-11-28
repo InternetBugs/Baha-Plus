@@ -1,10 +1,12 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:html/dom.dart';
-import 'package:html/parser.dart' show parse;
 
 import '../core/community.dart';
 import '../core/models.dart';
+import 'device_storage.dart';
 import 'official_account_profile.dart';
 import 'official_http_client.dart';
 
@@ -22,7 +24,9 @@ class NativeAccountApi {
   Future<void> logout() async {
     try {
       await transport.session((session) async {
-        final page = parse(await session.get(OfficialSite.logout));
+        final page = await parseOfficialHtml(
+          await session.get(OfficialSite.logout),
+        );
         // GET only renders the official confirmation page. The button posts
         // this per-session token; parse it as data without executing scripts.
         String? token;
@@ -66,6 +70,12 @@ class NativeAccountApi {
   static final _id = RegExp(r'^[1-9][0-9]{0,19}$');
   static final _videoId = RegExp(r'^[1-9][0-9]{0,9}$');
   static final _gather = RegExp(r'toggleGather\(\s*(\d+)\s*,\s*(\d+)\s*,');
+  static final _invalidToken = RegExp(r'[<>\r\n]');
+  static final _messageId = RegExp(r'^[0-9]{1,20}$');
+  static final _spaces = RegExp(r'\s+');
+  static final _relativeTime = RegExp(r'(?:\d+\s*(?:秒|分|分鐘|小時|天|日)前|昨天|今天)');
+  static final _episodeSuffix = RegExp(r'\s*\[[^\]]+\]\s*$');
+  static final _integerText = RegExp(r'^-?[0-9]+$');
   static Uri _web(String path, [Map<String, String>? query]) =>
       Uri.https('ani.gamer.com.tw', path, query);
   static Uri _wall(String path, [Map<String, String>? query]) =>
@@ -81,29 +91,52 @@ class NativeAccountApi {
         : null;
   }
 
-  static Json? _profile(Document page) => officialAccountProfile(page);
-
-  Future<Json> _requireProfile(
+  Future<AccountProfile> _requireProfile(
     OfficialHttpSession session,
     String? expectedOwner,
   ) async {
-    final profile = _profile(parse(await session.get(_web('/mygather.php'))));
+    final uri = _web('/mygather.php');
+    if (session.cookies.header(uri).isEmpty) {
+      throw const CommunityException('login');
+    }
+    final profile = parseOfficialAccountProfile(
+      await parseOfficialHtml(await session.get(uri)),
+    );
     if (profile == null) throw const CommunityException('login');
     if (expectedOwner != null &&
-        (profile['id'] as String).toLowerCase() !=
-            expectedOwner.toLowerCase()) {
+        profile.id.toLowerCase() != expectedOwner.toLowerCase()) {
       throw const CommunityException('stale');
     }
     return profile;
   }
 
   /// Refreshes display data without fetching collections or watch history.
-  Future<Json?> fetchProfile({void Function()? checkCurrent}) =>
+  Future<Json?> fetchProfile({void Function()? checkCurrent}) async {
+    final profile = await _fetchProfileModel(checkCurrent: checkCurrent);
+    return profile == null ? null : _projectProfile(profile);
+  }
+
+  Future<AccountProfile?> fetchProfileModel({
+    void Function()? checkCurrent,
+  }) async {
+    final raw = await fetchProfile(checkCurrent: checkCurrent);
+    return raw == null ? null : _profileFrom(raw);
+  }
+
+  static Json _projectProfile(AccountProfile profile) =>
+      _ModelProjection(profile, (value) => value.toJson());
+
+  static AccountProfile _profileFrom(Json raw) =>
+      _originalModel<AccountProfile>(raw) ?? AccountProfile.fromJson(raw);
+
+  Future<AccountProfile?> _fetchProfileModel({void Function()? checkCurrent}) =>
       transport.session((session) async {
         if (session.cookies.header(_web('/mygather.php')).isEmpty) return null;
-        Json? identity;
+        AccountProfile? identity;
         try {
-          identity = _profile(parse(await session.get(_web('/mygather.php'))));
+          identity = parseOfficialAccountProfile(
+            await parseOfficialHtml(await session.get(_web('/mygather.php'))),
+          );
         } on CommunityException catch (error) {
           if (error.code != 'login') rethrow;
           await session.revalidate();
@@ -113,15 +146,15 @@ class NativeAccountApi {
           await session.revalidate();
           return null;
         }
-        final owner = identity['id'] as String;
-        final page = parse(
+        final owner = identity.id;
+        final page = await parseOfficialHtml(
           await session.get(
             Uri.https('home.gamer.com.tw', '/profile/index.php', {
               'owner': owner,
             }),
           ),
         );
-        final profile = officialPublicAccountProfile(page, owner: owner);
+        final profile = parseOfficialPublicAccountProfile(page, owner: owner);
         await session.revalidate();
         return profile;
       }, checkCurrent: checkCurrent);
@@ -130,6 +163,40 @@ class NativeAccountApi {
     void Function()? checkCurrent,
     String? expectedOwner,
     void Function(Json profile)? onAuthenticated,
+  }) async {
+    final snapshot = await _fetchAccountSnapshot(
+      checkCurrent: checkCurrent,
+      expectedOwner: expectedOwner,
+      onAuthenticated: onAuthenticated == null
+          ? null
+          : (profile) => onAuthenticated(_projectProfile(profile)),
+    );
+    return snapshot == null
+        ? null
+        : _ModelProjection(snapshot, (value) => value.toJson());
+  }
+
+  Future<AccountSnapshot?> fetchAccountSnapshot({
+    void Function()? checkCurrent,
+    String? expectedOwner,
+    void Function(AccountProfile profile)? onAuthenticated,
+  }) async {
+    final raw = await fetchAccount(
+      checkCurrent: checkCurrent,
+      expectedOwner: expectedOwner,
+      onAuthenticated: onAuthenticated == null
+          ? null
+          : (profile) => onAuthenticated(_profileFrom(profile)),
+    );
+    return raw == null
+        ? null
+        : _originalModel<AccountSnapshot>(raw) ?? AccountSnapshot.fromJson(raw);
+  }
+
+  Future<AccountSnapshot?> _fetchAccountSnapshot({
+    void Function()? checkCurrent,
+    String? expectedOwner,
+    void Function(AccountProfile profile)? onAuthenticated,
   }) => transport.session((session) async {
     if (session.cookies.header(_web('/mygather.php')).isEmpty) {
       if (expectedOwner != null) throw const CommunityException('login');
@@ -137,7 +204,7 @@ class NativeAccountApi {
     }
     Document page;
     try {
-      page = parse(await session.get(_web('/mygather.php')));
+      page = await parseOfficialHtml(await session.get(_web('/mygather.php')));
     } on CommunityException catch (error) {
       if (error.code == 'login' && expectedOwner == null) {
         await session.revalidate();
@@ -145,29 +212,42 @@ class NativeAccountApi {
       }
       rethrow;
     }
-    final profile = _profile(page);
+    final profile = parseOfficialAccountProfile(page);
     if (profile == null) {
       if (expectedOwner != null) throw const CommunityException('login');
       await session.revalidate();
       return null;
     }
-    final owner = (profile['id'] as String).toLowerCase();
+    final owner = profile.id.toLowerCase();
     if (expectedOwner != null && expectedOwner.toLowerCase() != owner) {
       throw const CommunityException('stale');
     }
     await session.revalidate();
     onAuthenticated?.call(profile);
-    final favorites = <String, Json>{};
-    final visited = <String>{};
-    final queue = <Uri>[_web('/mygather.php')];
-    while (queue.isNotEmpty) {
-      final uri = queue.removeAt(0);
-      if (!visited.add(uri.toString())) continue;
-      if (visited.length > 50) throw const CommunityException('format');
-      final document = visited.length == 1
-          ? page
-          : parse(await session.get(uri));
-      if ((_profile(document)?['id'] as String?)?.toLowerCase() != owner) {
+    final (favorites, history) = await (
+      _favorites(session, page, owner),
+      _history(session),
+    ).waitWithOriginalError();
+    await session.revalidate();
+    return AccountSnapshot(
+      profile: profile,
+      favorites: favorites,
+      history: history,
+    );
+  }, checkCurrent: checkCurrent);
+
+  Future<List<Anime>> _favorites(
+    OfficialHttpSession session,
+    Document first,
+    String owner,
+  ) async {
+    final favorites = <String, Anime>{};
+    final initial = _web('/mygather.php');
+    final visited = {initial};
+    final queue = <Uri>[];
+    void collect(Uri uri, Document document, {bool first = false}) {
+      if (!first &&
+          parseOfficialAccountProfile(document)?.id.toLowerCase() != owner) {
         throw const CommunityException('stale');
       }
       if (document.querySelector('.theme-title')?.text.contains('我的動畫') !=
@@ -212,8 +292,7 @@ class NativeAccountApi {
             'latestVideoId': href.queryParameters['sn'],
           'sections': <String>[],
         };
-        Anime.fromJson(item);
-        favorites[id] = item;
+        favorites[id] = Anime.fromJson(item);
         if (favorites.length > 10000) throw const CommunityException('format');
       }
       for (final link in document.querySelectorAll('.page_number a[href]')) {
@@ -221,22 +300,29 @@ class NativeAccountApi {
         if (next.origin == uri.origin &&
             next.path == '/mygather.php' &&
             next.fragment.isEmpty &&
-            !visited.contains(next.toString())) {
+            visited.add(next)) {
+          if (visited.length > 50) throw const CommunityException('format');
           queue.add(next);
         }
       }
     }
-    final history = await _history(session);
-    await session.revalidate();
-    return {
-      'profile': profile,
-      'favorites': favorites.values.toList(),
-      'history': history,
-    };
-  }, checkCurrent: checkCurrent);
 
-  Future<List<Json>> _history(OfficialHttpSession session) async {
-    final records = <String, Json>{};
+    collect(initial, first, first: true);
+    for (var offset = 0; offset < queue.length;) {
+      final batch = queue.skip(offset).take(2).toList();
+      offset += batch.length;
+      final pages = await Future.wait([
+        for (final uri in batch) session.get(uri).then(parseOfficialHtml),
+      ]);
+      for (final (index, uri) in batch.indexed) {
+        collect(uri, pages[index]);
+      }
+    }
+    return favorites.values.toList();
+  }
+
+  Future<List<WatchEntry>> _history(OfficialHttpSession session) async {
+    final records = <String, WatchEntry>{};
     var totalPages = 1;
     for (var page = 1; page <= totalPages; page++) {
       final body = await session.json(
@@ -291,8 +377,7 @@ class NativeAccountApi {
           if (_videoId.hasMatch(next) && next != '${row['videoSn']}')
             'nextVideoId': next,
         };
-        WatchEntry.fromJson(item);
-        records[id] = item;
+        records[id] = WatchEntry.fromJson(item);
         if (records.length > 1000) throw const CommunityException('format');
       }
     }
@@ -305,15 +390,33 @@ class NativeAccountApi {
     required String? owner,
     required void Function() checkCurrent,
   }) => transport.session((session) async {
-    await _requireProfile(session, owner);
-    final selected = await _favoriteButton(session, anime);
+    if (session.cookies.header(_web('/mygather.php')).isEmpty) {
+      throw const CommunityException('login');
+    }
+    final (_, selected, tokenResponse) = await (
+      _requireProfile(session, owner),
+      _favoriteButton(session, anime),
+      session
+          .get(_web('/ajax/getCSRFToken.php'))
+          .then<Object>(
+            (value) => value,
+            onError: (Object error, StackTrace stack) =>
+                AsyncError(error, stack),
+          ),
+    ).waitWithOriginalError();
     final arguments = _gather.firstMatch(selected.attributes['onclick']!)!;
     var confirmed = desired;
     if (_favoriteSelected(selected) != desired) {
-      final token = (await session.get(_web('/ajax/getCSRFToken.php'))).trim();
+      if (tokenResponse is AsyncError) {
+        Error.throwWithStackTrace(
+          tokenResponse.error,
+          tokenResponse.stackTrace,
+        );
+      }
+      final token = (tokenResponse as String).trim();
       if (token.isEmpty ||
           token.length > 500 ||
-          token.contains(RegExp(r'[<>\r\n]'))) {
+          token.contains(_invalidToken)) {
         throw const CommunityException('unavailable');
       }
       final response = await session.post(
@@ -321,7 +424,7 @@ class NativeAccountApi {
         {'s': arguments[1]!, 'animeSn': anime.id, 'token': token},
       );
       if (desired) {
-        final xml = parse(response);
+        final xml = await parseOfficialHtml(response);
         if (xml.querySelector('errmsg') != null ||
             xml.querySelector('okmsg') == null) {
           throw const CommunityException('rejected');
@@ -359,7 +462,7 @@ class NativeAccountApi {
     OfficialHttpSession session,
     Anime anime,
   ) async {
-    final doc = parse(
+    final doc = await parseOfficialHtml(
       await session.get(_web('/search.php', {'keyword': anime.title})),
     );
     for (final button in doc.querySelectorAll('[onclick*="toggleGather"]')) {
@@ -378,6 +481,43 @@ class NativeAccountApi {
   }
 
   Future<Json> community(
+    String action,
+    Json args, {
+    required void Function() checkCurrent,
+  }) async {
+    final models = await _fetchCommunityModels(
+      action,
+      args,
+      checkCurrent: checkCurrent,
+    );
+    return _ModelProjection(
+      models,
+      (result) => {
+        for (final entry in result.entries)
+          entry.key: switch (entry.value) {
+            final List<OfficialComment> comments => [
+              for (final comment in comments) comment.toJson(),
+            ],
+            final List<AnimeNotification> items => [
+              for (final item in items) item.toJson(),
+            ],
+            final Anime anime => anime.toJson(),
+            final value => value,
+          },
+      },
+    );
+  }
+
+  Future<Json> communityModels(
+    String action,
+    Json args, {
+    required void Function() checkCurrent,
+  }) async {
+    final result = await community(action, args, checkCurrent: checkCurrent);
+    return _originalModel<Json>(result) ?? result;
+  }
+
+  Future<Json> _fetchCommunityModels(
     String action,
     Json args, {
     required void Function() checkCurrent,
@@ -401,14 +541,17 @@ class NativeAccountApi {
             if (args['page'] != 0) 'nextPage': '${args['page']}',
           }),
         );
+        final messageId = '${body['messageId']}';
+        if (!_messageId.hasMatch(messageId)) {
+          throw const CommunityException('format');
+        }
         result = {
           'ok': true,
-          'messageId': '${body['messageId']}',
+          'messageId': messageId,
           'total': _integer(body['commentCount']),
           'nextPage': _integer(body['nextPage']),
           'comments': _comments(body['comments']).reversed.toList(),
         };
-        CommentPage.fromJson(result);
       case 'replies':
         if (!_id.hasMatch('${args['commentId']}')) {
           throw const CommunityException('input');
@@ -416,18 +559,29 @@ class NativeAccountApi {
         final body = await session.json(
           _wall('v1/reply_detail.php', {'commentId': '${args['commentId']}'}),
         );
-        result = {'ok': true, 'comments': _comments(body['comments'])};
+        result = {
+          'ok': true,
+          'comments': _comments(body['comments'], maxItems: 2000),
+        };
       case 'notifications':
-        final profile = await _requireProfile(session, owner);
-        final items = <String, Json>{};
-        for (final type in ['light_0', 'light_1']) {
-          final document = parse(
-            await session.get(
-              Uri.https('api.gamer.com.tw', '/ajax/common/topBar.php', {
-                'type': type,
-              }),
-            ),
-          );
+        if (session.cookies.header(_web('/mygather.php')).isEmpty) {
+          throw const CommunityException('login');
+        }
+        final (profile, documents) = await (
+          _requireProfile(session, owner),
+          Future.wait([
+            for (final type in ['light_0', 'light_1'])
+              session
+                  .get(
+                    Uri.https('api.gamer.com.tw', '/ajax/common/topBar.php', {
+                      'type': type,
+                    }),
+                  )
+                  .then(parseOfficialHtml),
+          ]),
+        ).waitWithOriginalError();
+        final items = <String, AnimeNotification>{};
+        for (final document in documents) {
           for (final anchor in document.querySelectorAll('a[href]')) {
             final href = Uri.tryParse(anchor.attributes['href']!);
             if (href == null) continue;
@@ -458,10 +612,10 @@ class NativeAccountApi {
             )) {
               node.remove();
             }
-            var title = titleNode.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+            var title = titleNode.text.replaceAll(_spaces, ' ').trim();
             if (title.isEmpty) {
               title = (anchor.attributes['title'] ?? '')
-                  .replaceAll(RegExp(r'\s+'), ' ')
+                  .replaceAll(_spaces, ' ')
                   .trim();
             }
             if (title.isEmpty || title.length > 500) continue;
@@ -472,30 +626,28 @@ class NativeAccountApi {
               'videoId': videoId,
               'time':
                   row?.querySelector('.time, .date, small')?.text.trim() ??
-                  RegExp(
-                    r'(?:\d+\s*(?:秒|分|分鐘|小時|天|日)前|昨天|今天)',
-                  ).firstMatch(row?.text ?? '')?[0] ??
+                  _relativeTime.firstMatch(row?.text ?? '')?[0] ??
                   '',
               'cover': _image(
                 image?.attributes['data-src'] ?? image?.attributes['src'],
               ),
             };
-            AnimeNotification.fromJson(item);
-            if (items.length < 200 || items.containsKey(item['id'])) {
-              items[item['id'] as String] = item;
+            final notification = AnimeNotification.fromJson(item);
+            if (items.length < 200 || items.containsKey(notification.id)) {
+              items[notification.id] = notification;
             }
           }
         }
         result = {
           'ok': true,
-          'owner': (profile['id'] as String).toLowerCase(),
+          'owner': profile.id.toLowerCase(),
           'items': items.values.toList(),
         };
       case 'notification-target':
         if (!_videoId.hasMatch('${args['videoId']}')) {
           throw const CommunityException('input');
         }
-        final document = parse(
+        final document = await parseOfficialHtml(
           await session.get(
             _web('/animeVideo.php', {'sn': '${args['videoId']}'}),
           ),
@@ -512,33 +664,39 @@ class NativeAccountApi {
               .querySelector('.anime_name h1')
               ?.text
               .trim()
-              .replaceFirst(RegExp(r'\s*\[[^\]]+\]\s*$'), ''),
+              .replaceFirst(_episodeSuffix, ''),
           'cover': _image(
             image?.attributes['data-src'] ?? image?.attributes['src'],
           ),
           'latestVideoId': '${args['videoId']}',
           'sections': <String>[],
         };
-        Anime.fromJson(anime);
-        result = {'ok': true, 'anime': anime};
+        result = {'ok': true, 'anime': Anime.fromJson(anime)};
       case 'comment-send':
         if (!_videoId.hasMatch('${args['videoId']}') ||
             !_id.hasMatch('${args['messageId']}') ||
             (args['commentId'] != null &&
                 !_id.hasMatch('${args['commentId']}')) ||
-            args['text'] is! String ||
-            (args['text'] as String).trim().isEmpty ||
-            (args['text'] as String).runes.length > 2000) {
+            args['text'] is! String) {
           throw const CommunityException('input');
         }
-        await _requireProfile(session, owner);
-        final board = await session.json(
-          _wall('v2/comment_detail.php', {
-            'service': '4',
-            'serviceId': '${args['videoId']}',
-            'order': '1',
-          }),
-        );
+        final trimmed = (args['text'] as String).trim();
+        if (trimmed.isEmpty || trimmed.runes.length > 2000) {
+          throw const CommunityException('input');
+        }
+        if (session.cookies.header(_web('/mygather.php')).isEmpty) {
+          throw const CommunityException('login');
+        }
+        final (_, board) = await (
+          _requireProfile(session, owner),
+          session.json(
+            _wall('v2/comment_detail.php', {
+              'service': '4',
+              'serviceId': '${args['videoId']}',
+              'order': '1',
+            }),
+          ),
+        ).waitWithOriginalError();
         if ('${board['messageId']}' != args['messageId']) {
           throw const CommunityException('stale');
         }
@@ -548,7 +706,7 @@ class NativeAccountApi {
                     'messageId': '${args['messageId']}',
                     if (args['commentId'] != null)
                       'commentId': '${args['commentId']}',
-                    'message': (args['text'] as String).trim(),
+                    'message': trimmed,
                   }, headers: session.csrfHeaders()),
                 )
                 as Json;
@@ -598,9 +756,7 @@ class NativeAccountApi {
   static int _integer(dynamic value, {int minimum = 0}) {
     if (value == null || value == '') return 0;
     final parsed =
-        value is String &&
-            value.length <= 10 &&
-            RegExp(r'^-?[0-9]+$').hasMatch(value)
+        value is String && value.length <= 10 && _integerText.hasMatch(value)
         ? int.tryParse(value)
         : value;
     if (parsed is! int || parsed < minimum || parsed > 100000000) {
@@ -609,11 +765,12 @@ class NativeAccountApi {
     return parsed;
   }
 
-  static List<Json> _comments(dynamic raw) {
-    if (raw is! List || raw.length > 200) {
+  static List<OfficialComment> _comments(dynamic raw, {int maxItems = 200}) {
+    if (raw is! List || raw.length > maxItems) {
       throw const CommunityException('format');
     }
-    final result = <Json>[];
+    final result = <OfficialComment>[];
+    final ids = <String>{};
     for (final value in raw) {
       final row = value as Json;
       final vote = _integer(row['isLike'], minimum: -100000000);
@@ -640,13 +797,55 @@ class NativeAccountApi {
         'vote': vote.sign,
         'folded': row['isFolded'] == true,
       };
-      OfficialComment.fromJson(item);
-      result.add(item);
+      final comment = OfficialComment.fromJson(item);
+      if (!ids.add(comment.id)) throw const CommunityException('format');
+      result.add(comment);
     }
-    CommentPage.parseComments(result);
     return result;
   }
 
   void invalidate() => transport.invalidate();
   void dispose() => transport.dispose();
+}
+
+Model? _originalModel<Model>(Json raw) =>
+    raw is _ModelProjection<Model> && raw._json == null ? raw.model : null;
+
+class _ModelProjection<Model> extends MapBase<String, dynamic> {
+  _ModelProjection(this.model, this._serialize);
+
+  final Model model;
+  final Json Function(Model) _serialize;
+  Json? _json;
+  Json get _map => _json ??= _serialize(model);
+
+  @override
+  dynamic operator [](Object? key) => _map[key];
+
+  @override
+  void operator []=(String key, dynamic value) => _map[key] = value;
+
+  @override
+  void clear() => _map.clear();
+
+  @override
+  Iterable<String> get keys => _map.keys;
+
+  @override
+  dynamic remove(Object? key) => _map.remove(key);
+}
+
+extension _PairWait<First, Second> on (Future<First>, Future<Second>) {
+  Future<(First, Second)> waitWithOriginalError() async {
+    final values = await Future.wait<Object?>([$1, $2], eagerError: true);
+    return (values[0] as First, values[1] as Second);
+  }
+}
+
+extension _TripleWait<First, Second, Third>
+    on (Future<First>, Future<Second>, Future<Third>) {
+  Future<(First, Second, Third)> waitWithOriginalError() async {
+    final values = await Future.wait<Object?>([$1, $2, $3], eagerError: true);
+    return (values[0] as First, values[1] as Second, values[2] as Third);
+  }
 }

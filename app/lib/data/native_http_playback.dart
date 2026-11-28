@@ -64,6 +64,7 @@ class NativeHttpPlayback extends ChangeNotifier {
   bool _disposed = false, _foreground = true, _ad = false;
   bool _loading = false, _finishingAd = false, _adStartPending = false;
   bool _adAcknowledged = false, _progressPending = false;
+  bool _progressDirty = false, _progressForceEnded = false;
   bool _contentStarted = false, _wasPlaying = false, _wasActive = false;
   bool _endedReported = false;
   int _revision = 0;
@@ -72,8 +73,10 @@ class NativeHttpPlayback extends ChangeNotifier {
   double _nextProgress = 60;
   int acceptedProgress = 0;
   int acceptedPeriodicProgress = 0;
-  Timer? _timer;
+  Timer? _timer, _seekReportTimer;
   Future<void> _reports = Future.value();
+  Future<void>? _waitBeforeInstall, _closing;
+  Future<void>? _retiringPlayer;
   Future<void> released = Future.value();
 
   bool get needsConsent => !skipAgeConfirmation && _awaitingConsent;
@@ -96,8 +99,11 @@ class NativeHttpPlayback extends ChangeNotifier {
   Future<void> prepare({
     bool applicationActive = true,
     bool nativeBackendAvailable = true,
+    Future<void>? waitBeforeInstall,
   }) async {
     _foreground = applicationActive;
+    _waitBeforeInstall = waitBeforeInstall;
+    unawaited(waitBeforeInstall?.then<void>((_) {}, onError: (Object _) {}));
     final revision = ++_revision;
     if (!nativeBackendAvailable) {
       _fail(const NativeHttpException('native-backend-unavailable'), revision);
@@ -185,33 +191,37 @@ class NativeHttpPlayback extends ChangeNotifier {
       paused: checkpoint?['paused'] == true,
     );
     if (!_live(revision)) return;
-    _ad = false;
-    await _install(source, revision, beforePlay: api.started);
+    await _install(
+      source,
+      revision,
+      beforePlay: () async {
+        await api.started();
+        if (_live(revision)) unawaited(_loadDanmaku());
+      },
+    );
     if (!_live(revision)) return;
     _contentStarted = true;
     _wasActive = _foreground && !(player?.state.paused ?? true);
-    unawaited(loadDanmaku());
     _report(progress: true);
   }
 
   Future<void> loadDanmaku() async {
-    if (_disposed ||
-        !_contentStarted ||
-        failureStage != null ||
-        danmakuLoading) {
-      return;
-    }
+    if (_contentStarted) await _loadDanmaku();
+  }
+
+  Future<void> _loadDanmaku() async {
+    if (_disposed || _ad || failureStage != null || danmakuLoading) return;
     final revision = _revision;
     danmakuLoading = true;
     danmakuFailureStage = null;
     notifyListeners();
     try {
       final items = await api.danmaku();
-      if (!_live(revision)) return;
+      if (!_live(revision) || failureStage != null) return;
       _danmaku = _mergeDanmaku(items);
       diagnostics.record('player.http-danmaku', {'count': items.length});
     } catch (error) {
-      if (!_live(revision)) return;
+      if (!_live(revision) || failureStage != null) return;
       final failure = error is NativeHttpException
           ? error
           : const NativeHttpException('danmaku-format');
@@ -267,11 +277,22 @@ class NativeHttpPlayback extends ChangeNotifier {
     int revision, {
     Future<void> Function()? beforePlay,
   }) async {
+    if (_waitBeforeInstall case final pending?) await pending;
+    _waitBeforeInstall = null;
+    if (!_live(revision)) return;
     final old = player;
     player = null;
-    old?.dispose();
-    if (old != null) await old.released;
+    if (old != null) {
+      old.dispose();
+      final release = _retiringPlayer = old.released;
+      try {
+        await release;
+      } finally {
+        _retiringPlayer = null;
+      }
+    }
     if (!_live(revision)) return;
+    if (beforePlay != null) _ad = false;
     final next = NativePlayback(
       document: document,
       source: source,
@@ -418,13 +439,13 @@ class NativeHttpPlayback extends ChangeNotifier {
         _lastCanSkipAd = skip;
         notifyListeners();
       }
-    } else if (_contentStarted) {
-      if (watch.total >= _nextProgress && !_progressPending) {
+    } else if (_contentStarted && _closing == null) {
+      if (value.ended && !_endedReported) {
+        _endedReported = true;
+        _report(progress: true, forceEnded: true);
+      } else if (watch.total >= _nextProgress && !_progressPending) {
         _nextProgress = watch.total + 60;
         _report(progress: true, periodic: true);
-      } else if (value.ended && !_endedReported) {
-        _endedReported = true;
-        _report(progress: true);
       } else if (changedActive) {
         _report();
       }
@@ -443,9 +464,16 @@ class NativeHttpPlayback extends ChangeNotifier {
         (code == 429 || (code >= 500 && code <= 599));
   }
 
-  void _report({bool progress = false, bool periodic = false}) {
+  void _report({
+    bool progress = false,
+    bool periodic = false,
+    bool forceEnded = false,
+  }) {
     if (_disposed || !_contentStarted || failureStage != null) return;
     if (progress) {
+      _seekReportTimer?.cancel();
+      _progressDirty = true;
+      _progressForceEnded |= forceEnded;
       if (_progressPending) return;
       _progressPending = true;
     }
@@ -453,33 +481,66 @@ class NativeHttpPlayback extends ChangeNotifier {
     final value = player!.state;
     final seconds = watch.total;
     _reports = _reports.then((_) async {
+      if (!progress) {
+        await _sendReport(revision, value, seconds);
+        return;
+      }
+      var first = true;
       try {
-        if (!_live(revision) || failureStage != null) return;
-        await api.state(seconds);
-        if (!_live(revision)) return;
-        if (progress && await api.progress(value.position, value.duration)) {
-          acceptedProgress++;
-          if (periodic) acceptedPeriodicProgress++;
-          diagnostics.record('player.http-progress', {
-            'accepted': true,
-            'deviceSession': api.usesDeviceSession,
-            'position': value.position,
-          });
-        }
-      } catch (error) {
-        if (_isTransientReportError(error)) {
-          final failure = error as NativeHttpException;
-          diagnostics.record('player.http-report-failed', {
-            'stage': failure.stage,
-            'code': failure.code,
-          });
-        } else {
-          _fail(error, revision);
+        while (_progressDirty && _live(revision) && failureStage == null) {
+          final ended = _progressForceEnded;
+          _progressDirty = _progressForceEnded = false;
+          await _sendReport(
+            revision,
+            player!.state,
+            watch.total,
+            progress: true,
+            forceEnded: ended,
+            periodic: first && periodic,
+          );
+          first = false;
         }
       } finally {
-        if (_live(revision) && progress) _progressPending = false;
+        _progressPending = false;
       }
     });
+  }
+
+  Future<void> _sendReport(
+    int revision,
+    PlaybackState value,
+    double seconds, {
+    bool progress = false,
+    bool periodic = false,
+    bool forceEnded = false,
+  }) async {
+    try {
+      if (!_live(revision) || failureStage != null) return;
+      await api.state(seconds);
+      if (!_live(revision)) return;
+      final position = forceEnded || value.ended
+          ? value.duration
+          : value.position;
+      if (progress && await api.progress(position, value.duration)) {
+        acceptedProgress++;
+        if (periodic) acceptedPeriodicProgress++;
+        diagnostics.record('player.http-progress', {
+          'accepted': true,
+          'deviceSession': api.usesDeviceSession,
+          'position': position,
+        });
+      }
+    } catch (error) {
+      if (_isTransientReportError(error)) {
+        final failure = error as NativeHttpException;
+        diagnostics.record('player.http-report-failed', {
+          'stage': failure.stage,
+          'code': failure.code,
+        });
+      } else {
+        _fail(error, revision);
+      }
+    }
   }
 
   Future<bool> command(String action, double? value) async {
@@ -495,7 +556,13 @@ class NativeHttpPlayback extends ChangeNotifier {
     }
     try {
       final result = await player?.command(action, value) ?? false;
-      if (result && action == 'seek') _report(progress: true);
+      if (result && action == 'seek' && !_disposed && _closing == null) {
+        _seekReportTimer?.cancel();
+        _seekReportTimer = Timer(
+          const Duration(milliseconds: 1500),
+          () => _report(progress: true),
+        );
+      }
       return result;
     } catch (error) {
       _fail(error, _revision);
@@ -531,6 +598,7 @@ class NativeHttpPlayback extends ChangeNotifier {
     failureStage = failure.stage;
     failureCode = failure.code;
     _timer?.cancel();
+    _seekReportTimer?.cancel();
     unawaited(player?.pause().catchError((Object _) {}));
     diagnostics.record('player.http-failed', {
       'stage': failure.stage,
@@ -546,19 +614,24 @@ class NativeHttpPlayback extends ChangeNotifier {
   }
 
   /// Flush the final progress before cancelling this episode's requests.
-  Future<void> close() async {
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     if (_disposed) return released;
-    await player?.pause();
-    if (_contentStarted && failureStage == null) {
-      _report(progress: true);
+    _seekReportTimer?.cancel();
+    try {
+      await player?.pause();
+    } finally {
       try {
-        await _reports.timeout(const Duration(seconds: 3));
-      } catch (_) {
-        // Closing always releases the decoder even if the service is offline.
+        if (_contentStarted && failureStage == null) {
+          _report(progress: true);
+          await _reports;
+        }
+      } finally {
+        dispose();
+        await released;
       }
     }
-    dispose();
-    await released;
   }
 
   @override
@@ -567,13 +640,14 @@ class NativeHttpPlayback extends ChangeNotifier {
     _disposed = true;
     _revision++;
     _timer?.cancel();
+    _seekReportTimer?.cancel();
     _danmaku = const [];
     _sentDanmaku.clear();
     api.dispose();
     final current = player;
     player = null;
     current?.dispose();
-    released = current?.released ?? Future.value();
+    released = current?.released ?? _retiringPlayer ?? Future.value();
     super.dispose();
   }
 }

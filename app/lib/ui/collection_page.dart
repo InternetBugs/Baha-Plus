@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -80,12 +79,7 @@ class _CollectionPageState extends State<CollectionPage> {
               overflow: TextOverflow.ellipsis,
             ),
             largeTitleController: _title,
-            padding: layout.isCompact
-                ? const EdgeInsets.symmetric(horizontal: 8)
-                : EdgeInsets.only(
-                    left: math.max(8.0, hPad.left - 8),
-                    right: math.max(8.0, hPad.right - 8),
-                  ),
+            padding: layout.appBarPadding(hPad),
             leading: GlassIconButton(
               semanticLabel: store.t('back'),
               icon: const Icon(CupertinoIcons.chevron_back),

@@ -3,6 +3,12 @@ import '../core/models.dart';
 
 typedef PublicCatalogTransport =
     Future<Json> Function(Uri uri, {required bool useAccount});
+typedef CancellablePublicCatalogTransport =
+    Future<Json> Function(
+      Uri uri, {
+      required bool useAccount,
+      Future<void>? cancel,
+    });
 
 abstract interface class AnimeSearch {
   Future<List<Anime>> search(String query, {bool useAccount = true});
@@ -11,35 +17,78 @@ abstract interface class AnimeSearch {
 }
 
 class OfficialAnimeSearch implements AnimeSearch {
-  OfficialAnimeSearch({required this.toTraditional});
+  OfficialAnimeSearch({required this.toTraditional, this.foldingReady});
   final String Function(String) toTraditional;
+  final Future<void>? foldingReady;
   PublicCatalogTransport? _transport;
+  CancellablePublicCatalogTransport? _cancellableTransport;
   final _ready = Completer<void>();
+  final _cache = <(String, bool), (List<Anime>, DateTime)>{};
+  int _cacheGeneration = 0;
   bool _disposed = false;
   static const timeout = Duration(seconds: 12);
+  static final _year = RegExp(r'\d{4}(?:/\d{2})?');
 
-  void useTransport(PublicCatalogTransport transport) {
+  void useTransport(
+    PublicCatalogTransport transport, {
+    CancellablePublicCatalogTransport? cancellable,
+  }) {
     if (_disposed) return;
+    reset();
     _transport = transport;
+    _cancellableTransport = cancellable;
     if (!_ready.isCompleted) _ready.complete();
   }
 
   @override
-  Future<List<Anime>> search(String query, {bool useAccount = true}) async {
+  Future<List<Anime>> search(
+    String query, {
+    bool useAccount = true,
+    Future<void>? cancel,
+  }) async {
     final input = String.fromCharCodes(query.trim().runes.take(100));
     if (input.isEmpty) return [];
+    final key = (input, useAccount);
+    final cached = _cache.remove(key);
+    if (cached != null && DateTime.now().isBefore(cached.$2)) {
+      _cache[key] = cached;
+      return cached.$1;
+    }
+    final generation = _cacheGeneration;
+    if (foldingReady case final ready?) await ready;
     final queries = {input, toTraditional(input)};
+    Object? failure;
+    StackTrace? failureStack;
     final responses = await Future.wait(
-      queries.map(
-        (keyword) => _request('/anime/v1/search.php', {
-          'kw': keyword,
-        }, useAccount: useAccount),
-      ),
+      queries.map((keyword) async {
+        try {
+          return await _request(
+            '/anime/v1/search.php',
+            {'kw': keyword},
+            useAccount: useAccount,
+            cancel: cancel,
+          );
+        } catch (error, stack) {
+          failure ??= error;
+          failureStack ??= stack;
+          return null;
+        }
+      }),
     );
-    return {
-      for (final items in responses)
-        for (final item in items) item.id: item,
-    }.values.toList();
+    if (responses.every((response) => response == null)) {
+      Error.throwWithStackTrace(failure!, failureStack!);
+    }
+    final results = List<Anime>.unmodifiable(
+      {
+        for (final items in responses.nonNulls)
+          for (final item in items) item.id: item,
+      }.values,
+    );
+    if (failure == null && generation == _cacheGeneration && !_disposed) {
+      _cache[key] = (results, DateTime.now().add(const Duration(minutes: 2)));
+      if (_cache.length > 20) _cache.remove(_cache.keys.first);
+    }
+    return results;
   }
 
   @override
@@ -57,13 +106,19 @@ class OfficialAnimeSearch implements AnimeSearch {
     String path,
     Map<String, String> query, {
     bool useAccount = true,
+    Future<void>? cancel,
   }) async {
     final uri = Uri.https('api.gamer.com.tw', path, query);
     await _ready.future.timeout(timeout);
     if (_disposed || _transport == null) {
       throw StateError('Official catalog connection unavailable');
     }
-    return parseResponse(await _transport!(uri, useAccount: useAccount));
+    final cancellable = _cancellableTransport;
+    return parseResponse(
+      cancellable == null
+          ? await _transport!(uri, useAccount: useAccount)
+          : await cancellable(uri, useAccount: useAccount, cancel: cancel),
+    );
   }
 
   static List<Anime> parseResponse(Json body) {
@@ -94,9 +149,7 @@ class OfficialAnimeSearch implements AnimeSearch {
         'poster': cover,
         if (OfficialSite.validId(video)) 'latestVideoId': video,
         if (episodes is int && episodes > 0) 'episodeLabel': '$episodes 集',
-        'year': RegExp(
-          r'\d{4}(?:/\d{2})?',
-        ).firstMatch(item['dateInfo'] as String? ?? '')?.group(0),
+        'year': _year.firstMatch(item['dateInfo'] as String? ?? '')?.group(0),
         'sections': <String>[],
       });
     }).toList();
@@ -105,7 +158,14 @@ class OfficialAnimeSearch implements AnimeSearch {
   @override
   void dispose() {
     _disposed = true;
+    reset();
     _transport = null;
+    _cancellableTransport = null;
     if (!_ready.isCompleted) _ready.complete();
+  }
+
+  void reset() {
+    _cacheGeneration++;
+    _cache.clear();
   }
 }

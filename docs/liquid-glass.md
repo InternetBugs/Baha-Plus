@@ -15,11 +15,11 @@
 | 项目 | 当前实现 |
 | --- | --- |
 | 玻璃组件 | `liquid_glass_widgets: 1.16.1`；启动时初始化并包装应用，使用 `GlassThemeData.ios27()` |
-| 渲染质量 | 用户在设置中选择「玻璃效果」三档：性能（`GlassQuality.minimal`，仅 `BackdropFilter` 磨砂）、标准（轻量 fragment shader）、质量（`GlassQuality.premium` 完整折射），默认标准。已删除自适应降档；`main.dart` 用嵌套 `GlassTheme` 按选择固定全档质量，偏好持久化在 `baha.device.glass` |
+| 渲染质量 | 用户在设置中选择「玻璃效果」三档：性能（`GlassQuality.minimal`，仅 `BackdropFilter` 磨砂且通过 `GlassAdaptiveScope` 固定上限自动关闭 `GlassPage` 背景纹理采样）、标准（轻量 fragment shader）、质量（`GlassQuality.premium` 完整折射），默认标准。`main.dart` 用嵌套 `GlassAdaptiveScope` + `GlassTheme` 按选择固定全档质量，偏好持久化在 `baha.device.glass` |
 | 品牌及操作色 | `brandBlue`：`#007AFF`，用于选中导航、主要操作和强调；破坏性操作使用 `CupertinoColors.systemRed` 胶囊强调 |
 | 页面背景 | 浅色 `#FFFFFF`，深色 `#08080A` |
 | 内容表面 | 浅色 `#FFFFFF`，深色 `#1C1C1E`；最低层容器分别为 `#F2F2F7`、`#000000` |
-| 字体 | `BahaSans`（Noto Sans TC），文字样式回退到 `BahaSansSC`（Noto Sans SC） |
+| 字体 | 复用 iOS / Android 系统原生中文字体（`bahaFontFallback`，按简繁界面动态优先 PingFang TC/SC、Noto Sans CJK TC/SC 与思源黑体回退），不再内置 28 MB 静态字体文件 |
 | 图标 | 统一使用 `CupertinoIcons`；缺失的 Apple SF Symbols 形态（如画中画 `PipIcon`）在 `chrome.dart` 以统一线宽与圆角绘制，不使用 Material `Icons.*` |
 | iOS 26 应用图标 | 原生多层液态玻璃图标位于 `app/ios/Runner/AppIcon.icon`（`tile.svg`、`play.svg`、`badge.svg` 三层玻璃 + 浅色／深色背景渐变），已接入 `Runner.xcodeproj`（`folder.iconcomposer.icon`）；Xcode 26 `actool` 编译后向 `Assets.car` 写入 `AppIcon.iconstack`（浅色／深色／色调／透明外观与实时镜面高光）并自动产出 iOS 15–18 兼容位图；同时保留 `Assets.xcassets/AppIcon.appiconset` 兼容旧版 Xcode |
 | 文字层级 | 默认正文 16；导航标题 17 / 600，大标题 34 / 700，标签文字 11；次要文字使用主题前景色的 55% 透明度 |
@@ -41,7 +41,7 @@
 | 账号、诊断与弹幕面板 | 手机与窄分屏使用带拖拽指示条的 `GlassModalSheet`；平板（≥640×540）以居中圆角浮层卡片呈现；诊断页采用 iOS 26 分组设置卡片（`GlassSettingsGroup` + `GlassSettingsRow`）；视频上的弹幕发送浮层使用半透明 `GlassContainer` 承载内嵌输入区，避免玻璃叠玻璃；留言板底部输入框以 `GlassScaffold.bodyOverlays` 浮于列表上方并开启底部边缘淡出 |
 | 弹窗与确认提示 | 全应用所有提示、报错与二次确认弹窗统一使用 `GlassAlert`（`showGlassAlertDialog` / `showGlassMessageDialog` / `showGlassConfirmDialog`、`GlassUpdateAlert`）：同心超椭圆圆角、左对齐排版、胶囊操作按钮（支持 `isPrimary` 蓝胶囊与 `isDestructive` 红胶囊），跟随三档玻璃效果设置 |
 | 内容图片与超椭圆 | 统一复用 `BahaRadius`（`hero: 26`、`card: 22`、`tile: 18`、`thumb: 14`、`chip: 15`）与 `bahaCardDecoration`；封面、海报、视频画布与附件图使用 `ClipRSuperellipse`，不透明内容卡片使用 `RoundedSuperellipseBorder`；首页横向滑动轨道与 Hero 轮播贴屏幕边缘滑动不裁切 |
-| 播放控制与浮层 HUD | 竖屏在视频下方显示 `GlassContainer`、`GlassSlider` 与 Cupertino 图标（遵循用户三档玻璃质量设置）；横屏全屏叠放于视频画面并支持标题集数／非 1× 倍速标识、全屏玻璃选集浮层与片尾下一集快捷胶囊；竖屏与全屏视频右上角多动作统一合并为共享液态玻璃胶囊；长按倍速提示、滑动快进预览、广告倒计时／跳过胶囊均使用 `GlassContainer`（`useOwnLayer: true`、`platformViewBackdrop: true`、`LiquidRoundedSuperellipse`）并适配全屏安全区；宽平板非全屏采用左播放、右选集／简介／留言双栏布局，全屏不强锁方向 |
+| 播放控制与浮层 HUD | 竖屏在紧凑手机采用 12pt 窄边距圆角视频与同宽液态玻璃控制条（进度条两侧分列当前／总时长、下方 44pt 级播放／±10s／静音／全屏操作，遵循用户三档玻璃质量设置）；横屏全屏顶部关闭、左侧锁屏与右上共享胶囊采用 44pt 手机标准尺寸，中央主控采用 64/52pt（平板 68/54pt）圆形玻璃按钮，底部采用左右分体双翼胶囊（左翼当前时间、右翼总时长＋静音／选集，避开中间硬字幕区）夹紧贴底通透细轨进度条（上方保留隐形触控延展区，窄分屏自动回退为紧凑单胶囊），并支持标题集数／非 1× 倍速标识、全屏玻璃选集浮层与片尾下一集快捷胶囊；长按倍速提示、滑动快进预览、广告倒计时／跳过胶囊均使用 `GlassContainer`（`useOwnLayer: true`、`platformViewBackdrop: true`、`LiquidRoundedSuperellipse`）并适配全屏安全区；宽平板非全屏采用左播放、右选集／简介／留言双栏布局，全屏不强锁方向 |
 | 作品资料 | 详情页与播放页均使用无背景的标签、数值分栏，不添加独立卡片；宽屏详情页采用海报横幅与双栏排版 |
 | 评分与留言 | 使用不透明内容表面，并以柔和外部投影和较短的接触阴影加强层次；横向留言预览在平板限制单卡宽度并列展示，二级阅读页居中限宽 |
 

@@ -10,19 +10,42 @@ import 'package:platform_proxy/proxy.dart';
 class SystemHttpOverrides extends HttpOverrides {
   SystemHttpOverrides({
     PlatformProxy? platformProxy,
-    this.proxyCacheTtl = const Duration(seconds: 3),
-  }) : _platformProxy = platformProxy ?? PlatformProxy();
+    this.proxyCacheTtl = const Duration(seconds: 20),
+  }) : _platformProxy = platformProxy ?? PlatformProxy(),
+       _proxyCache = platformProxy == null ? _sharedCache : _ProxyCache();
 
+  static final _sharedCache = _ProxyCache();
+  static int _generation = 0;
   final PlatformProxy _platformProxy;
+  final _ProxyCache _proxyCache;
   final Duration proxyCacheTtl;
+
+  static void clearProxyCache() {
+    _generation++;
+    _sharedCache.refresh();
+  }
 
   @override
   HttpClient createHttpClient(SecurityContext? context) =>
-      SystemProxyHttpClient(
+      SystemProxyHttpClient._(
         client: super.createHttpClient(context),
         platformProxy: _platformProxy,
         proxyCacheTtl: proxyCacheTtl,
+        cache: _proxyCache,
       );
+}
+
+class _ProxyCache {
+  final entries = <String, ({String pac, DateTime expiresAt})>{};
+  final inFlight = <String, Future<void>>{};
+  int generation = SystemHttpOverrides._generation;
+
+  void refresh() {
+    if (generation == SystemHttpOverrides._generation) return;
+    generation = SystemHttpOverrides._generation;
+    entries.clear();
+    inFlight.clear();
+  }
 }
 
 /// Refreshes OS proxy resolution on a short TTL and evicts cached entries on
@@ -32,11 +55,26 @@ class SystemProxyHttpClient implements HttpClient {
   SystemProxyHttpClient({
     required HttpClient client,
     required PlatformProxy platformProxy,
-    Duration proxyCacheTtl = const Duration(seconds: 3),
+    Duration proxyCacheTtl = const Duration(seconds: 20),
+    DateTime Function()? now,
+  }) : this._(
+         client: client,
+         platformProxy: platformProxy,
+         proxyCacheTtl: proxyCacheTtl,
+         cache: _ProxyCache(),
+         now: now,
+       );
+
+  SystemProxyHttpClient._({
+    required HttpClient client,
+    required PlatformProxy platformProxy,
+    required Duration proxyCacheTtl,
+    required _ProxyCache cache,
     DateTime Function()? now,
   }) : _delegate = client,
        _platformProxy = platformProxy,
        _proxyCacheTtl = proxyCacheTtl,
+       _proxyCache = cache,
        _now = now ?? DateTime.now {
     _delegate.findProxy = _findProxy;
   }
@@ -45,8 +83,9 @@ class SystemProxyHttpClient implements HttpClient {
   final PlatformProxy _platformProxy;
   final Duration _proxyCacheTtl;
   final DateTime Function() _now;
-  final _cache = <String, ({String pac, DateTime expiresAt})>{};
-  final _inFlight = <String, Future<void>>{};
+  final _ProxyCache _proxyCache;
+  static final _invalidHost = RegExp(r'[\s;]');
+  static final _invalidCredential = RegExp(r'[\s;@]');
 
   static String _cacheKey(Uri url) {
     final scheme = url.scheme.toLowerCase();
@@ -77,7 +116,7 @@ class SystemProxyHttpClient implements HttpClient {
             port == null ||
             port <= 0 ||
             port > 65535 ||
-            host.contains(RegExp(r'[\s;]'))) {
+            host.contains(_invalidHost)) {
           continue;
         }
         final formattedHost = host.contains(':') && !host.startsWith('[')
@@ -88,8 +127,8 @@ class SystemProxyHttpClient implements HttpClient {
         final entry =
             user.isNotEmpty &&
                 password.isNotEmpty &&
-                !user.contains(RegExp(r'[\s;@]')) &&
-                !password.contains(RegExp(r'[\s;@]'))
+                !user.contains(_invalidCredential) &&
+                !password.contains(_invalidCredential)
             ? 'PROXY $user:$password@$formattedHost:$port'
             : 'PROXY $formattedHost:$port';
         if (!parts.contains(entry)) parts.add(entry);
@@ -101,7 +140,8 @@ class SystemProxyHttpClient implements HttpClient {
   }
 
   String _findProxy(Uri url) {
-    final pac = _cache[_cacheKey(url)]?.pac;
+    _proxyCache.refresh();
+    final pac = _proxyCache.entries[_cacheKey(url)]?.pac;
     if (pac == null || pac.isEmpty) {
       return HttpClient.findProxyFromEnvironment(url);
     }
@@ -110,9 +150,18 @@ class SystemProxyHttpClient implements HttpClient {
 
   Future<void> _resolveProxies(Uri url) async {
     final key = _cacheKey(url);
-    final cached = _cache[key];
-    if (cached != null && _now().isBefore(cached.expiresAt)) return;
-    final pending = _inFlight[key];
+    _proxyCache.refresh();
+    final generation = _proxyCache.generation;
+    final entries = _proxyCache.entries;
+    final inFlight = _proxyCache.inFlight;
+    final now = _now();
+    entries.removeWhere((_, entry) => !now.isBefore(entry.expiresAt));
+    final cached = entries.remove(key);
+    if (cached != null) {
+      entries[key] = cached;
+      return;
+    }
+    final pending = inFlight[key];
     if (pending != null) {
       await pending;
       return;
@@ -123,16 +172,18 @@ class SystemProxyHttpClient implements HttpClient {
             .getPlatformProxies(url: url.toString())
             .timeout(const Duration(seconds: 2));
         final pac = formatPac(proxies);
-        _cache[key] = (pac: pac, expiresAt: _now().add(_proxyCacheTtl));
+        if (generation == SystemHttpOverrides._generation) {
+          entries[key] = (pac: pac, expiresAt: _now().add(_proxyCacheTtl));
+          if (entries.length > 128) entries.remove(entries.keys.first);
+        }
       } catch (_) {
         // Platform proxy errors (e.g. malformed plugin JSON or unavailable
         // channel) must not block HTTP requests; fall back to direct/env routing.
-        _cache.remove(key);
       } finally {
-        _inFlight.remove(key);
+        if (generation == SystemHttpOverrides._generation) inFlight.remove(key);
       }
     }();
-    _inFlight[key] = lookup;
+    inFlight[key] = lookup;
     await lookup;
   }
 
@@ -141,10 +192,14 @@ class SystemProxyHttpClient implements HttpClient {
     Future<HttpClientRequest> Function() action,
   ) async {
     await _resolveProxies(url);
+    final key = _cacheKey(url);
+    final entry = _proxyCache.entries[key];
     try {
       return await action();
     } catch (_) {
-      _cache.remove(_cacheKey(url));
+      if (identical(_proxyCache.entries[key], entry)) {
+        _proxyCache.entries.remove(key);
+      }
       rethrow;
     }
   }
@@ -166,8 +221,6 @@ class SystemProxyHttpClient implements HttpClient {
 
   @override
   void close({bool force = false}) {
-    _cache.clear();
-    _inFlight.clear();
     _delegate.close(force: force);
   }
 

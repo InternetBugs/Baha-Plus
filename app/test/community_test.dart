@@ -97,6 +97,340 @@ void main() {
     },
   );
 
+  test('votes toggle and switch sides without mutating the comment', () {
+    final original = OfficialComment.fromJson(commentJson('1'));
+    for (final (previous, type, vote, likes, dislikes) in [
+      (0, 1, 1, 4, 2),
+      (0, 2, -1, 3, 3),
+      (1, 1, 0, 2, 2),
+      (1, 2, -1, 2, 3),
+      (-1, 1, 1, 4, 1),
+      (-1, 2, 0, 3, 1),
+    ]) {
+      final before = original.copyWith(
+        vote: previous,
+        dislikes: 2,
+        folded: true,
+      );
+      final after = before.withVote(type);
+      expect(
+        (after.vote, after.likes, after.dislikes),
+        (vote, likes, dislikes),
+      );
+      expect((before.vote, before.likes, before.dislikes), (previous, 3, 2));
+      expect(
+        (after.id, after.text, after.folded),
+        (original.id, original.text, true),
+      );
+    }
+    for (final type in [1, 2]) {
+      final up = original.copyWith(likes: 0, vote: 1).withVote(type);
+      final down = original.copyWith(dislikes: 0, vote: -1).withVote(type);
+      expect(up.likes, 0);
+      expect(down.dislikes, 0);
+    }
+  });
+
+  test(
+    'danmaku settings publish only scoped changes and compare by value',
+    () async {
+      final (store, _, _) = await setup();
+      var global = 0;
+      var scoped = 0;
+      store.addListener(() => global++);
+      store.danmakuSettingsNotifier.addListener(() => scoped++);
+      final changed = store.danmakuSettings.copyWith(opacity: .5);
+      final equal = DanmakuSettings.fromJson(changed.toJson());
+      expect(changed, equal);
+      expect(changed.hashCode, equal.hashCode);
+      expect(() => changed.copyWith(scale: double.nan), throwsFormatException);
+      await store.setDanmakuSettings(changed);
+      await store.setDanmakuSettings(equal);
+      expect(store.danmakuSettings, changed);
+      expect(scoped, 1);
+      expect(global, 0);
+    },
+  );
+
+  test(
+    'first comment pages cache by explicit sort and invalidate together',
+    () async {
+      final (store, portal, _) = await setup();
+      portal.accountApi.communityHandler = (_, args) async =>
+          commentPageJson(id: '${args['order']}');
+      final chronological = await store.loadComments('20', sort: 0);
+      final recommended = await store.loadComments('20', sort: 1);
+      expect(store.cachedComments('20', sort: 0), same(chronological));
+      expect(store.cachedComments('20', sort: 1), same(recommended));
+      store.invalidateCommentsCache('20');
+      expect(store.cachedComments('20', sort: 0), isNull);
+      expect(store.cachedComments('20', sort: 1), isNull);
+    },
+  );
+
+  test('posting requires a canonical nonzero board ID', () {
+    final page = CommentPage.fromJson(commentPageJson());
+    for (final id in ['1', '123', '9' * 20]) {
+      expect(page.copyWith(messageId: id).canPost, isTrue);
+    }
+    for (final id in ['', '0', '01', '-1', '1a', '9' * 21]) {
+      expect(page.copyWith(messageId: id).canPost, isFalse);
+    }
+    final replacement = page.copyWith(total: 0, nextPage: 2, comments: []);
+    expect(replacement.messageId, page.messageId);
+    expect((replacement.total, replacement.nextPage), (0, 2));
+    expect(replacement.comments, isEmpty);
+    expect(page.comments, hasLength(1));
+  });
+
+  test('comment pages allow 200 rows and reply threads allow 2000', () async {
+    final (store, portal, _) = await setup();
+    final rows = List.generate(2001, (index) => commentJson('${index + 1}'));
+    expect(CommentPage.parseComments(rows.take(200).toList()), hasLength(200));
+    expect(
+      () => CommentPage.fromJson({
+        ...commentPageJson(),
+        'comments': rows.take(201).toList(),
+      }),
+      throwsFormatException,
+    );
+    portal.communityResponse = {
+      'ok': true,
+      'comments': rows.take(2000).toList(),
+    };
+    expect(await store.loadReplies('1'), hasLength(2000));
+    portal.communityResponse = {'ok': true, 'comments': rows};
+    await expectLater(store.loadReplies('1'), throwsFormatException);
+  });
+
+  test(
+    'only first-page suggested reads populate the LRU without notifying',
+    () async {
+      final (store, portal, _) = await setup();
+      portal.communityResponse = commentPageJson();
+      final first = await store.loadComments('20');
+      expect(store.cachedComments('20'), same(first));
+      expect(store.cachedComments('20', order: 0), isNull);
+      portal.communityResponse = commentPageJson(id: '2');
+      await store.loadComments('20', page: 1);
+      await store.loadComments('20', order: 0);
+      store.updateCachedCommentsPage('20', first.copyWith(total: 0), order: 0);
+      expect(store.cachedComments('20'), same(first));
+      expect(store.commentsVersion.value, 0);
+
+      for (var id = 21; id <= 39; id++) {
+        await store.loadComments('$id');
+      }
+      expect(store.cachedComments('20'), same(first));
+      final latest = first.copyWith(total: 2);
+      store.updateCachedCommentsPage('40', latest);
+      expect(store.cachedComments('40'), same(latest));
+      expect(store.cachedComments('21'), isNull);
+      expect(store.cachedComments('20'), same(first));
+      expect(store.commentsVersion.value, 1);
+      store.invalidateCommentsCache();
+      expect(store.cachedComments('40'), isNull);
+      expect(store.cachedComments('20'), isNull);
+      expect(store.commentsVersion.value, 2);
+    },
+  );
+
+  test(
+    'writes update cached votes, reply counts, and preview revisions',
+    () async {
+      final (store, portal, _) = await setup();
+      portal.communityResponse = commentPageJson();
+      final first = await store.loadComments('20');
+      await store.loadComments('21');
+      final comment = first.comments.single;
+      portal.communityResponse = {'ok': true};
+      final up = await store.voteComment(comment, 1, videoId: '20');
+      expect(store.cachedComments('20')!.comments.single, same(up));
+      expect(store.cachedComments('21')!.comments.single.vote, 0);
+      expect(comment.vote, 0);
+      expect(store.commentsVersion.value, 1);
+      final down = await store.voteComment(up, 2);
+      for (final episode in ['20', '21']) {
+        expect(store.cachedComments(episode)!.comments.single, same(down));
+      }
+      expect(store.commentsVersion.value, 2);
+      await store.voteComment(up, 2, videoId: '22');
+      expect(store.commentsVersion.value, 2);
+      for (final parent in ['1', '99']) {
+        await store.sendComment(
+          videoId: '20',
+          messageId: '123',
+          text: ' reply ',
+          commentId: parent,
+        );
+      }
+      final replied = store.cachedComments('20')!.comments.single;
+      expect((replied.replies, replied.vote), (1, -1));
+      expect(store.cachedComments('21')!.comments.single.replies, 0);
+      expect(store.commentsVersion.value, 4);
+      await store.sendComment(videoId: '20', messageId: '123', text: ' new ');
+      expect(store.cachedComments('20'), isNull);
+      expect(store.cachedComments('21'), isNotNull);
+      expect(store.commentsVersion.value, 5);
+    },
+  );
+
+  test(
+    'sends count trimmed Unicode characters before the account request',
+    () async {
+      final (store, portal, _) = await setup();
+      store.accountProfile = null;
+      portal.communityResponse = {'ok': true};
+      final limit = '😀' * 2000;
+      for (final text in ['  ', '$limit字']) {
+        await expectLater(
+          store.sendComment(videoId: '20', messageId: '123', text: text),
+          throwsA(
+            isA<CommunityException>().having(
+              (error) => error.code,
+              'code',
+              'input',
+            ),
+          ),
+        );
+      }
+      expect(portal.communityRequests, isEmpty);
+      expect(store.commentsVersion.value, 0);
+      await store.sendComment(
+        videoId: '20',
+        messageId: '123',
+        text: ' $limit ',
+      );
+      expect(portal.communityRequests.single['text'], limit);
+      expect(store.commentsVersion.value, 1);
+    },
+  );
+
+  test(
+    'episode drafts retain text and reply targets with LRU eviction',
+    () async {
+      final (store, _, _) = await setup();
+      final comment = OfficialComment.fromJson(commentJson('1'));
+      final draft = CommentDraft(replyThread: comment, replyTarget: comment);
+      expect(const CommentDraft().isEmpty, isTrue);
+      expect(const CommentDraft(text: ' ').isEmpty, isFalse);
+      expect(CommentDraft(replyThread: comment).isEmpty, isFalse);
+      expect(CommentDraft(replyTarget: comment).isEmpty, isFalse);
+      store.saveCommentDraft('1', draft);
+      for (var id = 2; id <= 30; id++) {
+        store.saveCommentDraft('$id', CommentDraft(text: '$id'));
+      }
+      expect(store.commentDraft('1'), same(draft));
+      store.saveCommentDraft('31', const CommentDraft(text: '31'));
+      expect(store.commentDraft('2').isEmpty, isTrue);
+      expect(store.commentDraft('3').text, '3');
+      expect(store.commentDraft('1').replyTarget, same(comment));
+      store.clearCommentDraft('1');
+      store.saveCommentDraft('3', const CommentDraft());
+      expect(store.commentDraft('1').isEmpty, isTrue);
+      expect(store.commentDraft('3').isEmpty, isTrue);
+      expect(store.commentsVersion.value, 0);
+    },
+  );
+
+  test(
+    'an invalidated or superseded preview read cannot restore old data',
+    () async {
+      final (store, portal, _) = await setup();
+      final delayed = Completer<Json>();
+      portal.communityPending = delayed;
+      final older = store.loadComments('20');
+      final invalidated = store.loadComments('21');
+      portal.communityPending = null;
+      portal.communityResponse = commentPageJson(id: '2');
+      final latest = await store.loadComments('20');
+      store.invalidateCommentsCache('21');
+      delayed.complete(commentPageJson());
+      await Future.wait([older, invalidated]);
+      expect(store.cachedComments('20'), same(latest));
+      expect(store.cachedComments('21'), isNull);
+      expect(store.commentsVersion.value, 1);
+    },
+  );
+
+  for (final transition in [
+    'logout',
+    'switch',
+    'sync guest',
+    'connect',
+    'account-guest',
+    'account-authenticated',
+  ]) {
+    test(
+      '$transition clears previews and drafts when identity changes',
+      () async {
+        final (store, portal, _) = await setup();
+        final bridge = transition.startsWith('account-');
+        if (bridge) await store.connectAccount();
+        portal.communityResponse = commentPageJson();
+        await store.loadComments('20');
+        store.saveCommentDraft('20', const CommentDraft(text: 'private'));
+        if (bridge) {
+          await store.receive(
+            jsonEncode({
+              'type': transition,
+              'requestId': store.operation.id,
+              if (transition == 'account-authenticated')
+                'profile': {'id': 'next', 'displayName': 'Next'},
+            }),
+            origin: OfficialSite.home,
+            source: OfficialSite.home.resolve('mygather.php'),
+            isMainFrame: true,
+          );
+        } else if (transition == 'logout') {
+          expect(await store.logoutAccount(), isTrue);
+        } else if (transition == 'connect') {
+          await store.connectAccount();
+        } else {
+          portal.accountApi.profileLoader = () async => null;
+          portal.accountApi.accountLoader = () async => transition == 'switch'
+              ? {
+                  'profile': {'id': 'next', 'displayName': 'Next'},
+                  'favorites': [],
+                  'history': [],
+                }
+              : null;
+          await store.syncAccount();
+        }
+        expect(store.cachedComments('20'), isNull);
+        expect(store.commentDraft('20').isEmpty, isTrue);
+        expect(store.commentsVersion.value, 1);
+      },
+    );
+  }
+
+  test(
+    'late write acknowledgements leave the next account preview intact',
+    () async {
+      final (store, portal, _) = await setup();
+      final delayed = Completer<Json>();
+      portal.communityPending = delayed;
+      final sending = store.sendComment(
+        videoId: '20',
+        messageId: '123',
+        text: '留言',
+      );
+      final voting = store.voteComment(
+        OfficialComment.fromJson(commentJson('1')),
+        1,
+      );
+      await store.logoutAccount();
+      portal.communityPending = null;
+      portal.communityResponse = commentPageJson();
+      final latest = await store.loadComments('20');
+      delayed.complete({'ok': true});
+      await sending;
+      expect((await voting).vote, 1);
+      expect(store.cachedComments('20'), same(latest));
+      expect(store.commentsVersion.value, 0);
+    },
+  );
+
   test(
     'official rating summaries preserve the average, count and five star distribution',
     () {

@@ -9,6 +9,8 @@ import '../core/models.dart';
 import '../core/playback_state.dart';
 import '../core/search_folding.dart';
 import 'device_storage.dart';
+import 'home_feed_builder.dart';
+import 'preference_writer.dart';
 import 'official_search.dart';
 import 'official_app_api.dart';
 import 'app_updates.dart';
@@ -19,12 +21,27 @@ import 'native_danmaku_sender.dart';
 import 'native_account_api.dart';
 import 'official_cookie_rotation.dart';
 import 'official_http_client.dart';
+import 'system_http.dart';
 
 abstract interface class OfficialPortal {
   Future<void> load(Uri uri);
   Future<void> reload();
   Future<void> goBack();
   Future<dynamic> evaluate(String script);
+}
+
+extension _EpisodeCache<Value extends Object> on Map<String, Value> {
+  Value? readRecent(String videoId) {
+    final value = remove(videoId);
+    if (value != null) this[videoId] = value;
+    return value;
+  }
+
+  void storeRecent(String videoId, Value value, {required int limit}) {
+    remove(videoId);
+    this[videoId] = value;
+    if (length > limit) remove(keys.first);
+  }
 }
 
 class AppStore extends ChangeNotifier {
@@ -52,6 +69,9 @@ class AppStore extends ChangeNotifier {
     this.nativeHttpApiFactory,
     NativeDanmakuSender? danmakuSender,
     NativeAccountApi? accountApi,
+    this.avatarEvictor,
+    Future<String> Function(String)? scriptLoader,
+    Future<void>? searchAssetsReady,
     this.language = 'zh-Hant',
     this.appearance = 'system',
     this.glassStyle = 'standard',
@@ -60,19 +80,27 @@ class AppStore extends ChangeNotifier {
        accountApi = accountApi ?? NativeAccountApi(),
        searchService =
            animeSearch ??
-           OfficialAnimeSearch(toTraditional: folding.toTraditional),
+           OfficialAnimeSearch(
+             toTraditional: folding.toTraditional,
+             foldingReady: searchAssetsReady,
+           ),
        updates = updates ?? AppUpdates(),
        metadataApi = metadataApi ?? OfficialAppApi(),
        diagnostics = diagnostics ?? AppDiagnostics.instance,
+       _scriptLoader = scriptLoader,
+       _searchAssetsReady = searchAssetsReady,
        cache = CatalogCache(storage),
        catalogSource = catalog.items.isEmpty ? 'empty' : 'cache' {
     if (searchService case final OfficialAnimeSearch search) {
       search.useTransport(
         (uri, {required useAccount}) =>
             this.metadataApi.fetchPublicCatalog(uri),
+        cancellable: (uri, {required useAccount, cancel}) =>
+            this.metadataApi.fetchPublicCatalog(uri, cancel: cancel),
       );
     }
     playback.addListener(_recordPlayback);
+    _captureScopes();
   }
 
   static Future<AppStore> create({
@@ -84,51 +112,54 @@ class AppStore extends ChangeNotifier {
     NativeAccountApi? accountApi,
     NativeDanmakuSender? danmakuSender,
     NativeHttpApi Function()? nativeHttpApiFactory,
+    Future<void> Function(String avatar)? avatarEvictor,
   }) async {
     final disk = storage ?? PreferencesStorage();
-    final dictionaries = <String, Map<String, String>>{};
-    for (final locale in ['zh-Hans', 'zh-Hant']) {
-      dictionaries[locale] =
-          (jsonDecode(await rootBundle.loadString('assets/i18n/$locale.json'))
-                  as Map<String, dynamic>)
-              .cast<String, String>();
-    }
-    final folding =
-        (jsonDecode(
-                  await rootBundle.loadString(
-                    'assets/data/search-folding.json',
-                  ),
-                )
-                as Map<String, dynamic>)
+    Future<Map<String, String>> loadMap(String asset) async =>
+        (jsonDecode(await rootBundle.loadString(asset)) as Json)
             .cast<String, String>();
-    final traditional =
-        (jsonDecode(
-                  await rootBundle.loadString(
-                    'assets/data/search-traditional.json',
-                  ),
-                )
-                as Map<String, dynamic>)
-            .cast<String, String>();
+    final (hans, hant, preferences, catalog, account) = await (
+      loadMap('assets/i18n/zh-Hans.json'),
+      loadMap('assets/i18n/zh-Hant.json'),
+      _readPreferences(disk),
+      CatalogCache(disk).load(),
+      AccountCache(disk).load(),
+    ).wait;
+    final folding = <String, String>{};
+    final traditional = <String, String>{};
+    final language = preferences['baha.device.language'];
+    final appearance = preferences['baha.device.appearance'];
+    final danmaku = preferences['baha.device.danmaku'];
+    final quality = preferences['baha.device.quality'];
+    final glass = preferences['baha.device.glass'];
+    final skipOpLongPress = preferences['baha.device.skipOpLongPress'];
+    final skipAgeConfirmation = preferences['baha.device.skipAgeConfirmation'];
     final scripts = <String, String>{};
-    for (final name in ['detail', 'account-sync']) {
-      scripts[name] = await rootBundle.loadString('assets/adapters/$name.js');
+    final scriptLoads = <String, Future<String>>{};
+    Future<String> loadScript(String name) {
+      if (scripts[name] case final script?) return Future.value(script);
+      return scriptLoads.putIfAbsent(name, () async {
+        try {
+          return scripts[name] = await rootBundle.loadString(
+            'assets/adapters/$name.js',
+          );
+        } finally {
+          scriptLoads.remove(name);
+        }
+      });
     }
-    String? language, appearance, danmaku, quality, glass, skipOpLongPress;
-    String? skipAgeConfirmation;
-    try {
-      language = await disk.read('baha.device.language');
-      appearance = await disk.read('baha.device.appearance');
-      danmaku = await disk.read('baha.device.danmaku');
-      quality = await disk.read('baha.device.quality');
-      skipOpLongPress = await disk.read('baha.device.skipOpLongPress');
-      glass = await disk.read('baha.device.glass');
-      skipAgeConfirmation = await disk.read('baha.device.skipAgeConfirmation');
-    } catch (_) {
-      // Missing device preferences must not prevent startup.
-    }
+
+    final searchAssetsReady = Future<void>(() async {
+      final maps = await Future.wait([
+        loadMap('assets/data/search-folding.json'),
+        loadMap('assets/data/search-traditional.json'),
+      ]);
+      folding.addAll(maps.first);
+      traditional.addAll(maps.last);
+    }).catchError((Object _) {});
     final store = AppStore(
       storage: disk,
-      dictionaries: dictionaries,
+      dictionaries: {'zh-Hans': hans, 'zh-Hant': hant},
       folding: SearchFolding(folding, traditionalMapping: traditional),
       animeSearch: animeSearch,
       metadataApi: metadataApi,
@@ -138,6 +169,9 @@ class AppStore extends ChangeNotifier {
       danmakuSender: danmakuSender,
       nativeHttpApiFactory: nativeHttpApiFactory,
       scripts: scripts,
+      avatarEvictor: avatarEvictor,
+      scriptLoader: loadScript,
+      searchAssetsReady: searchAssetsReady,
       language: const ['zh-Hans', 'zh-Hant'].contains(language)
           ? language!
           : languageForSystem(
@@ -146,14 +180,10 @@ class AppStore extends ChangeNotifier {
       appearance: const ['system', 'light', 'dark'].contains(appearance)
           ? appearance!
           : 'system',
-      glassStyle: const [
-        'performance',
-        'standard',
-        'premium',
-      ].contains(glass)
+      glassStyle: const ['performance', 'standard', 'premium'].contains(glass)
           ? glass!
           : 'standard',
-      catalog: await CatalogCache(disk).load() ?? const Catalog(),
+      catalog: catalog ?? const Catalog(),
     );
     final preferredQuality = int.tryParse(quality ?? '');
     if (preferredQuality != null &&
@@ -173,24 +203,65 @@ class AppStore extends ChangeNotifier {
     } catch (_) {
       // A damaged device preference falls back to readable defaults.
     }
-    final account = await AccountCache(disk).load();
     if (account != null) {
-      store.accountProfile = account['profile'] == null
-          ? null
-          : AccountProfile.fromJson(account['profile'] as Json);
-      if (store.accountProfile != null && account['profileCheckedAt'] is int) {
-        store._profileCheckedAt = account['profileCheckedAt'] as int;
+      store.accountProfile = account.profile;
+      if (store.accountProfile != null) {
+        store._profileCheckedAt = account.profileCheckedAt;
       }
-      store.favorites = (account['favorites'] as List)
-          .map((item) => Anime.fromJson(item as Json))
-          .toList();
-      store.history = (account['history'] as List)
-          .map((item) => WatchEntry.fromJson(item as Json))
-          .toList();
-      store.accountSynced = account['collectionsSynced'] != false;
+      store.favorites = account.favorites;
+      store.history = account.history;
+      store.accountSynced = account.collectionsSynced;
       store.accountNeedsRefresh = !store.accountSynced;
     }
+    unawaited(
+      searchAssetsReady.then((_) {
+        if (store._disposed) return;
+        store.folding.clearCache();
+        store._libraryQueryCache = null;
+        store.libraryFilterNotifier.value++;
+      }),
+    );
+    unawaited(
+      Future<void>(() async {
+        if (store._disposed) return;
+        await Future.wait([loadScript('detail'), loadScript('account-sync')]);
+      }).catchError((Object _) {}),
+    );
+    store._captureScopes();
     return store;
+  }
+
+  static const _preferenceKeys = {
+    'baha.device.language',
+    'baha.device.appearance',
+    'baha.device.danmaku',
+    'baha.device.quality',
+    'baha.device.glass',
+    'baha.device.skipOpLongPress',
+    'baha.device.skipAgeConfirmation',
+  };
+
+  static Future<Map<String, String>> _readPreferences(
+    DeviceStorage disk,
+  ) async {
+    if (disk is BatchDeviceStorage) {
+      try {
+        return await disk.readAll(_preferenceKeys);
+      } catch (_) {}
+    }
+    final values = await Future.wait([
+      for (final key in _preferenceKeys)
+        () async {
+          try {
+            return await disk.read(key);
+          } catch (_) {
+            return null;
+          }
+        }(),
+    ]);
+    return {
+      for (final (index, key) in _preferenceKeys.indexed) key: ?values[index],
+    };
   }
 
   static String languageForSystem(String tag) {
@@ -211,6 +282,18 @@ class AppStore extends ChangeNotifier {
   final NativeHttpApi Function()? nativeHttpApiFactory;
   final NativeDanmakuSender danmakuSender;
   final NativeAccountApi accountApi;
+  final Future<void> Function(String avatar)? avatarEvictor;
+  final Future<String> Function(String name)? _scriptLoader;
+  final Future<void>? _searchAssetsReady;
+  Future<void> ensureSearchAssets() => _searchAssetsReady ?? Future.value();
+  late final _preferences = PreferenceWriter(
+    storage,
+    onError: () {
+      if (_disposed) return;
+      notice = t('storageError');
+      _emit();
+    },
+  );
   int _accountGeneration = 0;
   int _accountSnapshotRevision = 0;
   // A newer identity observation supersedes a pending guest confirmation,
@@ -220,6 +303,7 @@ class AppStore extends ChangeNotifier {
   (Anime, bool)? _favoriteAfterLogin;
   bool get favoriteLoginPending => _favoriteAfterLogin != null;
   NativeHttpPlayback? nativeHttpPlayback;
+  Future<void>? _playbackRelease;
   bool get usesNativeHttpPlayback => nativeHttpPlayback != null && showsPlayer;
   String? _lastDiagnosticPlayback;
   DateTime? _lastDiagnosticSample;
@@ -280,7 +364,17 @@ class AppStore extends ChangeNotifier {
   bool get hasAccount => accountProfile != null || accountSynced;
   bool searching = false, searchFailed = false;
   int tab = 0;
-  String libraryFilter = 'all', _query = '', _libraryQuery = '', searchedQuery = '';
+  String _libraryFilter = 'all',
+      _query = '',
+      _libraryQuery = '',
+      searchedQuery = '';
+  String get libraryFilter => _libraryFilter;
+  set libraryFilter(String value) {
+    if (_libraryFilter == value) return;
+    _libraryFilter = value;
+    _emitLibraryFilter();
+  }
+
   Anime? selectedAnime;
   AnimeDetail? detail;
   Anime? playingAnime;
@@ -294,8 +388,11 @@ class AppStore extends ChangeNotifier {
   final playback = ValueNotifier<PlaybackState>(const PlaybackState());
   bool detailLoading = false, detailFailed = false;
   bool catalogLoading = false, catalogFailed = false;
+  String? catalogError;
   bool _catalogNeedsRetryOnResume = false;
   int _catalogGeneration = 0, _detailGeneration = 0;
+  Future<void> _catalogCacheWrite = Future.value();
+  final _detailCache = <String, (AnimeDetail, DateTime)>{};
   bool browserVisible = false, browserError = false, busy = false;
   bool verificationRequired = false, browserCanGoBack = false;
   String browserTitle = '';
@@ -311,6 +408,7 @@ class AppStore extends ChangeNotifier {
       if (!_disposed) noticeEvents.value = _noticeRevision;
     }
   }
+
   Uri? browserUri;
   BrowserRequest operation = BrowserRequest(intent: BrowserIntent.idle);
   OfficialPortal? _portal;
@@ -331,25 +429,35 @@ class AppStore extends ChangeNotifier {
   bool _pictureInPicturePlayback = false;
   Timer? _deadline;
   Timer? _searchDebounce;
+  Completer<void>? _searchCancel,
+      _detailCancel,
+      _playerDetailCancel,
+      _libraryCancel;
   int _searchGeneration = 0;
   bool postersLoading = false;
   final _posterIndex = <String, String>{};
   final _posterLookupsAttempted = <String>{};
+  int _posterGeneration = 0;
   String? _accountSyncDocument;
   bool _loggingOut = false;
   Future<void>? _accountCacheWrite;
   int _preferredQuality = 0;
   bool _skipOpLongPress = true;
   bool _skipAgeConfirmation = false;
-  Future<void> _qualityPreferenceWrite = Future<void>.value();
-  Future<void>? _skipAgeConfirmationPreferenceWrite;
   PlaybackState? _lastGoodPlayback;
   Future<void> retryPlayback() => reloadBrowser();
 
-  DanmakuSettings danmakuSettings = const DanmakuSettings();
-  int _danmakuWriteRevision = 0;
-  int _danmakuWrittenRevision = 0;
-  Future<void>? _danmakuPreferenceWrite;
+  final danmakuSettingsNotifier = ValueNotifier(const DanmakuSettings());
+  DanmakuSettings get danmakuSettings => danmakuSettingsNotifier.value;
+  set danmakuSettings(DanmakuSettings value) =>
+      danmakuSettingsNotifier.value = value;
+  final searchNotifier = ValueNotifier(0);
+  final libraryFilterNotifier = ValueNotifier(0);
+  final detailNotifier = ValueNotifier(0);
+  final notificationsNotifier = ValueNotifier(0);
+  final accountNotifier = ValueNotifier(0);
+  final browserNotifier = ValueNotifier(0);
+  final catalogNotifier = ValueNotifier(0);
   List<AnimeNotification> notifications = [];
   final Set<String> _readNotifications = {};
   int _readRevision = 0;
@@ -361,6 +469,11 @@ class AppStore extends ChangeNotifier {
   String? notificationsError;
   int _notificationGeneration = 0;
   final Set<String> _communityWrites = {};
+  final commentsVersion = ValueNotifier<int>(0);
+  final _commentPreviewCache = <String, (CommentPage, DateTime)>{};
+  final _commentPreviewRequests = <String, Object>{};
+  final _commentDrafts = <String, CommentDraft>{};
+  int _commentAccountRevision = 0;
 
   int get unreadNotifications {
     if (!identical(_unreadNotificationsSource, notifications) ||
@@ -381,7 +494,14 @@ class AppStore extends ChangeNotifier {
   bool notificationRead(AnimeNotification item) =>
       _readNotifications.contains(item.id);
 
-  Future<Json> community(String action, Json arguments) async {
+  Future<Json> community(String action, Json arguments) =>
+      _community(action, arguments, models: false);
+
+  Future<Json> _community(
+    String action,
+    Json arguments, {
+    bool models = true,
+  }) async {
     if (!_applicationActive || _disposed || loggingOut) {
       throw const CommunityException('unavailable');
     }
@@ -400,7 +520,8 @@ class AppStore extends ChangeNotifier {
       }
     }
 
-    final result = await accountApi.community(action, {
+    final send = models ? accountApi.communityModels : accountApi.community;
+    final result = await send(action, {
       ...arguments,
       'owner': ?owner,
     }, checkCurrent: checkCurrent);
@@ -410,22 +531,134 @@ class AppStore extends ChangeNotifier {
     return result;
   }
 
+  CommentPage? cachedComments(String videoId, {int? order, int? sort}) {
+    if (sort != null) return _cachedRecentComment(_commentKey(videoId, sort));
+    if (order != null && order != 1) return null;
+    return _cachedRecentComment(videoId) ??
+        (order == null ? _cachedRecentComment(_commentKey(videoId, 0)) : null);
+  }
+
+  String _commentKey(String videoId, int sort) =>
+      sort == 1 ? videoId : '$videoId:$sort';
+
+  CommentPage? _cachedRecentComment(String key) {
+    final entry = _commentPreviewCache.readRecent(key);
+    if (entry == null) return null;
+    if (!DateTime.now().isBefore(entry.$2)) {
+      _commentPreviewCache.remove(key);
+      return null;
+    }
+    return entry.$1;
+  }
+
+  void _storeCommentPage(String key, CommentPage page) =>
+      _commentPreviewCache.storeRecent(key, (
+        page,
+        DateTime.now().add(const Duration(minutes: 2)),
+      ), limit: 20);
+
+  void updateCachedCommentPage(String videoId, int sort, CommentPage page) {
+    if (_disposed) return;
+    final key = _commentKey(videoId, sort);
+    _commentPreviewRequests.remove(key);
+    _storeCommentPage(key, page);
+    commentsVersion.value++;
+  }
+
+  void updateCachedCommentsPage(
+    String videoId,
+    CommentPage page, {
+    int order = 1,
+  }) {
+    if (order == 1) updateCachedCommentPage(videoId, order, page);
+  }
+
+  void invalidateCommentsCache([String? videoId]) {
+    if (videoId == null) {
+      _commentPreviewRequests.clear();
+      _commentPreviewCache.clear();
+    } else {
+      _commentPreviewRequests.removeWhere(
+        (key, _) => _isCommentKey(key, videoId),
+      );
+      _commentPreviewCache.removeWhere((key, _) => _isCommentKey(key, videoId));
+    }
+    if (!_disposed) commentsVersion.value++;
+  }
+
+  bool _isCommentKey(String key, String videoId) =>
+      key == videoId || key.startsWith('$videoId:');
+
+  CommentDraft commentDraft(String videoId) =>
+      _commentDrafts.readRecent(videoId) ?? const CommentDraft();
+
+  void saveCommentDraft(String videoId, CommentDraft draft) {
+    if (draft.isEmpty) {
+      clearCommentDraft(videoId);
+    } else if (!_disposed) {
+      _commentDrafts.storeRecent(videoId, draft, limit: 30);
+    }
+  }
+
+  void clearCommentDraft(String videoId) => _commentDrafts.remove(videoId);
+
+  void _resetAccountComments() {
+    _commentAccountRevision++;
+    _commentDrafts.clear();
+    _commentPreviewRequests.clear();
+    if (_commentPreviewCache.isNotEmpty) invalidateCommentsCache();
+  }
+
   Future<CommentPage> loadComments(
     String videoId, {
     int order = 1,
     int page = 0,
-  }) async => CommentPage.fromJson(
-    await community('comments', {
-      'videoId': videoId,
-      'order': order,
-      'page': page,
-    }),
-  );
+    int? sort,
+  }) async {
+    final selectedOrder = sort ?? order;
+    final key = _commentKey(videoId, selectedOrder);
+    final generation = _accountGeneration;
+    final owner = accountProfile?.id.toLowerCase();
+    final request = (sort != null || order == 1) && page == 0 ? Object() : null;
+    if (request != null) _commentPreviewRequests[key] = request;
+    try {
+      final raw = await _community('comments', {
+        'videoId': videoId,
+        'order': selectedOrder,
+        'page': page,
+      });
+      final result = switch (raw['comments']) {
+        final List<OfficialComment> comments => CommentPage(
+          messageId: raw['messageId'] as String,
+          total: raw['total'] as int,
+          nextPage: raw['nextPage'] as int,
+          comments: comments,
+        ),
+        _ => CommentPage.fromJson(raw),
+      };
+      if (request != null &&
+          _commentPreviewRequests[key] == request &&
+          !_disposed &&
+          generation == _accountGeneration &&
+          owner == accountProfile?.id.toLowerCase()) {
+        _storeCommentPage(key, result);
+      }
+      return result;
+    } finally {
+      if (request != null && _commentPreviewRequests[key] == request) {
+        _commentPreviewRequests.remove(key);
+      }
+    }
+  }
 
-  Future<List<OfficialComment>> loadReplies(String commentId) async =>
-      CommentPage.parseComments(
-        (await community('replies', {'commentId': commentId}))['comments'],
-      );
+  Future<List<OfficialComment>> loadReplies(String commentId) async {
+    final raw = (await _community('replies', {
+      'commentId': commentId,
+    }))['comments'];
+    return raw is List<OfficialComment>
+        ? raw
+        : CommentPage.parseComments(raw, maxItems: 2000);
+  }
 
   Future<void> _writeCommunity(
     String key,
@@ -434,7 +667,7 @@ class AppStore extends ChangeNotifier {
   ) async {
     if (!_communityWrites.add(key)) throw const CommunityException('busy');
     try {
-      await community(action, arguments);
+      await _community(action, arguments);
     } finally {
       _communityWrites.remove(key);
     }
@@ -446,23 +679,83 @@ class AppStore extends ChangeNotifier {
     required String text,
     String? commentId,
   }) async {
-    if (text.trim().isEmpty || text.runes.length > 2000) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || trimmed.runes.length > 2000) {
       throw const CommunityException('input');
     }
+    final revision = _commentAccountRevision;
     await _writeCommunity('comment:$messageId', 'comment-send', {
       'videoId': videoId,
       'messageId': messageId,
-      'text': text.trim(),
+      'text': trimmed,
       'commentId': ?commentId,
     });
+    if (_disposed || revision != _commentAccountRevision) return;
+    if (commentId == null) {
+      invalidateCommentsCache(videoId);
+    } else {
+      _commentPreviewRequests.removeWhere(
+        (key, _) => _isCommentKey(key, videoId),
+      );
+      for (final key
+          in _commentPreviewCache.keys
+              .where((key) => _isCommentKey(key, videoId))
+              .toList()) {
+        _changeCachedComment(
+          key,
+          commentId,
+          (comment) => comment.copyWith(replies: comment.replies + 1),
+        );
+      }
+      commentsVersion.value++;
+    }
   }
 
-  Future<void> voteComment(OfficialComment comment, int type) =>
-      _writeCommunity('vote:${comment.id}', 'comment-vote', {
-        'commentId': comment.id,
-        'type': type,
-        'remove': comment.vote == (type == 1 ? 1 : -1),
-      });
+  bool _changeCachedComment(
+    String key,
+    String commentId,
+    OfficialComment Function(OfficialComment) change,
+  ) {
+    final page = _cachedRecentComment(key);
+    if (page == null) return false;
+    final index = page.comments.indexWhere(
+      (comment) => comment.id == commentId,
+    );
+    if (index < 0) return false;
+    final comments = page.comments.toList(growable: false);
+    comments[index] = change(comments[index]);
+    _storeCommentPage(key, page.copyWith(comments: comments));
+    return true;
+  }
+
+  Future<OfficialComment> voteComment(
+    OfficialComment comment,
+    int type, {
+    String? videoId,
+  }) async {
+    final revision = _commentAccountRevision;
+    await _writeCommunity('vote:${comment.id}', 'comment-vote', {
+      'commentId': comment.id,
+      'type': type,
+      'remove': comment.vote == (type == 1 ? 1 : -1),
+    });
+    final updated = comment.withVote(type);
+    if (_disposed || revision != _commentAccountRevision) return updated;
+    final episodes = videoId == null
+        ? _commentPreviewCache.keys.toList()
+        : _commentPreviewCache.keys
+              .where((key) => _isCommentKey(key, videoId))
+              .toList();
+    var changed = false;
+    for (final episode in episodes) {
+      if (_changeCachedComment(episode, comment.id, (_) => updated)) {
+        _commentPreviewRequests.remove(episode);
+        changed = true;
+      }
+    }
+    if (changed) commentsVersion.value++;
+    return updated;
+  }
 
   Future<void> sendDanmaku(
     String text, {
@@ -524,21 +817,13 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<void> setDanmakuSettings(DanmakuSettings value) {
+    if (_disposed || danmakuSettings == value) return Future.value();
     danmakuSettings = value;
-    _emit();
-    ++_danmakuWriteRevision;
-    return _danmakuPreferenceWrite ??= () async {
-      try {
-        while (!_disposed && _danmakuWrittenRevision < _danmakuWriteRevision) {
-          final revision = _danmakuWriteRevision;
-          final encoded = jsonEncode(danmakuSettings.toJson());
-          await _savePreference('baha.device.danmaku', encoded);
-          _danmakuWrittenRevision = revision;
-        }
-      } finally {
-        _danmakuPreferenceWrite = null;
-      }
-    }();
+    return _preferences.write(
+      'baha.device.danmaku',
+      jsonEncode(value.toJson()),
+      debounce: const Duration(milliseconds: 200),
+    );
   }
 
   Future<void> refreshNotifications() async {
@@ -550,7 +835,7 @@ class AppStore extends ChangeNotifier {
     diagnostics.record('notifications.started');
     _emit();
     try {
-      final result = await community('notifications', {});
+      final result = await _community('notifications', {});
       if (_disposed || generation != _notificationGeneration) return;
       final actualOwner = result['owner'] as String;
       if (actualOwner.isEmpty || (owner != null && actualOwner != owner)) {
@@ -560,9 +845,11 @@ class AppStore extends ChangeNotifier {
       if (raw.length > 200) {
         throw const FormatException('Too many notifications');
       }
-      final items = raw
-          .map((item) => AnimeNotification.fromJson(item as Json))
-          .toList();
+      final items = raw is List<AnimeNotification>
+          ? raw
+          : raw
+                .map((item) => AnimeNotification.fromJson(item as Json))
+                .toList();
       if (items.map((item) => item.id).toSet().length != items.length) {
         throw const FormatException('Duplicate notifications');
       }
@@ -575,11 +862,19 @@ class AppStore extends ChangeNotifier {
       if (stored != null) {
         try {
           _readNotifications.addAll(
-            (jsonDecode(stored) as List).cast<String>().take(500),
+            (jsonDecode(stored) as List)
+                .cast<String>()
+                .take(500)
+                .toList()
+                .reversed,
           );
         } catch (_) {}
       }
-      _readNotifications.addAll(currentRead);
+      for (final id in currentRead) {
+        _readNotifications.remove(id);
+        _readNotifications.add(id);
+      }
+      _trimReadNotifications();
       _readRevision++;
       notifications = items;
       _notificationOwner = actualOwner;
@@ -609,9 +904,12 @@ class AppStore extends ChangeNotifier {
   Future<void> markNotificationsRead([AnimeNotification? item]) async {
     final owner = _notificationOwner;
     if (owner == null) return;
-    _readNotifications.addAll(
-      item == null ? notifications.map((e) => e.id) : [item.id],
-    );
+    for (final id
+        in item == null ? notifications.map((e) => e.id) : [item.id]) {
+      _readNotifications.remove(id);
+      _readNotifications.add(id);
+    }
+    _trimReadNotifications();
     _readRevision++;
     _emit();
     final read = jsonEncode(
@@ -622,14 +920,22 @@ class AppStore extends ChangeNotifier {
     );
   }
 
+  void _trimReadNotifications() {
+    final overflow = _readNotifications.length - 500;
+    if (overflow > 0) {
+      _readNotifications.removeAll(_readNotifications.take(overflow).toList());
+    }
+  }
+
   Future<void> openNotification(AnimeNotification item) async {
     await markNotificationsRead(item);
     // Resolve the real series ID; a video ID must never be used as a series ID.
     try {
-      final detail = await community('notification-target', {
+      final detail = await _community('notification-target', {
         'videoId': item.videoId,
       });
-      final anime = Anime.fromJson(detail['anime'] as Json);
+      final raw = detail['anime'];
+      final anime = raw is Anime ? raw : Anime.fromJson(raw as Json);
       await play(
         anime,
         episode: Episode(id: item.videoId, label: ''),
@@ -700,12 +1006,16 @@ class AppStore extends ChangeNotifier {
     }
     _applicationActive = active;
     _pictureInPicturePlayback = pictureInPicture;
+    if (foregroundChanged && active) SystemHttpOverrides.clearProxyCache();
     if (playbackActive != wasPlaybackActive) {
       await nativeHttpPlayback?.setApplicationActive(playbackActive);
     }
     final returning = foregroundChanged && active && _applicationActive;
     final profileRefresh = returning ? refreshAccountProfile() : null;
-    if (returning && !browserVisible && !busy && _portal != null) {
+    if (returning &&
+        !browserVisible &&
+        !busy &&
+        (_portal != null || _portalHostActive)) {
       await syncAccount();
     }
     if (returning &&
@@ -750,9 +1060,9 @@ class AppStore extends ChangeNotifier {
         return;
       }
       _preferredQuality = value.toInt();
-      final saved = _preferredQuality.toString();
-      preferenceWrite = _qualityPreferenceWrite = _qualityPreferenceWrite.then(
-        (_) => _savePreference('baha.device.quality', saved),
+      preferenceWrite = _savePreference(
+        'baha.device.quality',
+        _preferredQuality.toString(),
       );
     }
     try {
@@ -766,13 +1076,7 @@ class AppStore extends ChangeNotifier {
       await nativeHttpPlayback?.command(action, value) ?? false;
 
   Catalog? _derivedCatalog;
-  List<Anime> _seasonalCache = const [];
-  List<Anime> _seasonalPopularCache = const [];
-  List<Anime> _popularCache = const [];
-  List<Anime> _newAddedCache = const [];
-  List<AnimeCollection> _thematicCollectionsCache = const [];
-  AnimeCollection? _expiringCollectionCache;
-  HomeFeed _homeFeedCache = HomeFeed.empty;
+  late HomeFeedBuilder _homeFeedBuilder;
   List<Anime>? _favoriteIdsSource;
   int _favoriteIdsLength = -1;
   Set<String> _favoriteIds = const {};
@@ -782,199 +1086,96 @@ class AppStore extends ChangeNotifier {
   String? _libraryFilterCache;
   String? _libraryQueryCache;
   List<Anime> _libraryItemsCache = const [];
+  final _libraryPages = <String, Anime>{};
+  List<Anime>? _libraryMergedItems;
+  Catalog? _libraryMergeSource;
+  int _nextLibraryPage = 1;
+  int _libraryGeneration = 0;
+  bool _libraryCatalogLoading = false;
+  bool _libraryCatalogHasMore = true;
+  String? _libraryCatalogError;
 
-  static bool _isMovieOrSingleRelease(Anime item) =>
-      item.title.contains('劇場版') ||
-      item.title.contains('剧场版') ||
-      item.title.contains('電影') ||
-      item.title.contains('电影') ||
-      item.episodeLabel == '共 1 集' ||
-      item.episodeLabel == '共1集';
-
-  void _ensureCatalogSections() {
-    if (identical(_derivedCatalog, catalog)) return;
-    final items = catalog.items;
-    final byId = <String, Anime>{for (final item in items) item.id: item};
-    _seasonalCache = List<Anime>.unmodifiable([
-      for (final item in items)
-        if (item.sections.contains('season')) item,
-    ]);
-    final ranked = <Anime>[
-      for (final id in catalog.seasonalPopularIds) ?byId[id],
-    ];
-    _seasonalPopularCache = ranked.isEmpty
-        ? _seasonalCache
-        : List<Anime>.unmodifiable(ranked);
-    _popularCache = List<Anime>.unmodifiable([
-      for (final item in items)
-        if (item.sections.contains('hot')) item,
-    ]);
-    _newAddedCache = List<Anime>.unmodifiable([
-      for (final item in items)
-        if (item.sections.contains('new')) item,
-    ]);
-    _thematicCollectionsCache = List<AnimeCollection>.unmodifiable([
-      for (final collection in catalog.collections)
-        if (!collection.expiring) collection,
-    ]);
-    final expiringGroups = [
-      for (final collection in catalog.collections)
-        if (collection.expiring) collection,
-    ];
-    if (expiringGroups.isEmpty) {
-      _expiringCollectionCache = null;
-    } else if (expiringGroups.length == 1) {
-      _expiringCollectionCache = expiringGroups.first;
-    } else {
-      final merged = <String, Anime>{};
-      for (final group in expiringGroups) {
-        for (final item in group.items) {
-          merged.putIfAbsent(item.id, () => item);
-        }
-      }
-      _expiringCollectionCache = merged.isEmpty
-          ? null
-          : AnimeCollection(
-              id: 'expiring-all',
-              title: expiringGroups.first.title,
-              items: List<Anime>.unmodifiable(merged.values),
-              expiring: true,
-            );
+  List<Anime> get libraryCatalogItems {
+    if (_libraryMergedItems != null &&
+        identical(_libraryMergeSource, catalog)) {
+      return _libraryMergedItems!;
     }
-    _homeFeedCache = _buildHomeFeed();
-    _derivedCatalog = catalog;
+    final items = {for (final item in catalog.items) item.id: item};
+    for (final item in _libraryPages.values) {
+      items.putIfAbsent(item.id, () => item);
+    }
+    _libraryMergeSource = catalog;
+    return _libraryMergedItems = List.unmodifiable(items.values);
   }
 
-  HomeFeed _buildHomeFeed() {
-    if (catalog.items.isEmpty) return HomeFeed.empty;
-    final heroItems = <HomeHeroItem>[];
-    final heroAnimeIds = <String>{};
-    final heroCollectionIds = <String>{};
+  bool get libraryCatalogLoading => _libraryCatalogLoading;
+  bool get libraryCatalogHasMore => _libraryCatalogHasMore;
+  String? get libraryCatalogError => _libraryCatalogError;
 
-    // Card 1: Top seasonal anime by popularity.
-    final seasonalTop = _seasonalPopularCache.firstOrNull;
-    if (seasonalTop != null) {
-      heroAnimeIds.add(seasonalTop.id);
-      heroItems.add(
-        HomeHeroAnime(anime: seasonalTop, kind: HomeHeroKind.seasonalTop),
-      );
+  Future<void> loadMoreLibraryCatalog({bool reset = false}) async {
+    if (_disposed) return;
+    if (reset) {
+      _libraryCancel?.complete();
+      _libraryPages.clear();
+      _libraryMergedItems = null;
+      _libraryCatalog = null;
+      _nextLibraryPage = 1;
+      _libraryCatalogHasMore = true;
+    } else if (_libraryCatalogLoading || !_libraryCatalogHasMore) {
+      return;
     }
-
-    // Card 2: Highlighted newly added movie / back-catalog series.
-    Anime? newHighlight;
-    for (final item in _newAddedCache) {
-      if (heroAnimeIds.contains(item.id)) continue;
-      if (_isMovieOrSingleRelease(item)) {
-        newHighlight = item;
-        break;
+    final generation = ++_libraryGeneration;
+    final cancel = _libraryCancel = Completer<void>();
+    _libraryCatalogLoading = true;
+    _libraryCatalogError = null;
+    _emitLibraryFilter();
+    try {
+      final result = await metadataApi.fetchLibraryPage(
+        _nextLibraryPage,
+        cancel: cancel.future,
+      );
+      if (_disposed || generation != _libraryGeneration) return;
+      for (final item in result.items) {
+        _libraryPages.putIfAbsent(item.id, () => item);
       }
-      newHighlight ??= item;
-    }
-    if (newHighlight != null) {
-      heroAnimeIds.add(newHighlight.id);
-      heroItems.add(
-        HomeHeroAnime(anime: newHighlight, kind: HomeHeroKind.newRelease),
-      );
-    }
-
-    // Card 3: Curated official thematic collection.
-    final featuredTheme = _thematicCollectionsCache.firstOrNull;
-    if (featuredTheme != null) {
-      heroCollectionIds.add(featuredTheme.id);
-      heroItems.add(
-        HomeHeroCollection(
-          collection: featuredTheme,
-          kind: HomeHeroKind.thematicCollection,
-        ),
-      );
-    }
-
-    // Card 4: Expiring license collection reminder.
-    final expiring = _expiringCollectionCache;
-    if (expiring != null) {
-      heroCollectionIds.add(expiring.id);
-      heroItems.add(
-        HomeHeroCollection(
-          collection: expiring,
-          kind: HomeHeroKind.expiringCollection,
-        ),
-      );
-    }
-
-    // Fallback when catalog omits newAdded or curated collections.
-    if (heroItems.length < 3) {
-      for (final anime in [..._seasonalPopularCache, ..._popularCache]) {
-        if (heroItems.length >= 3) break;
-        if (!heroAnimeIds.add(anime.id)) continue;
-        heroItems.add(
-          HomeHeroAnime(
-            anime: anime,
-            kind: anime.sections.contains('season')
-                ? HomeHeroKind.featured
-                : HomeHeroKind.popular,
-          ),
-        );
+      _libraryMergedItems = null;
+      _libraryCatalog = null;
+      _nextLibraryPage++;
+      _libraryCatalogHasMore = result.hasMore;
+    } on UnsupportedError {
+      if (generation == _libraryGeneration) _libraryCatalogHasMore = false;
+    } catch (error) {
+      if (generation == _libraryGeneration) {
+        _libraryCatalogError = error is OfficialAppApiException
+            ? error.code
+            : 'network';
+      }
+    } finally {
+      if (!_disposed && generation == _libraryGeneration) {
+        _libraryCancel = null;
+        _libraryCatalogLoading = false;
+        _emitLibraryFilter();
       }
     }
-
-    final dedupedUpdates = [
-      for (final anime in _seasonalCache)
-        if (!heroAnimeIds.contains(anime.id)) anime,
-    ];
-    final recentUpdates = dedupedUpdates.isNotEmpty
-        ? List<Anime>.unmodifiable(dedupedUpdates)
-        : _seasonalCache;
-    final newAddedRail = List<Anime>.unmodifiable([
-      for (final anime in _newAddedCache)
-        if (!heroAnimeIds.contains(anime.id)) anime,
-    ]);
-    final topicRail = List<AnimeCollection>.unmodifiable([
-      for (final collection in _thematicCollectionsCache)
-        if (!heroCollectionIds.contains(collection.id)) collection,
-    ]);
-
-    return HomeFeed(
-      heroItems: List<HomeHeroItem>.unmodifiable(heroItems),
-      recentUpdates: recentUpdates,
-      newAdded: newAddedRail,
-      topics: topicRail,
-    );
   }
 
-  HomeFeed get homeFeed {
-    _ensureCatalogSections();
-    return _homeFeedCache;
+  HomeFeedBuilder get _catalogSections {
+    if (!identical(_derivedCatalog, catalog)) {
+      _homeFeedBuilder = HomeFeedBuilder(catalog);
+      _derivedCatalog = catalog;
+    }
+    return _homeFeedBuilder;
   }
 
-  List<Anime> get seasonal {
-    _ensureCatalogSections();
-    return _seasonalCache;
-  }
-
-  List<Anime> get seasonalPopular {
-    _ensureCatalogSections();
-    return _seasonalPopularCache;
-  }
-
-  List<Anime> get popular {
-    _ensureCatalogSections();
-    return _popularCache;
-  }
-
-  List<Anime> get newAdded {
-    _ensureCatalogSections();
-    return _newAddedCache;
-  }
-
-  List<AnimeCollection> get thematicCollections {
-    _ensureCatalogSections();
-    return _thematicCollectionsCache;
-  }
-
-  AnimeCollection? get expiringCollection {
-    _ensureCatalogSections();
-    return _expiringCollectionCache;
-  }
+  HomeFeed get homeFeed => _catalogSections.feed;
+  List<Anime> get seasonal => _catalogSections.seasonal;
+  List<Anime> get seasonalPopular => _catalogSections.seasonalPopular;
+  List<Anime> get popular => _catalogSections.popular;
+  List<Anime> get newAdded => _catalogSections.newAdded;
+  List<AnimeCollection> get thematicCollections =>
+      _catalogSections.thematicCollections;
+  AnimeCollection? get expiringCollection =>
+      _catalogSections.expiringCollection;
 
   bool get _usesOfficialSearch => tab == 4;
   String get query => _query;
@@ -984,10 +1185,12 @@ class AppStore extends ChangeNotifier {
     searchedQuery = '';
     searchResults = [];
     _searchDebounce?.cancel();
+    _searchCancel?.complete();
+    _searchCancel = null;
     _searchGeneration++;
     searching = value.trim().isNotEmpty && _usesOfficialSearch;
     searchFailed = false;
-    _emit();
+    _emitSearch();
     if (searching) {
       _searchDebounce = Timer(
         const Duration(milliseconds: 350),
@@ -1000,7 +1203,7 @@ class AppStore extends ChangeNotifier {
   set libraryQuery(String value) {
     if (value == _libraryQuery) return;
     _libraryQuery = value;
-    _emit();
+    _emitLibraryFilter();
   }
 
   void openGlobalSearch(String term) {
@@ -1012,20 +1215,14 @@ class AppStore extends ChangeNotifier {
       return;
     }
     if (_query == trimmed) {
-      _emit();
       if (searchedQuery != trimmed && !searching) {
         unawaited(search());
+      } else {
+        _emit();
       }
       return;
     }
-    _query = trimmed;
-    searchedQuery = '';
-    searchResults = [];
-    _searchDebounce?.cancel();
-    _searchGeneration++;
-    searching = true;
-    searchFailed = false;
-    _emit();
+    query = trimmed;
     unawaited(search());
   }
 
@@ -1052,12 +1249,19 @@ class AppStore extends ChangeNotifier {
         _libraryQueryCache == _libraryQuery) {
       return _libraryItemsCache;
     }
-    final source = libraryFilter == 'favorites' ? favorites : catalog.items;
+    final source = switch (libraryFilter) {
+      'favorites' => favorites,
+      'all' => libraryCatalogItems,
+      _ => catalog.items,
+    };
+    final filterSection =
+        libraryFilter != 'all' && libraryFilter != 'favorites';
+    final normalizedQuery = folding.normalizeQuery(_libraryQuery);
     final result = List<Anime>.unmodifiable([
       for (final item in source)
-        if ((const ['all', 'favorites'].contains(libraryFilter) ||
-                item.sections.contains(libraryFilter)) &&
-            folding.matches(item.title, _libraryQuery))
+        if ((!filterSection || item.sections.contains(libraryFilter)) &&
+            (normalizedQuery.isEmpty ||
+                folding.normalize(item.title).contains(normalizedQuery)))
           item,
     ]);
     _libraryCatalog = catalog;
@@ -1074,7 +1278,7 @@ class AppStore extends ChangeNotifier {
     final previousTab = tab;
     tab = value;
     if (filter != null) {
-      libraryFilter = filter;
+      _libraryFilter = filter;
       if (previousTab != 2) {
         _libraryQuery = '';
       }
@@ -1139,22 +1343,16 @@ class AppStore extends ChangeNotifier {
   Future<void> setSkipAgeConfirmation(bool value) async {
     if (_skipAgeConfirmation == value) return;
     _skipAgeConfirmation = value;
-    Future<void> save() =>
-        _savePreference('baha.device.skipAgeConfirmation', value ? '1' : '0');
-    final write = _skipAgeConfirmationPreferenceWrite =
-        _skipAgeConfirmationPreferenceWrite?.then((_) => save()) ?? save();
+    final write = _savePreference(
+      'baha.device.skipAgeConfirmation',
+      value ? '1' : '0',
+    );
     _emit();
     await write;
   }
 
-  Future<void> _savePreference(String key, String value) async {
-    try {
-      await storage.write(key, value);
-    } catch (_) {
-      notice = t('storageError');
-      _emit();
-    }
-  }
+  Future<void> _savePreference(String key, String value) =>
+      _preferences.write(key, value);
 
   Future<void> attach(OfficialPortal portal) async {
     _portal = portal;
@@ -1173,40 +1371,35 @@ class AppStore extends ChangeNotifier {
     _accountSyncDocument = null;
   }
 
-  void _rememberPosters(Iterable<Anime> series) {
+  bool _rememberPosters(Iterable<Anime> series, {bool mergeCatalog = true}) {
     for (final item in series) {
-      if (item.poster != null) _posterIndex[item.id] = item.poster!;
+      if (item.poster case final poster?) {
+        _posterIndex.storeRecent(item.id, poster, limit: 1000);
+      }
     }
+    if (!mergeCatalog) return false;
     final merged = _mergePosters(catalog);
-    if (!identical(merged, catalog)) {
-      catalog = merged;
-      _emit();
-    }
+    if (identical(merged, catalog)) return false;
+    catalog = merged;
+    return true;
   }
 
   Catalog _mergePosters(Catalog source) {
-    var changed = false;
-    final items = [
-      for (final item in source.items)
-        if (item.poster == null && _posterIndex.containsKey(item.id))
-          () {
-            changed = true;
-            return Anime.fromJson({
-              ...item.toJson(),
-              'poster': _posterIndex[item.id],
-            });
-          }()
-        else
-          item,
-    ];
-    return changed
-        ? Catalog(
-            items: items,
-            fetchedAt: source.fetchedAt,
-            seasonalPopularIds: source.seasonalPopularIds,
-            collections: source.collections,
-          )
-        : source;
+    List<Anime>? items;
+    for (final (index, item) in source.items.indexed) {
+      final poster = _posterIndex[item.id];
+      if (item.poster != null || poster == null) continue;
+      (items ??= source.items.toList(growable: false))[index] = item.copyWith(
+        poster: poster,
+      );
+    }
+    if (items == null) return source;
+    return Catalog(
+      items: items,
+      fetchedAt: source.fetchedAt,
+      seasonalPopularIds: source.seasonalPopularIds,
+      collections: source.collections,
+    );
   }
 
   Future<void> _refreshPosters() async {
@@ -1217,15 +1410,17 @@ class AppStore extends ChangeNotifier {
       return;
     }
     postersLoading = true;
+    final generation = _posterGeneration;
     try {
       final recent = await searchService.recentSeries();
-      if (_disposed) return;
-      _rememberPosters(recent);
-      await cache.save(catalog);
+      if (_disposed || generation != _posterGeneration) return;
+      if (_rememberPosters(recent)) {
+        _emit();
+        await _saveCatalogCache(catalog);
+      }
       final pending = catalog.items
           .where(
-            (e) =>
-                e.poster == null && !_posterLookupsAttempted.contains(e.id),
+            (e) => e.poster == null && !_posterLookupsAttempted.contains(e.id),
           )
           .toList();
       var next = 0;
@@ -1233,6 +1428,7 @@ class AppStore extends ChangeNotifier {
       final found = <Anime>[];
       Future<void> worker() async {
         while (!_disposed &&
+            generation == _posterGeneration &&
             _applicationActive &&
             !rateLimited &&
             next < pending.length) {
@@ -1242,7 +1438,11 @@ class AppStore extends ChangeNotifier {
               item.title,
               useAccount: false,
             );
+            if (_disposed || generation != _posterGeneration) return;
             _posterLookupsAttempted.add(item.id);
+            if (_posterLookupsAttempted.length > 500) {
+              _posterLookupsAttempted.remove(_posterLookupsAttempted.first);
+            }
             found.addAll(matches.where((match) => match.id == item.id));
           } on OfficialAppApiException catch (error) {
             if (error.code == 'http-429' || error.code == 'http-403') {
@@ -1255,14 +1455,22 @@ class AppStore extends ChangeNotifier {
       }
 
       await Future.wait([for (var i = 0; i < 2; i++) worker()]);
-      if (_disposed) return;
-      _rememberPosters(found);
-      await cache.save(catalog);
+      if (_disposed || generation != _posterGeneration) return;
+      if (_rememberPosters(found)) {
+        _emit();
+        await _saveCatalogCache(catalog);
+      }
     } catch (_) {
       // An unavailable artwork endpoint must not discard the catalog cache.
     } finally {
       postersLoading = false;
     }
+  }
+
+  Future<void> _saveCatalogCache(Catalog snapshot) {
+    final pending = _catalogCacheWrite.then((_) => cache.save(snapshot));
+    _catalogCacheWrite = pending.catchError((Object _) {});
+    return pending;
   }
 
   void updateNavigation(Uri? uri, {required bool canGoBack}) {
@@ -1282,8 +1490,13 @@ class AppStore extends ChangeNotifier {
         }
       : {'type': error.runtimeType.toString()};
 
-  Future<void> refreshCatalog() async {
-    if (_disposed || browserVisible) return;
+  Future<void> refreshCatalog({bool force = true}) async {
+    if (_disposed || browserVisible || (!force && catalogLoading)) return;
+    final fetchedAt = DateTime.tryParse(catalog.fetchedAt);
+    if (!force && fetchedAt != null) {
+      final age = DateTime.now().difference(fetchedAt);
+      if (!age.isNegative && age < const Duration(minutes: 2)) return;
+    }
     if (!_applicationActive) {
       _catalogNeedsRetryOnResume = true;
       return;
@@ -1292,29 +1505,20 @@ class AppStore extends ChangeNotifier {
     final generation = ++_catalogGeneration;
     catalogLoading = true;
     catalogFailed = false;
+    catalogError = null;
     _emit();
+    Catalog? updated;
     try {
       final fetched = await metadataApi.fetchCatalog();
       if (_disposed || generation != _catalogGeneration) return;
       _rememberPosters([
         ...catalog.items,
         for (final collection in fetched.collections) ...collection.items,
-      ]);
-      final updated = _mergePosters(fetched);
+      ], mergeCatalog: false);
+      updated = _mergePosters(fetched);
       catalog = updated;
       catalogSource = 'live';
       diagnostics.record('catalog.completed', {'count': updated.items.length});
-      _emit();
-      try {
-        await cache.save(updated);
-      } catch (_) {
-        if (!_disposed && generation == _catalogGeneration) {
-          notice = t('storageError');
-        }
-      }
-      if (!_disposed && generation == _catalogGeneration) {
-        unawaited(_refreshPosters());
-      }
     } catch (error) {
       if (_disposed || generation != _catalogGeneration) return;
       if (!_applicationActive) {
@@ -1323,11 +1527,22 @@ class AppStore extends ChangeNotifier {
         return;
       }
       catalogFailed = true;
+      catalogError = error is OfficialAppApiException ? error.code : 'network';
       diagnostics.record('catalog.failed', _metadataFailureData(error));
     } finally {
       if (!_disposed && generation == _catalogGeneration) {
         catalogLoading = false;
         _emit();
+        if (updated != null) {
+          unawaited(
+            _saveCatalogCache(updated).catchError((Object _) {
+              if (!_disposed && generation == _catalogGeneration) {
+                notice = t('storageError');
+              }
+            }),
+          );
+          unawaited(_refreshPosters());
+        }
       }
     }
   }
@@ -1341,13 +1556,14 @@ class AppStore extends ChangeNotifier {
 
   Future<void> openDetail(Anime anime) async {
     if (_disposed) return;
+    _detailCancel?.complete();
+    final cancel = _detailCancel = Completer<void>();
     final generation = ++_detailGeneration;
     selectedAnime = anime;
     detail = null;
     detailLoading = true;
     detailFailed = false;
     _pendingAnime = anime;
-    _emit();
     final videoId = anime.latestVideoId;
     if (videoId != null) {
       // Retire an older HTML detail request, while leaving playback/account
@@ -1357,14 +1573,18 @@ class AppStore extends ChangeNotifier {
         busy = false;
         _pendingUri = null;
       }
+      _emit();
       try {
-        final fetched = await metadataApi.fetchDetail(
-          animeId: anime.id,
-          videoId: videoId,
-        );
+        final fetched = await _fetchDetail(anime.id, videoId, cancel.future);
         if (_disposed || generation != _detailGeneration) return;
         detail = fetched;
+        _cacheDetail(anime.id, fetched);
         diagnostics.record('detail.completed');
+        unawaited(
+          _attachDetailRating(anime.id, fetched, cancel.future, () {
+            return !_disposed && generation == _detailGeneration;
+          }, (rated) => detail = rated),
+        );
       } catch (error) {
         if (_disposed || generation != _detailGeneration) return;
         detailFailed = true;
@@ -1377,6 +1597,7 @@ class AppStore extends ChangeNotifier {
       }
       return;
     }
+    _emit();
     if (browserUri != null && OfficialSite.trustedOrigin(browserUri!)) {
       _begin(BrowserIntent.detail);
       _armDeadline();
@@ -1386,16 +1607,105 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  Future<AnimeDetail> _fetchDetail(
+    String animeId,
+    String videoId,
+    Future<void> cancel,
+  ) {
+    final cached = _detailCache.readRecent(animeId);
+    if (cached != null &&
+        DateTime.now().isBefore(cached.$2) &&
+        cached.$1.episodes.any((episode) => episode.id == videoId)) {
+      return Future.value(cached.$1);
+    }
+    if (cached != null && !DateTime.now().isBefore(cached.$2)) {
+      _detailCache.remove(animeId);
+    }
+    return metadataApi.fetchDetail(
+      animeId: animeId,
+      videoId: videoId,
+      includeRating: false,
+      cancel: cancel,
+    );
+  }
+
+  void _cacheDetail(String animeId, AnimeDetail result) {
+    if (identical(_detailCache[animeId]?.$1, result)) return;
+    _detailCache.storeRecent(animeId, (
+      result,
+      DateTime.now().add(const Duration(minutes: 5)),
+    ), limit: 25);
+  }
+
+  Future<void> _attachDetailRating(
+    String animeId,
+    AnimeDetail result,
+    Future<void> cancel,
+    bool Function() current,
+    void Function(AnimeDetail) save,
+  ) async {
+    final fanId = result.fanId;
+    if (fanId == null || result.rating != null) return;
+    try {
+      final rating = await metadataApi.fetchRating(fanId, cancel: cancel);
+      if (rating == null || !current()) return;
+      final rated = OfficialAppMetadata.attachRating(result, rating);
+      if (identical(_detailCache[animeId]?.$1, result)) {
+        _cacheDetail(animeId, rated);
+      }
+      save(rated);
+      if (identical(detail, result)) detail = rated;
+      if (identical(playerDetail, result)) playerDetail = rated;
+      _emit();
+    } catch (_) {
+      // The existing detail remains available if reviews fail.
+    }
+  }
+
+  Future<void> _loadPlayerDetail(
+    Anime anime,
+    String videoId,
+    String document,
+  ) async {
+    final cancel = _playerDetailCancel = Completer<void>();
+    bool current() =>
+        !_disposed &&
+        operation.id == document &&
+        identical(_playerDetailCancel, cancel);
+    try {
+      final result = await _fetchDetail(anime.id, videoId, cancel.future);
+      if (!current()) return;
+      playerDetail = result;
+      _cacheDetail(anime.id, result);
+      _emit();
+      await _attachDetailRating(
+        anime.id,
+        result,
+        cancel.future,
+        current,
+        (rated) => playerDetail = rated,
+      );
+    } catch (_) {
+      // A metadata failure cannot change the authorization session.
+    }
+  }
+
   Future<void> search() async {
     _searchDebounce?.cancel();
     if (query.trim().isEmpty) return;
     final input = query;
     final generation = ++_searchGeneration;
+    _searchCancel?.complete();
+    final cancel = _searchCancel = Completer<void>();
     searching = true;
     searchFailed = false;
     _emit();
     try {
-      final items = await searchService.search(input);
+      if (_disposed || generation != _searchGeneration) return;
+      final service = searchService;
+      final items = service is OfficialAnimeSearch
+          ? await service.search(input, cancel: cancel.future)
+          : await service.search(input);
       if (_disposed || generation != _searchGeneration || query != input) {
         return;
       }
@@ -1412,6 +1722,7 @@ class AppStore extends ChangeNotifier {
       diagnostics.record('search.failed', _metadataFailureData(error));
     }
     if (generation == _searchGeneration) {
+      _searchCancel = null;
       searching = false;
       _emit();
     }
@@ -1419,12 +1730,14 @@ class AppStore extends ChangeNotifier {
 
   Future<void> connectAccount() async {
     if (_disposed || loggingOut) return;
+    final clearingOwner = hasAccount;
     _invalidateAccountRequests();
     _resetNotifications();
     accountProfile = null;
     favorites = [];
     history = [];
     accountSynced = false;
+    if (clearingOwner) _resetAccountComments();
     unawaited(_saveAccountSnapshot(null));
     final pending = OfficialCookieRotation.pending;
     if (pending != null) {
@@ -1456,6 +1769,24 @@ class AppStore extends ChangeNotifier {
     history = [];
     accountSynced = false;
     accountNeedsRefresh = false;
+    _resetAccountComments();
+    _detailGeneration++;
+    _searchGeneration++;
+    _posterGeneration++;
+    _detailCancel?.complete();
+    _detailCancel = null;
+    _playerDetailCancel?.complete();
+    _playerDetailCancel = null;
+    _searchCancel?.complete();
+    _searchCancel = null;
+    _searchDebounce?.cancel();
+    _detailCache.clear();
+    if (searchService case final OfficialAnimeSearch search) search.reset();
+    folding.clearCache();
+    _posterIndex.clear();
+    _posterLookupsAttempted.clear();
+    searching = false;
+    detailLoading = false;
     browserVisible = false;
     browserCanGoBack = false;
     browserUri = null;
@@ -1479,6 +1810,7 @@ class AppStore extends ChangeNotifier {
         accountApi.logout(),
         _writeAccountData(storage.clearAccountData, strict: true),
         if (playbackSession != null) playbackSession.released,
+        ?_playbackRelease,
       ]);
       return true;
     } catch (_) {
@@ -1541,9 +1873,7 @@ class AppStore extends ChangeNotifier {
           return;
         }
         notice = t(
-          error.code == 'login'
-              ? 'accountHint'
-              : error.code == 'verification'
+          error.code == 'verification'
               ? 'officialVerificationHint'
               : 'accountSyncError',
         );
@@ -1588,6 +1918,8 @@ class AppStore extends ChangeNotifier {
     Json? checkpoint,
   }) async {
     final previous = nativeHttpPlayback;
+    _playerDetailCancel?.complete();
+    _playerDetailCancel = null;
     nativeHttpPlayback = null;
     _pendingUri = null;
     _begin(BrowserIntent.play);
@@ -1612,33 +1944,40 @@ class AppStore extends ChangeNotifier {
     );
     final session = nativeHttpPlayback!;
     _emit();
-    await previous?.close();
-    if (_disposed || operation.id != document) {
-      session.dispose();
-      return;
-    }
+    final closing = _closeNativePlayback(previous);
     unawaited(
       session.prepare(
         applicationActive: _applicationActive,
         nativeBackendAvailable: nativePlaybackBackend != null,
+        waitBeforeInstall: _playbackRelease,
       ),
     );
     if (playerDetail == null && videoId.isNotEmpty) {
-      unawaited(() async {
-        try {
-          final result = await metadataApi.fetchDetail(
-            animeId: anime.id,
-            videoId: videoId,
-          );
-          if (!_disposed && operation.id == document) {
-            playerDetail = result;
-            _emit();
-          }
-        } catch (_) {
-          // A metadata failure cannot change the authorization session.
-        }
-      }());
+      unawaited(_loadPlayerDetail(anime, videoId, document));
     }
+    await closing;
+    if (_disposed || operation.id != document) {
+      session.dispose();
+      return;
+    }
+  }
+
+  Future<void>? _closeNativePlayback(NativeHttpPlayback? session) {
+    if (session == null) return null;
+    final prior = _playbackRelease;
+    final closing = session.close();
+    final release = prior == null
+        ? closing
+        : Future.wait([prior, closing]).then<void>((_) {});
+    _playbackRelease = release;
+    void clear() {
+      if (identical(_playbackRelease, release)) _playbackRelease = null;
+    }
+
+    unawaited(
+      release.then<void>((_) => clear(), onError: (Object _) => clear()),
+    );
+    return closing;
   }
 
   Future<void> continueWatching(WatchEntry entry) async {
@@ -1651,6 +1990,8 @@ class AppStore extends ChangeNotifier {
   Future<void> closeBrowser() async {
     if (operation.intent == BrowserIntent.account) _favoriteAfterLogin = null;
     _lastGoodPlayback = null;
+    _playerDetailCancel?.complete();
+    _playerDetailCancel = null;
     final http = nativeHttpPlayback;
     nativeHttpPlayback = null;
     final refreshAccount =
@@ -1664,15 +2005,18 @@ class AppStore extends ChangeNotifier {
     final closing = operation.id;
     playback.value = const PlaybackState();
     _emit();
-    await http?.close();
+    await _closeNativePlayback(http);
     await _releasePlayback(expected: closing, releaseSystemMedia: http != null);
     if (_disposed || operation.id != closing) return;
+    playingAnime = null;
+    playerDetail = null;
+    playingVideoId = null;
+    _emit();
     if (refreshAccount) {
       await syncAccount();
     } else if (verificationRequired || catalog.items.isEmpty) {
       await refreshCatalog();
     }
-    _emit();
   }
 
   Future<void> reloadBrowser() async {
@@ -1713,11 +2057,11 @@ class AppStore extends ChangeNotifier {
   }
 
   Future<AccountProfile?> _fetchFreshProfile(int generation) async {
-    final raw = await accountApi.fetchProfile(
+    final profile = await accountApi.fetchProfileModel(
       checkCurrent: () => _checkAccountGeneration(generation),
     );
     _checkAccountGeneration(generation);
-    return raw == null ? null : AccountProfile.fromJson(raw);
+    return profile;
   }
 
   bool _sameAccountOwner(AccountProfile? profile) =>
@@ -1775,7 +2119,12 @@ class AppStore extends ChangeNotifier {
             if (sameOwner) rethrow;
           }
         }
-        await CachedNetworkImageProvider(avatar).evict();
+        final evict = avatarEvictor;
+        if (evict == null) {
+          await CachedNetworkImageProvider(avatar).evict();
+        } else {
+          await evict(avatar);
+        }
       }
       _checkAccountGeneration(generation);
       if (!canApply()) return false;
@@ -1826,12 +2175,12 @@ class AppStore extends ChangeNotifier {
         (identityRevision == _accountIdentityRevision ||
             _sameAccountOwner(profile));
     accountLoading = true;
+    _emit();
     try {
-      final snapshot = await accountApi.fetchAccount(
+      final snapshot = await accountApi.fetchAccountSnapshot(
         expectedOwner: expectedOwner,
-        onAuthenticated: (raw) {
+        onAuthenticated: (profile) {
           _checkAccountGeneration(generation);
-          final profile = AccountProfile.fromJson(raw);
           if (!canApply(profile)) throw const CommunityException('stale');
           _applyAccountProfile(profile);
           identityRevision = _accountIdentityRevision;
@@ -1844,9 +2193,7 @@ class AppStore extends ChangeNotifier {
       if (snapshot == null && expectedOwner != null) {
         throw const CommunityException('login');
       }
-      final profile = snapshot == null
-          ? null
-          : AccountProfile.fromJson(snapshot['profile'] as Json);
+      final profile = snapshot?.profile;
       if (!canApply(profile)) return;
       if (snapshot == null && hasAccount) {
         final confirmed = await _fetchFreshProfile(generation);
@@ -1859,21 +2206,15 @@ class AppStore extends ChangeNotifier {
         }
       }
       _applyAccountProfile(profile);
-      favorites = [
-        for (final raw in snapshot?['favorites'] as List? ?? [])
-          Anime.fromJson(raw as Json),
-      ];
-      history = [
-        for (final raw in snapshot?['history'] as List? ?? [])
-          WatchEntry.fromJson(raw as Json),
-      ];
+      favorites = snapshot?.favorites ?? [];
+      history = snapshot?.history ?? [];
       accountSynced = snapshot != null;
       accountNeedsRefresh = false;
       if (notice == t('accountSyncError')) notice = null;
       await _saveAccountSnapshot(
         snapshot == null
             ? null
-            : {...snapshot, 'profile': accountProfile?.toJson()},
+            : {...snapshot.toJson(), 'profile': accountProfile?.toJson()},
       );
     } catch (error) {
       if (!_disposed &&
@@ -1898,8 +2239,10 @@ class AppStore extends ChangeNotifier {
   void _applyAccountProfile(AccountProfile? profile, {bool fresh = false}) {
     _accountIdentityRevision++;
     final previous = accountProfile;
-    if (previous?.id.toLowerCase() != profile?.id.toLowerCase() ||
-        (profile == null && accountSynced)) {
+    final ownerChanged =
+        previous?.id.toLowerCase() != profile?.id.toLowerCase() ||
+        (profile == null && accountSynced);
+    if (ownerChanged) {
       _profileCheckedAt = null;
       _resetNotifications();
       favorites = [];
@@ -1922,6 +2265,7 @@ class AppStore extends ChangeNotifier {
       );
     }
     accountProfile = profile;
+    if (ownerChanged) _resetAccountComments();
   }
 
   void _invalidateAccountRequests() {
@@ -2006,14 +2350,17 @@ class AppStore extends ChangeNotifier {
     if (body['type'] == 'account-authenticated') {
       _invalidateAccountRequests();
       final profile = AccountProfile.fromJson(body['profile'] as Json);
-      if (accountProfile?.id.toLowerCase() != profile.id.toLowerCase()) {
+      final ownerChanged =
+          accountProfile?.id.toLowerCase() != profile.id.toLowerCase();
+      accountProfile = profile;
+      if (ownerChanged) {
         _resetNotifications();
         favorites = [];
         history = [];
         accountSynced = false;
+        _resetAccountComments();
         unawaited(_saveAccountSnapshot(null));
       }
-      accountProfile = profile;
       accountNeedsRefresh = true;
       browserVisible = false;
       busy = false;
@@ -2048,6 +2395,7 @@ class AppStore extends ChangeNotifier {
         history = [];
         accountSynced = false;
         accountNeedsRefresh = false;
+        _resetAccountComments();
         unawaited(_saveAccountSnapshot(null));
         if (browserVisible) {
           notice = t('accountHint');
@@ -2101,7 +2449,7 @@ class AppStore extends ChangeNotifier {
     final expected = operation.id;
     playerFullscreen = false;
     playerLocked = false;
-    await http?.close();
+    await _closeNativePlayback(http);
     await _releasePlayback(
       expected: expected,
       releaseSystemMedia: http != null,
@@ -2153,7 +2501,18 @@ class AppStore extends ChangeNotifier {
     String name, [
     Map<String, String> replacements = const {},
   ]) async {
+    final expected = operation.id;
     var source = scripts[name];
+    final load = _scriptLoader;
+    if (source == null && load != null) {
+      try {
+        source = await load(name);
+      } catch (_) {
+        if (operation.id == expected && !_disposed) navigationFailed();
+        return;
+      }
+    }
+    if (_disposed || operation.id != expected) return;
     if (source == null || _portal == null) {
       navigationFailed();
       return;
@@ -2161,7 +2520,6 @@ class AppStore extends ChangeNotifier {
     for (final entry in replacements.entries) {
       source = source!.replaceAll(entry.key, entry.value);
     }
-    final expected = operation.id;
     final prefix =
         '''
 (function() {
@@ -2208,7 +2566,93 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
     }
   }
 
+  Object? _searchScope,
+      _libraryScope,
+      _detailScope,
+      _notificationScope,
+      _accountScope,
+      _browserScope,
+      _catalogScope;
+
+  Object get _searchState =>
+      (_query, searching, searchFailed, searchResults, searchedQuery);
+  Object get _libraryState => (
+    _libraryFilter,
+    _libraryQuery,
+    _libraryGeneration,
+    _nextLibraryPage,
+    _libraryCatalogLoading,
+    _libraryCatalogHasMore,
+    _libraryCatalogError,
+  );
+  Object get _detailState =>
+      (selectedAnime, detail, detailLoading, detailFailed, playerDetail);
+  Object get _notificationState =>
+      (notifications, notificationsLoading, notificationsError, _readRevision);
+  Object get _accountState => (
+    accountProfile,
+    accountLoading,
+    _profileRefreshing,
+    accountPortraitVersion,
+    favorites,
+    history,
+    accountSynced,
+    accountNeedsRefresh,
+    _loggingOut,
+  );
+  Object get _browserState => (
+    browserVisible,
+    browserUri,
+    browserCanGoBack,
+    browserTitle,
+    busy,
+    browserError,
+    favoriteLoginPending,
+    playerFullscreen,
+    playerLocked,
+    operation.id,
+    verificationRequired,
+  );
+  Object get _catalogState =>
+      (catalog, catalogLoading, catalogFailed, catalogSource, catalogError);
+
+  void _captureScopes() {
+    _searchScope = _searchState;
+    _libraryScope = _libraryState;
+    _detailScope = _detailState;
+    _notificationScope = _notificationState;
+    _accountScope = _accountState;
+    _browserScope = _browserState;
+    _catalogScope = _catalogState;
+  }
+
+  void _emitSearch() {
+    if (_disposed || _searchScope == _searchState) return;
+    _searchScope = _searchState;
+    searchNotifier.value++;
+  }
+
+  void _emitLibraryFilter() {
+    if (_disposed || _libraryScope == _libraryState) return;
+    _libraryScope = _libraryState;
+    libraryFilterNotifier.value++;
+  }
+
   void _emit() {
+    if (_disposed) return;
+    final scopes = [
+      (_searchScope, _searchState, searchNotifier),
+      (_libraryScope, _libraryState, libraryFilterNotifier),
+      (_detailScope, _detailState, detailNotifier),
+      (_notificationScope, _notificationState, notificationsNotifier),
+      (_accountScope, _accountState, accountNotifier),
+      (_browserScope, _browserState, browserNotifier),
+      (_catalogScope, _catalogState, catalogNotifier),
+    ];
+    _captureScopes();
+    for (final (before, after, notifier) in scopes) {
+      if (before != after && !_disposed) notifier.value++;
+    }
     if (!_disposed) notifyListeners();
   }
 
@@ -2228,6 +2672,12 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
     _disposed = true;
     _catalogGeneration++;
     _detailGeneration++;
+    _libraryGeneration++;
+    _searchCancel?.complete();
+    _detailCancel?.complete();
+    _playerDetailCancel?.complete();
+    _libraryCancel?.complete();
+    _preferences.dispose();
     nativeHttpPlayback?.dispose();
     danmakuSender.dispose();
     accountApi.dispose();
@@ -2239,7 +2689,16 @@ if (document.querySelector('#challenge-form, #challenge-running, #cf-challenge-r
     updates.dispose();
     playback.removeListener(_recordPlayback);
     playback.dispose();
+    commentsVersion.dispose();
     noticeEvents.dispose();
+    danmakuSettingsNotifier.dispose();
+    searchNotifier.dispose();
+    libraryFilterNotifier.dispose();
+    detailNotifier.dispose();
+    notificationsNotifier.dispose();
+    accountNotifier.dispose();
+    browserNotifier.dispose();
+    catalogNotifier.dispose();
     super.dispose();
   }
 }
